@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { Header } from "@/components/header";
 import { HeroSection } from "@/components/hero-section";
 import { StatsGrid } from "@/components/stats-widget";
-import { TodayActivity } from "@/components/today-activity";
 import { EngineerDailyTasks } from "@/components/engineer-daily-tasks";
 import { NavigationCards } from "@/components/navigation-cards";
 import { TeamSection } from "@/components/team-section";
@@ -186,7 +185,6 @@ export default function Dashboard() {
         
         <WeeklyAssignmentsTable teamMembers={teamMembers} />
 
-        <TodayActivity engineerTasks={engineerDailyTasks || []} isLoading={false} />
 
         <EngineerDailyTasks teamMembers={teamMembers} isLoading={teamLoading} />
         
