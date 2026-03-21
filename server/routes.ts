@@ -195,7 +195,34 @@ export async function registerRoutes(
     try {
       const date = req.query.date as string || new Date().toISOString().split('T')[0];
       const tasks = await storage.getEngineerDailyTasks(date);
-      res.json(tasks);
+
+      // Get In-House engineer names from engineers_auth.json
+      let inHouseNames: Set<string> = new Set();
+      try {
+        const credentials = await GitHub.readEngineerCredentialsFromGitHub();
+        credentials.engineers
+          .filter((e: any) => e.isActive && !e.company && e.role !== 'admin')
+          .forEach((e: any) => inHouseNames.add(e.name.trim().toLowerCase()));
+      } catch {}
+
+      // Filter to In-House engineers only; if list empty fall back to all
+      const filtered = inHouseNames.size > 0
+        ? tasks.filter((t: any) => inHouseNames.has(t.engineerName.trim().toLowerCase()))
+        : tasks;
+
+      // Deduplicate tasks per engineer (same projectId may appear multiple times)
+      const deduped = filtered.map((engineer: any) => {
+        const seen = new Set<string>();
+        const uniqueTasks = engineer.tasks.filter((task: any) => {
+          const key = task.projectId + '|' + task.projectName;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        return { ...engineer, tasks: uniqueTasks, planned: uniqueTasks.length };
+      });
+
+      res.json(deduped);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch engineer daily tasks" });
     }
