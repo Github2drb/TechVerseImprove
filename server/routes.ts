@@ -763,10 +763,31 @@ export async function registerRoutes(
       const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
       const data = JSON.parse(content);
       
-      // Extract unique project names
-      const allNames = (data.data || []).map((item: any) => item.projectName);
-      const projectNames = Array.from(new Set(allNames)) as string[];
-      res.json(projectNames.sort());
+      // Extract and deduplicate project names
+      // Normalise: trim whitespace, remove leading numbers like "13) ", standardise separators
+      const normalise = (name: string) => name
+        .trim()
+        .replace(/^\d+\)\s*/, '')          // remove leading "13) "
+        .replace(/\s+/g, ' ')               // collapse multiple spaces
+        .toUpperCase();
+
+      const allNames: string[] = (data.data || data.assignments || [])
+        .map((item: any) => (item.projectName || '').trim())
+        .filter((n: string) => n.length > 0);
+
+      // Deduplicate: keep the longest/cleanest version when normalised names match
+      const seen = new Map<string, string>();
+      for (const name of allNames) {
+        const key = normalise(name);
+        const existing = seen.get(key);
+        // Prefer names without leading spaces, shorter prefixes stripped
+        if (!existing || name.trim().length > existing.trim().length) {
+          seen.set(key, name.trim());
+        }
+      }
+
+      const projectNames = Array.from(seen.values()).sort();
+      res.json(projectNames);
     } catch (error) {
       console.error('Error fetching project names:', error);
       res.status(503).json({ message: "Failed to fetch project names" });
