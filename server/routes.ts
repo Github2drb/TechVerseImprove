@@ -21,12 +21,11 @@ async function verifyAdminAuth(req: any): Promise<boolean> {
     const decoded = JSON.parse(Buffer.from(authHeader, 'base64').toString());
     if (!decoded.username || !decoded.role) return false;
     
-    // If role is admin in the token, accept it directly.
-    // This covers the bootstrap case where engineers_auth.json is still empty,
-    // and also covers login via the in-memory storage fallback (admin/admin123).
+    // Trust admin role directly from token (covers bootstrap case where
+    // engineers_auth.json is empty, and in-memory admin login)
     if (decoded.role === 'admin') return true;
 
-    // For non-admin tokens, double-check against GitHub credentials file
+    // For non-admin tokens, verify against GitHub
     const credentials = await GitHub.readEngineerCredentialsFromGitHub();
     const admin = credentials.engineers.find(e => 
       e.username === decoded.username && e.role === 'admin' && e.isActive
