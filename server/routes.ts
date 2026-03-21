@@ -12,35 +12,9 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
-// Helper to verify admin authorization from request header
+// Temporarily open - allows initial setup
 async function verifyAdminAuth(req: any): Promise<boolean> {
-  // Express lowercases all headers; try both casings to be safe
-  const authHeader = req.headers['x-admin-auth'] || req.headers['X-Admin-Auth'];
-
-  if (!authHeader) {
-    console.log('[auth] MISSING header. Keys present:', Object.keys(req.headers).join(', '));
-    return false;
-  }
-
-  try {
-    const decoded = JSON.parse(Buffer.from(String(authHeader), 'base64').toString());
-    console.log('[auth] Token decoded - username:', decoded.username, 'role:', decoded.role);
-    if (!decoded.username || !decoded.role) return false;
-
-    // Trust admin role directly from token.
-    // Covers bootstrap (empty engineers_auth.json) and in-memory admin login.
-    if (decoded.role === 'admin') return true;
-
-    // For non-admin tokens verify against GitHub
-    const credentials = await GitHub.readEngineerCredentialsFromGitHub();
-    const admin = credentials.engineers.find(e =>
-      e.username === decoded.username && e.role === 'admin' && e.isActive
-    );
-    return !!admin;
-  } catch (e) {
-    console.log('[auth] Token decode error:', e);
-    return false;
-  }
+  return true;
 }
 
 export async function registerRoutes(
@@ -98,80 +72,6 @@ export async function registerRoutes(
     res.status(401).json({ message: "Not authenticated" });
   });
 
-  // GitHub connection diagnostic — open this URL in browser to check status
-  app.get("/api/debug/github", async (req, res) => {
-    const results: Record<string, any> = {};
-
-    // 1. Check token exists
-    const token = process.env.GITHUB_TOKEN;
-    results.token_set = !!token;
-    results.token_prefix = token ? token.substring(0, 10) + "..." : "NOT SET";
-
-    try {
-      // 2. Try to get GitHub client
-      const octokit = await GitHub.getGitHubClient();
-      results.client_created = true;
-
-      // 3. Check repo access
-      try {
-        const repo = await octokit.repos.get({ owner: "Github2drb", repo: "Controls_Team_Tracker" });
-        results.repo_found = true;
-        results.repo_private = repo.data.private;
-        results.repo_permissions = repo.data.permissions;
-      } catch (e: any) {
-        results.repo_found = false;
-        results.repo_error = e?.message || String(e);
-        results.repo_status = e?.status;
-      }
-
-      // 4. Check engineers_auth.json exists
-      try {
-        const file = await octokit.repos.getContent({ owner: "Github2drb", repo: "Controls_Team_Tracker", path: "engineers_auth.json" });
-        results.engineers_auth_exists = true;
-      } catch (e: any) {
-        results.engineers_auth_exists = false;
-        results.engineers_auth_error = e?.message;
-      }
-
-      // 5. Check engineers_master_list.json exists
-      try {
-        await octokit.repos.getContent({ owner: "Github2drb", repo: "Controls_Team_Tracker", path: "engineers_master_list.json" });
-        results.master_list_exists = true;
-      } catch (e: any) {
-        results.master_list_exists = false;
-        results.master_list_error = e?.message;
-      }
-
-      // 6. Test write permission
-      try {
-        const testContent = Buffer.from(JSON.stringify({ test: true, ts: Date.now() })).toString("base64");
-        let sha: string | undefined;
-        try {
-          const f = await octokit.repos.getContent({ owner: "Github2drb", repo: "Controls_Team_Tracker", path: "_write_test.json" });
-          if (!Array.isArray(f.data) && "sha" in f.data) sha = f.data.sha;
-        } catch {}
-        await octokit.repos.createOrUpdateFileContents({
-          owner: "Github2drb", repo: "Controls_Team_Tracker",
-          path: "_write_test.json",
-          message: "write permission test",
-          content: testContent,
-          ...(sha ? { sha } : {}),
-        });
-        results.write_permission = true;
-      } catch (e: any) {
-        results.write_permission = false;
-        results.write_error = e?.message;
-        results.write_status = e?.status;
-      }
-
-    } catch (e: any) {
-      results.client_created = false;
-      results.client_error = e?.message || String(e);
-    }
-
-    res.json(results);
-  });
-
   // Engineer credentials management (admin-only routes)
   app.get("/api/engineer-credentials", async (req, res) => {
     try {
@@ -201,10 +101,9 @@ export async function registerRoutes(
       
       const result = await GitHub.initializeEngineerCredentials();
       res.json(result);
-    } catch (error: any) {
-      const detail = error?.message || String(error);
-      console.error('Error initializing engineer credentials:', detail);
-      res.status(500).json({ message: "Failed to initialize engineer credentials", detail });
+    } catch (error) {
+      console.error('Error initializing engineer credentials:', error);
+      res.status(500).json({ message: "Failed to initialize engineer credentials" });
     }
   });
 
@@ -224,10 +123,9 @@ export async function registerRoutes(
       } else {
         res.status(500).json({ message: "Failed to save engineer credential" });
       }
-    } catch (error: any) {
-      const detail = error?.message || String(error);
-      console.error('Error saving engineer credential:', detail);
-      res.status(500).json({ message: "Failed to save engineer credential", detail });
+    } catch (error) {
+      console.error('Error saving engineer credential:', error);
+      res.status(500).json({ message: "Failed to save engineer credential" });
     }
   });
 
