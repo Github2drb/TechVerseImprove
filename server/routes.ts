@@ -92,6 +92,80 @@ export async function registerRoutes(
     res.status(401).json({ message: "Not authenticated" });
   });
 
+  // GitHub connection diagnostic — open this URL in browser to check status
+  app.get("/api/debug/github", async (req, res) => {
+    const results: Record<string, any> = {};
+
+    // 1. Check token exists
+    const token = process.env.GITHUB_TOKEN;
+    results.token_set = !!token;
+    results.token_prefix = token ? token.substring(0, 10) + "..." : "NOT SET";
+
+    try {
+      // 2. Try to get GitHub client
+      const octokit = await GitHub.getGitHubClient();
+      results.client_created = true;
+
+      // 3. Check repo access
+      try {
+        const repo = await octokit.repos.get({ owner: "Github2drb", repo: "Controls_Team_Tracker" });
+        results.repo_found = true;
+        results.repo_private = repo.data.private;
+        results.repo_permissions = repo.data.permissions;
+      } catch (e: any) {
+        results.repo_found = false;
+        results.repo_error = e?.message || String(e);
+        results.repo_status = e?.status;
+      }
+
+      // 4. Check engineers_auth.json exists
+      try {
+        const file = await octokit.repos.getContent({ owner: "Github2drb", repo: "Controls_Team_Tracker", path: "engineers_auth.json" });
+        results.engineers_auth_exists = true;
+      } catch (e: any) {
+        results.engineers_auth_exists = false;
+        results.engineers_auth_error = e?.message;
+      }
+
+      // 5. Check engineers_master_list.json exists
+      try {
+        await octokit.repos.getContent({ owner: "Github2drb", repo: "Controls_Team_Tracker", path: "engineers_master_list.json" });
+        results.master_list_exists = true;
+      } catch (e: any) {
+        results.master_list_exists = false;
+        results.master_list_error = e?.message;
+      }
+
+      // 6. Test write permission
+      try {
+        const testContent = Buffer.from(JSON.stringify({ test: true, ts: Date.now() })).toString("base64");
+        let sha: string | undefined;
+        try {
+          const f = await octokit.repos.getContent({ owner: "Github2drb", repo: "Controls_Team_Tracker", path: "_write_test.json" });
+          if (!Array.isArray(f.data) && "sha" in f.data) sha = f.data.sha;
+        } catch {}
+        await octokit.repos.createOrUpdateFileContents({
+          owner: "Github2drb", repo: "Controls_Team_Tracker",
+          path: "_write_test.json",
+          message: "write permission test",
+          content: testContent,
+          ...(sha ? { sha } : {}),
+        });
+        results.write_permission = true;
+      } catch (e: any) {
+        results.write_permission = false;
+        results.write_error = e?.message;
+        results.write_status = e?.status;
+      }
+
+    } catch (e: any) {
+      results.client_created = false;
+      results.client_error = e?.message || String(e);
+    }
+
+    res.json(results);
+  });
+
   // Engineer credentials management (admin-only routes)
   app.get("/api/engineer-credentials", async (req, res) => {
     try {
