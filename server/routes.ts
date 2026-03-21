@@ -121,9 +121,10 @@ export async function registerRoutes(
       
       const result = await GitHub.initializeEngineerCredentials();
       res.json(result);
-    } catch (error) {
-      console.error('Error initializing engineer credentials:', error);
-      res.status(500).json({ message: "Failed to initialize engineer credentials" });
+    } catch (error: any) {
+      const detail = error?.message || String(error);
+      console.error('Error initializing engineer credentials:', detail);
+      res.status(500).json({ message: "Failed to initialize engineer credentials", detail });
     }
   });
 
@@ -143,9 +144,10 @@ export async function registerRoutes(
       } else {
         res.status(500).json({ message: "Failed to save engineer credential" });
       }
-    } catch (error) {
-      console.error('Error saving engineer credential:', error);
-      res.status(500).json({ message: "Failed to save engineer credential" });
+    } catch (error: any) {
+      const detail = error?.message || String(error);
+      console.error('Error saving engineer credential:', detail);
+      res.status(500).json({ message: "Failed to save engineer credential", detail });
     }
   });
 
