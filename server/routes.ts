@@ -334,6 +334,22 @@ export async function registerRoutes(
 
   app.get("/api/team-members", async (req, res) => {
     try {
+      // Source team members from engineers_auth.json (In-House only = no company field)
+      const credentials = await GitHub.readEngineerCredentialsFromGitHub();
+      if (credentials.engineers && credentials.engineers.length > 0) {
+        const inHouse = credentials.engineers.filter((e: any) => e.isActive && !e.company && e.role !== 'admin');
+        const members = inHouse.map((e: any) => ({
+          id: e.id,
+          name: e.name,
+          role: "Engineer",
+          email: e.username + "@drbtechverse.in",
+          department: "Engineering",
+          status: "active",
+          avatar: null,
+        }));
+        return res.json(members);
+      }
+      // Fallback to storage if credentials not yet populated
       const members = await storage.getTeamMembers();
       res.json(members);
     } catch (error) {
