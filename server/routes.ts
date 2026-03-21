@@ -14,24 +14,31 @@ const loginSchema = z.object({
 
 // Helper to verify admin authorization from request header
 async function verifyAdminAuth(req: any): Promise<boolean> {
-  const authHeader = req.headers['x-admin-auth'];
-  if (!authHeader) return false;
-  
+  // Express lowercases all headers; try both casings to be safe
+  const authHeader = req.headers['x-admin-auth'] || req.headers['X-Admin-Auth'];
+
+  if (!authHeader) {
+    console.log('[auth] MISSING header. Keys present:', Object.keys(req.headers).join(', '));
+    return false;
+  }
+
   try {
-    const decoded = JSON.parse(Buffer.from(authHeader, 'base64').toString());
+    const decoded = JSON.parse(Buffer.from(String(authHeader), 'base64').toString());
+    console.log('[auth] Token decoded - username:', decoded.username, 'role:', decoded.role);
     if (!decoded.username || !decoded.role) return false;
-    
-    // Trust admin role directly from token (covers bootstrap case where
-    // engineers_auth.json is empty, and in-memory admin login)
+
+    // Trust admin role directly from token.
+    // Covers bootstrap (empty engineers_auth.json) and in-memory admin login.
     if (decoded.role === 'admin') return true;
 
-    // For non-admin tokens, verify against GitHub
+    // For non-admin tokens verify against GitHub
     const credentials = await GitHub.readEngineerCredentialsFromGitHub();
-    const admin = credentials.engineers.find(e => 
+    const admin = credentials.engineers.find(e =>
       e.username === decoded.username && e.role === 'admin' && e.isActive
     );
     return !!admin;
-  } catch {
+  } catch (e) {
+    console.log('[auth] Token decode error:', e);
     return false;
   }
 }
