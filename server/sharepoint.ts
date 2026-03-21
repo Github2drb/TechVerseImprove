@@ -28,3 +28,16 @@ export async function getSharePointData(): Promise<any[]> {
     return [];
   }
 }
+
+// Stub functions to satisfy routes.ts imports
+export async function isSharePointConnected(): Promise<boolean> {
+  return false;
+}
+
+export async function getAttendanceData(): Promise<any[]> {
+  return [];
+}
+
+export function calculatePerformanceScore(data: any): number {
+  return 0;
+}
