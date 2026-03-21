@@ -273,13 +273,15 @@ export default function TeamProjectTracker() {
   // Filter assignments based on logged-in engineer (non-admins only see their projects)
   // Supports comma-separated engineer names (e.g., "Veeresh,Ramkumar,Deekshitha")
   const userFilteredAssignments = useMemo(() => {
-    if (isAdmin) return assignments;
+    // Always exclude completed assignments from tracker view
+    const activeAssignments = assignments.filter(a => a.currentStatus !== "completed");
+    if (isAdmin) return activeAssignments;
     if (!user?.name) return [];
     
     // Match engineer name (case-insensitive, ignoring company suffix in parentheses)
     const userName = user.name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase();
     
-    return assignments.filter(a => {
+    return activeAssignments.filter(a => {
       // Split the engineer name by comma to support multiple engineers per project
       const engineerNames = a.engineerName.split(',').map(name => 
         name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase()
