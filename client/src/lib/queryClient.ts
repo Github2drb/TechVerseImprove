@@ -9,7 +9,7 @@ async function throwIfResNotOk(res: Response) {
 
 // Get admin auth header for protected routes
 export function getAdminAuthHeader(): Record<string, string> {
-  const userStr = localStorage.getItem("drb_user");
+  const userStr = localStorage.getItem("currentEngineer");
   if (!userStr) return {};
   
   try {
