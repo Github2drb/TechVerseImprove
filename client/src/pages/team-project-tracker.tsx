@@ -298,6 +298,10 @@ export default function TeamProjectTracker() {
 
   const filteredProjects = useMemo(() => {
     return projectRows.filter((project) => {
+      // Hide projects where ALL engineers have completed status
+      const allCompleted = project.engineers.every(e => e.currentStatus === "completed");
+      if (allCompleted) return false;
+
       const matchesSearch = 
         project.projectName.toLowerCase().includes(searchQuery.toLowerCase()) ||
         project.engineers.some(e => e.name.toLowerCase().includes(searchQuery.toLowerCase()));
