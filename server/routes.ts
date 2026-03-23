@@ -318,6 +318,10 @@ export async function registerRoutes(
       assignments.forEach((assignment) => {
         const engineer = assignment.engineer;
         if (!engineer) return;
+
+        // Skip completed projects - only show active workload
+        const status = (assignment.status || 'In Progress').trim().toLowerCase();
+        if (status === 'completed' || status === 'done') return;
         
         if (!engineerMap.has(engineer)) {
           engineerMap.set(engineer, new Map());
