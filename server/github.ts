@@ -1,13 +1,44 @@
 import { Octokit } from '@octokit/rest';
 
-// GitHub access is now via a Personal Access Token stored in GITHUB_TOKEN environment variable.
-// On Render.com (or any host), set GITHUB_TOKEN in the environment/secrets panel.
-export async function getGitHubClient() {
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) {
-    throw new Error('GITHUB_TOKEN environment variable is not set. Please add it in your hosting provider secrets.');
+let connectionSettings: any;
+
+async function getAccessToken() {
+  if (connectionSettings && connectionSettings.settings.expires_at && new Date(connectionSettings.settings.expires_at).getTime() > Date.now()) {
+    return connectionSettings.settings.access_token;
   }
-  return new Octokit({ auth: token });
+  
+  const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
+  const xReplitToken = process.env.REPL_IDENTITY 
+    ? 'repl ' + process.env.REPL_IDENTITY 
+    : process.env.WEB_REPL_RENEWAL 
+    ? 'depl ' + process.env.WEB_REPL_RENEWAL 
+    : null;
+
+  if (!xReplitToken) {
+    throw new Error('X_REPLIT_TOKEN not found for repl/depl');
+  }
+
+  connectionSettings = await fetch(
+    'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=github',
+    {
+      headers: {
+        'Accept': 'application/json',
+        'X_REPLIT_TOKEN': xReplitToken
+      }
+    }
+  ).then(res => res.json()).then(data => data.items?.[0]);
+
+  const accessToken = connectionSettings?.settings?.access_token || connectionSettings.settings?.oauth?.credentials?.access_token;
+
+  if (!connectionSettings || !accessToken) {
+    throw new Error('GitHub not connected');
+  }
+  return accessToken;
+}
+
+export async function getGitHubClient() {
+  const accessToken = await getAccessToken();
+  return new Octokit({ auth: accessToken });
 }
 
 export interface EngineerDailyData {
@@ -37,6 +68,7 @@ export async function readDataFromGitHub(): Promise<{ engineerDailyData: Enginee
     const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
     const data = JSON.parse(content);
     
+    // Ensure the data has engineerDailyData array
     if (!data.engineerDailyData) {
       data.engineerDailyData = [];
     }
@@ -52,6 +84,7 @@ export async function writeDataToGitHub(data: { engineerDailyData: EngineerDaily
   try {
     const octokit = await getGitHubClient();
     
+    // Get current file to get the SHA
     const currentFile = await octokit.repos.getContent({
       owner: 'Github2drb',
       repo: 'Controls_Team_Tracker',
@@ -85,6 +118,7 @@ export async function writeDataToGitHub(data: { engineerDailyData: EngineerDaily
   }
 }
 
+// Separate functions for daily activities (target tasks and completed activities)
 export async function readDailyActivitiesFromGitHub(): Promise<{ engineerDailyData: EngineerDailyData[] }> {
   try {
     const octokit = await getGitHubClient();
@@ -94,13 +128,18 @@ export async function readDailyActivitiesFromGitHub(): Promise<{ engineerDailyDa
       path: 'daily-activities.json',
     });
 
-    if (Array.isArray(response.data) || !('content' in response.data)) {
-      throw new Error('Invalid file response');
+    if (Array.isArray(response.data)) {
+      throw new Error('Expected a file, got a directory');
+    }
+
+    if (!('content' in response.data)) {
+      throw new Error('File has no content');
     }
 
     const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
     const data = JSON.parse(content);
     
+    // Ensure the data has engineerDailyData array
     if (!data.engineerDailyData) {
       data.engineerDailyData = [];
     }
@@ -117,14 +156,19 @@ export async function writeDailyActivitiesToGitHub(data: { engineerDailyData: En
     const octokit = await getGitHubClient();
     
     try {
+      // Try to get current file to get the SHA
       const currentFile = await octokit.repos.getContent({
         owner: 'Github2drb',
         repo: 'Controls_Team_Tracker',
         path: 'daily-activities.json',
       });
 
-      if (Array.isArray(currentFile.data) || !('sha' in currentFile.data)) {
+      if (Array.isArray(currentFile.data)) {
         throw new Error('Expected a file, got a directory');
+      }
+
+      if (!('sha' in currentFile.data)) {
+        throw new Error('File has no sha');
       }
 
       const sha = currentFile.data.sha;
@@ -139,6 +183,7 @@ export async function writeDailyActivitiesToGitHub(data: { engineerDailyData: En
         sha: sha,
       });
     } catch (error: any) {
+      // If file doesn't exist, create it
       if (error.status === 404) {
         const newContent = Buffer.from(JSON.stringify(data, null, 2)).toString('base64');
         await octokit.repos.createOrUpdateFileContents({
@@ -251,13 +296,18 @@ export async function getUniqueEngineers(): Promise<string[]> {
       path: 'data.json',
     });
 
-    if (Array.isArray(response.data) || !('content' in response.data)) {
-      throw new Error('Invalid file response');
+    if (Array.isArray(response.data)) {
+      throw new Error('Expected a file, got a directory');
+    }
+
+    if (!('content' in response.data)) {
+      throw new Error('File has no content');
     }
 
     const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
     const data = JSON.parse(content);
     
+    // Extract engineer names from assignments
     const assignments: ProjectAssignment[] = data.assignments || [];
     const uniqueEngineers = new Set<string>();
     
@@ -283,15 +333,21 @@ export async function getProjectAssignments(): Promise<ProjectAssignment[]> {
       path: 'data.json',
     });
 
-    if (Array.isArray(response.data) || !('content' in response.data)) {
-      throw new Error('Invalid file response');
+    if (Array.isArray(response.data)) {
+      throw new Error('Expected a file, got a directory');
+    }
+
+    if (!('content' in response.data)) {
+      throw new Error('File has no content');
     }
 
     const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
     const data = JSON.parse(content);
     
+    // Try multiple field names to find assignments
     const assignments = data.assignments || data.projectAssignments || data.projects || data.data || [];
     
+    // Ensure all assignments have required fields with fallbacks
     return (Array.isArray(assignments) ? assignments : []).map((item: any) => ({
       projectName: item.projectName || item.project || '',
       engineer: item.engineer || item.engineerName || '',
@@ -311,7 +367,7 @@ export async function getProjectAssignments(): Promise<ProjectAssignment[]> {
 export interface ProjectStatusEntry {
   engineerName: string;
   projectName: string;
-  statuses: Record<string, string>;
+  statuses: Record<string, string>; // date -> status
 }
 
 export interface ProjectStatusData {
@@ -328,8 +384,12 @@ export async function readProjectStatusFromGitHub(): Promise<ProjectStatusData> 
       path: 'project-status.json',
     });
 
-    if (Array.isArray(response.data) || !('content' in response.data)) {
-      throw new Error('Invalid file response');
+    if (Array.isArray(response.data)) {
+      throw new Error('Expected a file, got a directory');
+    }
+
+    if (!('content' in response.data)) {
+      throw new Error('File has no content');
     }
 
     const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
@@ -354,6 +414,7 @@ export async function writeProjectStatusToGitHub(data: ProjectStatusData): Promi
         repo: 'Controls_Team_Tracker',
         path: 'project-status.json',
       });
+
       if (!Array.isArray(currentFile.data) && 'sha' in currentFile.data) {
         sha = currentFile.data.sha;
       }
@@ -413,6 +474,7 @@ export async function getProjectStatusTracking(): Promise<Array<{
   const assignments = await getProjectAssignments();
   const statusData = await readProjectStatusFromGitHub();
   
+  // Generate date range from Dec 5, 2024 to Feb 28, 2025
   const startDate = new Date('2024-12-05');
   const endDate = new Date('2025-02-28');
   const totalDays = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
@@ -423,10 +485,14 @@ export async function getProjectStatusTracking(): Promise<Array<{
     );
     
     const statuses = statusEntry?.statuses || {};
+    
+    // Calculate completion percentage based on total days in the range
+    // Not just filled days, but the entire Dec 5 - Feb 28 range
     const completedCount = Object.values(statuses).filter(
       (s) => s === 'Completed' || s === 'Done'
     ).length;
     
+    // Calculate percentage based on the full date range to accurately track progress
     const completionPercentage = Math.round((completedCount / totalDays) * 100);
     
     return {
@@ -439,6 +505,7 @@ export async function getProjectStatusTracking(): Promise<Array<{
   });
 }
 
+// Project Activities - New functionality
 export interface ProjectActivity {
   projectName: string;
   currentStatus: string;
@@ -517,6 +584,7 @@ export async function getProjectActivities(): Promise<ProjectActivity[]> {
   const assignments = await getProjectAssignments();
   const activitiesData = await readProjectActivitiesFromGitHub();
   
+  // Get unique project names from assignments
   const uniqueProjects = new Map<string, string>();
   assignments.forEach((assignment) => {
     if (!uniqueProjects.has(assignment.projectName)) {
@@ -580,6 +648,7 @@ export async function updateProjectCurrentStatus(
   return { success };
 }
 
+// Weekly Assignments Types and Functions
 export interface WeeklyAssignmentTask {
   id: string;
   taskName: string;
@@ -747,6 +816,7 @@ export async function deleteAssignmentTask(
   return { success: false };
 }
 
+// Engineer Daily Tasks Types and Functions
 export interface EngineerTaskConfig {
   id: string;
   name: string;
@@ -763,6 +833,7 @@ interface EngineerDailyTasksData {
   lastUpdated: string;
 }
 
+// Read engineers from master list file
 export async function readEngineerMasterListFromGitHub(): Promise<EngineerMasterListData> {
   try {
     const octokit = await getGitHubClient();
@@ -787,6 +858,7 @@ export async function readEngineerMasterListFromGitHub(): Promise<EngineerMaster
   }
 }
 
+// Write engineers to master list file
 export async function writeEngineerMasterListToGitHub(data: EngineerMasterListData): Promise<boolean> {
   try {
     const octokit = await getGitHubClient();
@@ -822,6 +894,7 @@ export async function writeEngineerMasterListToGitHub(data: EngineerMasterListDa
   }
 }
 
+// Initialize master list with default engineers
 export async function initializeEngineerMasterList(): Promise<{ success: boolean }> {
   const existingData = await readEngineerMasterListFromGitHub();
   
@@ -911,8 +984,10 @@ export async function writeEngineerDailyTasksToGitHub(data: EngineerDailyTasksDa
 }
 
 export async function getEngineerDailyTasksConfig(): Promise<EngineerTaskConfig[]> {
+  // Read from engineers_master_list.json as the source of truth
   const masterData = await readEngineerMasterListFromGitHub();
   
+  // If master list is empty, try to initialize it
   if (masterData.engineers.length === 0) {
     await initializeEngineerMasterList();
     const newData = await readEngineerMasterListFromGitHub();
@@ -973,13 +1048,15 @@ export async function initializeEngineerDailyTasksFile(): Promise<{ success: boo
   return { success: true };
 }
 
+// ==================== ENGINEER AUTHENTICATION ====================
+
 export interface EngineerCredential {
   id: string;
   name: string;
   username: string;
   password: string;
   role: 'admin' | 'engineer';
-  company?: string;
+  company?: string; // For outsourced engineers: Ampere, PAES, D.I.C.S
   isActive: boolean;
   createdAt: string;
   lastLogin?: string;
@@ -990,6 +1067,7 @@ interface EngineerCredentialsData {
   lastUpdated: string;
 }
 
+// Read engineer credentials from GitHub
 export async function readEngineerCredentialsFromGitHub(): Promise<EngineerCredentialsData> {
   try {
     const octokit = await getGitHubClient();
@@ -1014,6 +1092,7 @@ export async function readEngineerCredentialsFromGitHub(): Promise<EngineerCrede
   }
 }
 
+// Write engineer credentials to GitHub
 export async function writeEngineerCredentialsToGitHub(data: EngineerCredentialsData): Promise<boolean> {
   try {
     const octokit = await getGitHubClient();
@@ -1049,6 +1128,7 @@ export async function writeEngineerCredentialsToGitHub(data: EngineerCredentials
   }
 }
 
+// Authenticate engineer
 export async function authenticateEngineer(username: string, password: string): Promise<EngineerCredential | null> {
   const data = await readEngineerCredentialsFromGitHub();
   const engineer = data.engineers.find(
@@ -1056,6 +1136,7 @@ export async function authenticateEngineer(username: string, password: string): 
   );
   
   if (engineer) {
+    // Update last login
     engineer.lastLogin = new Date().toISOString();
     await writeEngineerCredentialsToGitHub(data);
   }
@@ -1063,6 +1144,7 @@ export async function authenticateEngineer(username: string, password: string): 
   return engineer || null;
 }
 
+// Update engineer password
 export async function updateEngineerPassword(username: string, newPassword: string): Promise<boolean> {
   const data = await readEngineerCredentialsFromGitHub();
   const engineer = data.engineers.find(e => e.username.toLowerCase() === username.toLowerCase());
@@ -1075,6 +1157,7 @@ export async function updateEngineerPassword(username: string, newPassword: stri
   return await writeEngineerCredentialsToGitHub(data);
 }
 
+// Initialize engineer credentials from master list
 export async function initializeEngineerCredentials(): Promise<{ success: boolean; created: number }> {
   const masterList = await readEngineerMasterListFromGitHub();
   const existingCreds = await readEngineerCredentialsFromGitHub();
@@ -1083,9 +1166,11 @@ export async function initializeEngineerCredentials(): Promise<{ success: boolea
   const existingUsernames = new Set(existingCreds.engineers.map(e => e.username.toLowerCase()));
   
   for (const eng of masterList.engineers) {
+    // Generate username from name (lowercase, no spaces)
     const username = eng.name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase().replace(/\s+/g, '.');
     
     if (!existingUsernames.has(username)) {
+      // Extract company from parenthetical if present
       const companyMatch = eng.name.match(/\(([^)]+)\)/);
       const company = companyMatch ? companyMatch[1] : undefined;
       
@@ -1093,7 +1178,7 @@ export async function initializeEngineerCredentials(): Promise<{ success: boolea
         id: eng.id,
         name: eng.name,
         username,
-        password: 'drb@123',
+        password: 'drb@123', // Default password
         role: 'engineer',
         company,
         isActive: true,
@@ -1103,6 +1188,7 @@ export async function initializeEngineerCredentials(): Promise<{ success: boolea
     }
   }
   
+  // Add admin account if not exists
   if (!existingUsernames.has('admin')) {
     existingCreds.engineers.push({
       id: 'admin-1',
@@ -1122,6 +1208,7 @@ export async function initializeEngineerCredentials(): Promise<{ success: boolea
   return { success, created };
 }
 
+// Add/Update engineer credential
 export async function upsertEngineerCredential(engineer: Partial<EngineerCredential> & { name: string }): Promise<{ success: boolean; engineer?: EngineerCredential }> {
   const data = await readEngineerCredentialsFromGitHub();
   
@@ -1130,11 +1217,13 @@ export async function upsertEngineerCredential(engineer: Partial<EngineerCredent
   );
   
   if (existingIndex >= 0) {
+    // Update existing
     data.engineers[existingIndex] = {
       ...data.engineers[existingIndex],
       ...engineer,
     };
   } else {
+    // Create new
     const username = engineer.username || engineer.name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase().replace(/\s+/g, '.');
     const newEngineer: EngineerCredential = {
       id: engineer.id || `eng-${Date.now()}`,
@@ -1155,6 +1244,7 @@ export async function upsertEngineerCredential(engineer: Partial<EngineerCredent
   return { success, engineer: existingIndex >= 0 ? data.engineers[existingIndex] : data.engineers[data.engineers.length - 1] };
 }
 
+// Delete engineer credential
 export async function deleteEngineerCredential(id: string): Promise<boolean> {
   const data = await readEngineerCredentialsFromGitHub();
   const initialLength = data.engineers.length;

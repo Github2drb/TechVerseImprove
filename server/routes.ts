@@ -72,6 +72,41 @@ export async function registerRoutes(
     res.status(401).json({ message: "Not authenticated" });
   });
 
+  // Diagnostic: inspect data.json structure
+  app.get("/api/debug/data-json", async (req, res) => {
+    try {
+      const octokit = await GitHub.getGitHubClient();
+      const response = await octokit.repos.getContent({
+        owner: 'Github2drb',
+        repo: 'Controls_Team_Tracker',
+        path: 'data.json',
+      });
+      if (Array.isArray(response.data) || !('content' in response.data)) {
+        return res.json({ error: 'Invalid file response' });
+      }
+      const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
+      const data = JSON.parse(content);
+      
+      // Return structure info without full data
+      const keys = Object.keys(data);
+      const result: any = { topLevelKeys: keys };
+      
+      keys.forEach(key => {
+        if (Array.isArray(data[key])) {
+          result[key + '_count'] = data[key].length;
+          if (data[key].length > 0) {
+            result[key + '_first_item_keys'] = Object.keys(data[key][0]);
+            result[key + '_first_item'] = data[key][0];
+            result[key + '_statuses'] = [...new Set(data[key].map((i: any) => i.status || i.currentStatus || 'no-status'))];
+          }
+        }
+      });
+      res.json(result);
+    } catch (e: any) {
+      res.json({ error: e?.message });
+    }
+  });
+
   // Engineer credentials management (admin-only routes)
   app.get("/api/engineer-credentials", async (req, res) => {
     try {
@@ -612,9 +647,49 @@ export async function registerRoutes(
   });
 
   // New project activities endpoints
+  // Debug endpoint - check what data.json contains
+  app.get("/api/debug/project-activities", async (req, res) => {
+    try {
+      const octokit = await GitHub.getGitHubClient();
+      const response = await octokit.repos.getContent({ owner: 'Github2drb', repo: 'Controls_Team_Tracker', path: 'data.json' });
+      if (Array.isArray(response.data) || !("content" in response.data)) throw new Error("bad");
+      const raw = JSON.parse(Buffer.from(response.data.content, 'base64').toString('utf-8'));
+      res.json({
+        topLevelKeys: Object.keys(raw),
+        assignmentsCount: (raw.assignments || []).length,
+        dataCount: (raw.data || []).length,
+        firstAssignment: (raw.assignments || raw.data || [])[0] || null,
+        sampleStatuses: (raw.assignments || raw.data || []).slice(0, 5).map((a: any) => ({ project: a.projectName, status: a.status, engineer: a.engineer })),
+      });
+    } catch (e: any) {
+      res.json({ error: e.message });
+    }
+  });
+
   app.get("/api/project-activities", async (req, res) => {
     try {
-      const activities = await GitHub.getProjectActivities();
+      // Primary: get from data.json assignments
+      let activities = await GitHub.getProjectActivities();
+
+      // Fallback: if empty, build project list from weekly-assignments.json
+      if (!activities || activities.length === 0) {
+        const weeklyAssignments = await GitHub.getWeeklyAssignments();
+        const uniqueProjects = new Map<string, string>();
+        weeklyAssignments.forEach((a: any) => {
+          if (a.projectName && a.currentStatus !== 'completed') {
+            if (!uniqueProjects.has(a.projectName)) {
+              uniqueProjects.set(a.projectName, a.currentStatus || 'in_progress');
+            }
+          }
+        });
+        
+        activities = Array.from(uniqueProjects.entries()).map(([projectName, status]) => ({
+          projectName,
+          currentStatus: status,
+          activities: {},
+        }));
+      }
+
       res.json(activities);
     } catch (error) {
       console.error('Error fetching project activities:', error);
