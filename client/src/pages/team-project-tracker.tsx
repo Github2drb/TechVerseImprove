@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Briefcase, Users, ChevronLeft, Search, Filter, Edit2, Plus, AlertTriangle, User } from "lucide-react";
+import { Briefcase, Users, ChevronLeft, Search, Filter, Edit2, Plus, AlertTriangle, User, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -135,7 +135,9 @@ export default function TeamProjectTracker() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [editingAssignment, setEditingAssignment] = useState<WeeklyAssignment | null>(null);
+  const [deletingAssignment, setDeletingAssignment] = useState<{ id: string; projectName: string; engineerName: string } | null>(null);
 
   const [formData, setFormData] = useState({
     engineerName: "",
@@ -197,6 +199,21 @@ export default function TeamProjectTracker() {
     },
     onError: () => {
       toast({ title: "Failed to add assignment", variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      return apiRequest("DELETE", `/api/weekly-assignments/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/weekly-assignments"] });
+      toast({ title: "Assignment deleted successfully" });
+      setDeleteDialogOpen(false);
+      setDeletingAssignment(null);
+    },
+    onError: () => {
+      toast({ title: "Failed to delete assignment", variant: "destructive" });
     },
   });
 
@@ -522,14 +539,34 @@ export default function TeamProjectTracker() {
                             {engineer.constraint || "-"}
                           </TableCell>
                           <TableCell>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleEdit(engineer.assignmentId)}
-                              data-testid={`button-edit-${engineer.assignmentId}`}
-                            >
-                              <Edit2 className="h-4 w-4" />
-                            </Button>
+                            <div className="flex items-center gap-1">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleEdit(engineer.assignmentId)}
+                                data-testid={`button-edit-${engineer.assignmentId}`}
+                              >
+                                <Edit2 className="h-4 w-4" />
+                              </Button>
+                              {isAdmin && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
+                                  onClick={() => {
+                                    setDeletingAssignment({
+                                      id: engineer.assignmentId,
+                                      projectName: project.projectName,
+                                      engineerName: engineer.name,
+                                    });
+                                    setDeleteDialogOpen(true);
+                                  }}
+                                  data-testid={`button-delete-${engineer.assignmentId}`}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              )}
+                            </div>
                           </TableCell>
                         </TableRow>
                       ))
@@ -781,6 +818,44 @@ export default function TeamProjectTracker() {
             </Button>
             <Button onClick={handleAdd} disabled={addMutation.isPending} data-testid="button-save-add">
               {addMutation.isPending ? "Adding..." : "Add Assignment"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={deleteDialogOpen} onOpenChange={(open) => { setDeleteDialogOpen(open); if (!open) setDeletingAssignment(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-600">
+              <Trash2 className="h-5 w-5" />
+              Delete Assignment
+            </DialogTitle>
+          </DialogHeader>
+          <div className="py-4">
+            <p className="text-sm text-muted-foreground">
+              Are you sure you want to delete this assignment? This action cannot be undone.
+            </p>
+            {deletingAssignment && (
+              <div className="mt-3 p-3 rounded-md bg-muted text-sm space-y-1">
+                <p><span className="font-medium">Project:</span> {deletingAssignment.projectName}</p>
+                <p><span className="font-medium">Engineer:</span> {deletingAssignment.engineerName}</p>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => { setDeleteDialogOpen(false); setDeletingAssignment(null); }}
+              data-testid="button-cancel-delete"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => deletingAssignment && deleteMutation.mutate(deletingAssignment.id)}
+              disabled={deleteMutation.isPending}
+              data-testid="button-confirm-delete"
+            >
+              {deleteMutation.isPending ? "Deleting..." : "Delete"}
             </Button>
           </DialogFooter>
         </DialogContent>
