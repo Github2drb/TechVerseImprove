@@ -580,23 +580,43 @@ async function writeProjectActivitiesToGitHub(data: ProjectActivitiesData): Prom
   }
 }
 
+/**
+ * Extracts the project number from a project name.
+ * e.g. "3A-DK2-25143 Leak Testing Machine" -> "3A-DK2-25143"
+ * e.g. " 3W-TK1-25102 (27 MC)" -> "3W-TK1-25102"
+ * Falls back to the full trimmed+lowercased name if no code pattern is found.
+ */
+function extractProjectNumber(projectName: string): string {
+  const match = projectName.trim().match(/^([A-Z0-9]{1,4}-[A-Z0-9]{2,5}-\d{4,6})/i);
+  return match ? match[1].toUpperCase() : projectName.trim().toLowerCase();
+}
+
 export async function getProjectActivities(): Promise<ProjectActivity[]> {
   const assignments = await getProjectAssignments();
   const activitiesData = await readProjectActivitiesFromGitHub();
-  
-  // Get unique project names from assignments
-  const uniqueProjects = new Map<string, string>();
+
+  // Deduplicate by project number. When the same project number appears multiple
+  // times (possibly with different suffixes/descriptions), keep the longest name
+  // so we display the most descriptive version.
+  const uniqueProjects = new Map<string, { projectName: string; status: string }>();
   assignments.forEach((assignment) => {
-    if (!uniqueProjects.has(assignment.projectName)) {
-      uniqueProjects.set(assignment.projectName, assignment.status);
+    const key = extractProjectNumber(assignment.projectName);
+    const existing = uniqueProjects.get(key);
+    if (!existing || assignment.projectName.trim().length > existing.projectName.trim().length) {
+      uniqueProjects.set(key, {
+        projectName: assignment.projectName.trim(),
+        status: assignment.status,
+      });
     }
   });
-  
-  return Array.from(uniqueProjects.entries()).map(([projectName, status]) => {
+
+  return Array.from(uniqueProjects.values()).map(({ projectName, status }) => {
+    // Match stored activity entry by project number so renamed variants still match
+    const key = extractProjectNumber(projectName);
     const activityEntry = activitiesData.projectActivities.find(
-      (p) => p.projectName === projectName
+      (p) => extractProjectNumber(p.projectName) === key
     );
-    
+
     return {
       projectName,
       currentStatus: activityEntry?.currentStatus || status,
