@@ -674,16 +674,28 @@ export async function registerRoutes(
       // Fallback: if empty, build project list from weekly-assignments.json
       if (!activities || activities.length === 0) {
         const weeklyAssignments = await GitHub.getWeeklyAssignments();
-        const uniqueProjects = new Map<string, string>();
+
+        // Helper: extract project number for dedup (e.g. "3A-DK2-25143" from full name)
+        const extractKey = (name: string): string => {
+          const m = name.trim().match(/^([A-Z0-9]{1,4}-[A-Z0-9]{2,5}-\d{4,6})/i);
+          return m ? m[1].toUpperCase() : name.trim().toLowerCase();
+        };
+
+        const uniqueProjects = new Map<string, { projectName: string; status: string }>();
         weeklyAssignments.forEach((a: any) => {
           if (a.projectName && a.currentStatus !== 'completed') {
-            if (!uniqueProjects.has(a.projectName)) {
-              uniqueProjects.set(a.projectName, a.currentStatus || 'in_progress');
+            const key = extractKey(a.projectName);
+            const existing = uniqueProjects.get(key);
+            if (!existing || a.projectName.trim().length > existing.projectName.trim().length) {
+              uniqueProjects.set(key, {
+                projectName: a.projectName.trim(),
+                status: a.currentStatus || 'in_progress',
+              });
             }
           }
         });
-        
-        activities = Array.from(uniqueProjects.entries()).map(([projectName, status]) => ({
+
+        activities = Array.from(uniqueProjects.values()).map(({ projectName, status }) => ({
           projectName,
           currentStatus: status,
           activities: {},
