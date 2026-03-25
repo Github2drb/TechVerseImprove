@@ -209,7 +209,7 @@ export function WeeklyScheduleOverview() {
                               onClick={() => {
                                 // For engineers, only allow adding assignments for themselves
                                 // For admins, allow adding for anyone
-                                window.location.href = "/team-project-tracker";
+                                window.location.href = "/project-tracker";
                               }}
                               data-testid={`schedule-cell-${engineer.id}-${format(day, 'yyyy-MM-dd')}`}
                             >
