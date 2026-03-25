@@ -227,7 +227,7 @@ export function WeeklyScheduleOverview() {
                             className={`h-10 rounded ${config.color} flex items-center justify-center gap-1 text-white cursor-pointer hover:opacity-90 transition-opacity`}
                             title={dayAssignments.map(a => a.projectName).join(', ')}
                             onClick={() => {
-                              window.location.href = "/team-project-tracker";
+                              window.location.href = "/project-tracker";
                             }}
                             data-testid={`schedule-cell-${engineer.id}-${format(day, 'yyyy-MM-dd')}`}
                           >
