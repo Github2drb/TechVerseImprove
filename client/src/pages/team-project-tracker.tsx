@@ -70,6 +70,9 @@ const statusLabels: Record<string, string> = {
   completed: "Completed",
   on_hold: "On Hold",
   blocked: "Blocked",
+  commissioning: "Commissioning",
+  FAT: "FAT",
+  SAT: "SAT"
 };
 
 function calculateLockDays(from?: string, till?: string): number {
