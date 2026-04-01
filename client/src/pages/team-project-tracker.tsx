@@ -174,7 +174,7 @@ export default function TeamProjectTracker() {
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, ...data }: Partial<WeeklyAssignment> & { id: string }) => {
-      return apiRequest("PATCH", `/api/weekly-assignments/${id}`, data);
+      return apiRequest("PATCH", `/api/weekly-assignments/${id}`, data, true);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/weekly-assignments"] });
@@ -189,7 +189,7 @@ export default function TeamProjectTracker() {
 
   const addMutation = useMutation({
     mutationFn: async (data: Partial<WeeklyAssignment>) => {
-      return apiRequest("POST", "/api/weekly-assignments", data);
+      return apiRequest("POST", "/api/weekly-assignments", data, true);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/weekly-assignments"] });
@@ -204,7 +204,7 @@ export default function TeamProjectTracker() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      return apiRequest("DELETE", `/api/weekly-assignments/${id}`);
+      return apiRequest("DELETE", `/api/weekly-assignments/${id}`, undefined, true);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/weekly-assignments"] });
@@ -372,10 +372,12 @@ export default function TeamProjectTracker() {
                 : "View projects assigned to you with resource allocation details"}
             </p>
           </div>
-          <Button onClick={() => { resetFormData(); setAddDialogOpen(true); }} data-testid="button-add-assignment">
-            <Plus className="h-4 w-4 mr-2" />
-            Add Assignment
-          </Button>
+          {isAdmin && (
+            <Button onClick={() => { resetFormData(); setAddDialogOpen(true); }} data-testid="button-add-assignment">
+              <Plus className="h-4 w-4 mr-2" />
+              Add Assignment
+            </Button>
+          )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
@@ -540,14 +542,16 @@ export default function TeamProjectTracker() {
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-1">
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => handleEdit(engineer.assignmentId)}
-                                data-testid={`button-edit-${engineer.assignmentId}`}
-                              >
-                                <Edit2 className="h-4 w-4" />
-                              </Button>
+                              {isAdmin && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleEdit(engineer.assignmentId)}
+                                  data-testid={`button-edit-${engineer.assignmentId}`}
+                                >
+                                  <Edit2 className="h-4 w-4" />
+                                </Button>
+                              )}
                               {isAdmin && (
                                 <Button
                                   variant="ghost"
