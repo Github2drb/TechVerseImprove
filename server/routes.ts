@@ -12,9 +12,15 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
-// Temporarily open - allows initial setup
 async function verifyAdminAuth(req: any): Promise<boolean> {
-  return true;
+  try {
+    const authHeader = req.headers['x-admin-auth'];
+    if (!authHeader) return false;
+    const decoded = JSON.parse(Buffer.from(authHeader as string, 'base64').toString('utf8'));
+    return decoded?.role === 'admin';
+  } catch {
+    return false;
+  }
 }
 
 export async function registerRoutes(
@@ -1006,6 +1012,10 @@ export async function registerRoutes(
 
   app.post("/api/weekly-assignments", async (req, res) => {
     try {
+      const isAdmin = await verifyAdminAuth(req);
+      if (!isAdmin) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
       const { id, engineerName, weekStart, projectName, projectTargetDate, tasks, currentStatus, notes } = req.body;
       
       if (!engineerName || !weekStart || !projectName) {
@@ -1043,6 +1053,10 @@ export async function registerRoutes(
 
   app.patch("/api/weekly-assignments/:id", async (req, res) => {
     try {
+      const isAdmin = await verifyAdminAuth(req);
+      if (!isAdmin) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
       const { id } = req.params;
       const assignments = await GitHub.getWeeklyAssignments();
       const existing = assignments.find(a => a.id === id);
@@ -1067,6 +1081,10 @@ export async function registerRoutes(
 
   app.delete("/api/weekly-assignments/:id", async (req, res) => {
     try {
+      const isAdmin = await verifyAdminAuth(req);
+      if (!isAdmin) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
       const { id } = req.params;
       const result = await GitHub.deleteWeeklyAssignment(id);
       
@@ -1084,6 +1102,10 @@ export async function registerRoutes(
   // Task management within assignments
   app.post("/api/weekly-assignments/:assignmentId/tasks", async (req, res) => {
     try {
+      const isAdmin = await verifyAdminAuth(req);
+      if (!isAdmin) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
       const { assignmentId } = req.params;
       const { taskName, targetDate, completionDate, status } = req.body;
       
@@ -1114,6 +1136,10 @@ export async function registerRoutes(
 
   app.patch("/api/weekly-assignments/:assignmentId/tasks/:taskId", async (req, res) => {
     try {
+      const isAdmin = await verifyAdminAuth(req);
+      if (!isAdmin) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
       const { assignmentId, taskId } = req.params;
       const assignments = await GitHub.getWeeklyAssignments();
       const assignment = assignments.find(a => a.id === assignmentId);
@@ -1143,6 +1169,10 @@ export async function registerRoutes(
 
   app.delete("/api/weekly-assignments/:assignmentId/tasks/:taskId", async (req, res) => {
     try {
+      const isAdmin = await verifyAdminAuth(req);
+      if (!isAdmin) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
       const { assignmentId, taskId } = req.params;
       const result = await GitHub.deleteAssignmentTask(assignmentId, taskId);
       
@@ -1160,6 +1190,10 @@ export async function registerRoutes(
   // Save all weekly assignments for a week (explicit save action)
   app.post("/api/weekly-assignments/save-all", async (req, res) => {
     try {
+      const isAdmin = await verifyAdminAuth(req);
+      if (!isAdmin) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
       const { weekStart } = req.body;
       const assignments = await GitHub.getWeeklyAssignments(weekStart);
       
