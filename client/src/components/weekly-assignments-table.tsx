@@ -228,7 +228,7 @@ export function WeeklyAssignmentsTable({ teamMembers }: WeeklyAssignmentsTablePr
         ...data,
         weekStart: selectedWeek,
         tasks: [],
-      });
+      }, true);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/weekly-assignments", selectedWeek] });
@@ -243,7 +243,7 @@ export function WeeklyAssignmentsTable({ teamMembers }: WeeklyAssignmentsTablePr
 
   const updateAssignmentMutation = useMutation({
     mutationFn: async ({ id, ...data }: Partial<WeeklyAssignment> & { id: string }) => {
-      return apiRequest("PATCH", `/api/weekly-assignments/${id}`, data);
+      return apiRequest("PATCH", `/api/weekly-assignments/${id}`, data, true);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/weekly-assignments", selectedWeek] });
@@ -257,7 +257,7 @@ export function WeeklyAssignmentsTable({ teamMembers }: WeeklyAssignmentsTablePr
 
   const deleteAssignmentMutation = useMutation({
     mutationFn: async (id: string) => {
-      return apiRequest("DELETE", `/api/weekly-assignments/${id}`);
+      return apiRequest("DELETE", `/api/weekly-assignments/${id}`, undefined, true);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/weekly-assignments", selectedWeek] });
@@ -270,7 +270,7 @@ export function WeeklyAssignmentsTable({ teamMembers }: WeeklyAssignmentsTablePr
 
   const addTaskMutation = useMutation({
     mutationFn: async ({ assignmentId, ...taskData }: { assignmentId: string } & Omit<WeeklyAssignmentTask, "id">) => {
-      return apiRequest("POST", `/api/weekly-assignments/${assignmentId}/tasks`, taskData);
+      return apiRequest("POST", `/api/weekly-assignments/${assignmentId}/tasks`, taskData, true);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/weekly-assignments", selectedWeek] });
@@ -286,7 +286,7 @@ export function WeeklyAssignmentsTable({ teamMembers }: WeeklyAssignmentsTablePr
 
   const updateTaskMutation = useMutation({
     mutationFn: async ({ assignmentId, taskId, ...data }: { assignmentId: string; taskId: string } & Partial<WeeklyAssignmentTask>) => {
-      return apiRequest("PATCH", `/api/weekly-assignments/${assignmentId}/tasks/${taskId}`, data);
+      return apiRequest("PATCH", `/api/weekly-assignments/${assignmentId}/tasks/${taskId}`, data, true);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/weekly-assignments", selectedWeek] });
@@ -299,7 +299,7 @@ export function WeeklyAssignmentsTable({ teamMembers }: WeeklyAssignmentsTablePr
 
   const deleteTaskMutation = useMutation({
     mutationFn: async ({ assignmentId, taskId }: { assignmentId: string; taskId: string }) => {
-      return apiRequest("DELETE", `/api/weekly-assignments/${assignmentId}/tasks/${taskId}`);
+      return apiRequest("DELETE", `/api/weekly-assignments/${assignmentId}/tasks/${taskId}`, undefined, true);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/weekly-assignments", selectedWeek] });
@@ -312,7 +312,7 @@ export function WeeklyAssignmentsTable({ teamMembers }: WeeklyAssignmentsTablePr
 
   const saveAllMutation = useMutation({
     mutationFn: async () => {
-      return apiRequest("POST", "/api/weekly-assignments/save-all", { weekStart: selectedWeek });
+      return apiRequest("POST", "/api/weekly-assignments/save-all", { weekStart: selectedWeek }, true);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/weekly-assignments", selectedWeek] });
