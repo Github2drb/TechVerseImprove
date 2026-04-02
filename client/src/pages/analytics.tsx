@@ -30,6 +30,7 @@ interface EngineerProject {
   projectName: string;
   status: string;
   scopeOfWork: string;
+  coEngineers?: string[];
 }
 
 interface EngineerWorkload {
@@ -190,6 +191,19 @@ export default function Analytics() {
                                 <p className="text-xs text-muted-foreground mt-1 break-words whitespace-normal">
                                   <span className="font-medium">Scope:</span> {project.scopeOfWork}
                                 </p>
+                                {project.coEngineers && project.coEngineers.length > 0 && (
+                                  <div className="flex flex-wrap gap-1 mt-1">
+                                    <span className="text-xs text-muted-foreground font-medium">Also assigned:</span>
+                                    {project.coEngineers.map((co, i) => (
+                                      <span
+                                        key={i}
+                                        className="text-xs bg-muted px-1.5 py-0.5 rounded-full text-muted-foreground"
+                                      >
+                                        {co}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
                               </div>
                             ))}
                           </div>
