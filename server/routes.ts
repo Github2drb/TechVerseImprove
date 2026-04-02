@@ -374,7 +374,7 @@ export async function registerRoutes(
         // Skip completed assignments
         if (assignment.currentStatus === 'completed') return;
 
-        // Support comma-separated engineer names per assignment
+        // Split comma-separated engineer names (e.g. "Santosh N,Dyumith NV,Meghana(PAES)")
         const engineerNames = assignment.engineerName
           .split(',')
           .map(n => n.trim())
@@ -386,10 +386,13 @@ export async function registerRoutes(
           }
           const projectsMap = engineerMap.get(engineer)!;
           if (!projectsMap.has(assignment.projectName)) {
+            // co-engineers = all others assigned to same project
+            const coEngineers = engineerNames.filter(n => n !== engineer);
             projectsMap.set(assignment.projectName, {
               projectName: assignment.projectName,
               status: statusLabel[assignment.currentStatus] || assignment.currentStatus,
               scopeOfWork: assignment.notes || assignment.constraint || 'Not specified',
+              coEngineers,
             });
           }
         });
