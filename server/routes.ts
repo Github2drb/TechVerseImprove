@@ -970,6 +970,17 @@ export async function registerRoutes(
     }
   });
 
+  // Get engineers master list
+  app.get("/api/engineers-master-list", async (req, res) => {
+    try {
+      const data = await GitHub.readEngineerMasterListFromGitHub();
+      res.json(data.engineers || []);
+    } catch (error) {
+      console.error('Error fetching engineers master list:', error);
+      res.status(500).json({ message: "Failed to fetch engineers master list" });
+    }
+  });
+
   // Initialize engineers master list on GitHub
   app.post("/api/engineers-master-list/initialize", async (req, res) => {
     try {
