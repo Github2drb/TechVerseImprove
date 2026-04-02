@@ -48,29 +48,34 @@ interface EngineerWorkloadData {
 
 function getStatusColor(status: string): string {
   const statusLower = status.toLowerCase();
+  // Weekly assignment statuses
+  if (statusLower === 'in progress' || statusLower === 'in_progress') {
+    return "bg-blue-500/20 text-blue-700 dark:text-blue-300";
+  }
+  if (statusLower === 'not started' || statusLower === 'not_started') {
+    return "bg-gray-500/20 text-gray-700 dark:text-gray-300";
+  }
+  if (statusLower === 'on hold' || statusLower === 'on_hold') {
+    return "bg-yellow-500/20 text-yellow-700 dark:text-yellow-300";
+  }
+  if (statusLower === 'blocked') {
+    return "bg-red-500/20 text-red-700 dark:text-red-300";
+  }
+  if (statusLower === 'completed') {
+    return "bg-green-500/20 text-green-700 dark:text-green-300";
+  }
+  // Legacy project status strings
   if (statusLower.includes('complete') || statusLower.includes('done') || statusLower.includes('dispatch')) {
     return "bg-green-500/20 text-green-700 dark:text-green-300";
   }
-  if (statusLower.includes('design')) {
-    return "bg-purple-500/20 text-purple-700 dark:text-purple-300";
-  }
-  if (statusLower.includes('procurement')) {
-    return "bg-orange-500/20 text-orange-700 dark:text-orange-300";
-  }
-  if (statusLower.includes('mechanical')) {
+  if (statusLower.includes('progress')) {
     return "bg-blue-500/20 text-blue-700 dark:text-blue-300";
   }
-  if (statusLower.includes('electrical')) {
-    return "bg-cyan-500/20 text-cyan-700 dark:text-cyan-300";
-  }
-  if (statusLower.includes('plc')) {
+  if (statusLower.includes('hold') || statusLower.includes('pending')) {
     return "bg-yellow-500/20 text-yellow-700 dark:text-yellow-300";
   }
-  if (statusLower.includes('io')) {
-    return "bg-indigo-500/20 text-indigo-700 dark:text-indigo-300";
-  }
-  if (statusLower.includes('trial')) {
-    return "bg-pink-500/20 text-pink-700 dark:text-pink-300";
+  if (statusLower.includes('block') || statusLower.includes('overdue')) {
+    return "bg-red-500/20 text-red-700 dark:text-red-300";
   }
   return "bg-gray-500/20 text-gray-700 dark:text-gray-300";
 }
