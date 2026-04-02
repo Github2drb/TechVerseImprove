@@ -3,14 +3,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Briefcase, Users, ChevronLeft, Search, Filter, Edit2, Plus, AlertTriangle, User, Trash2 } from "lucide-react";
+import { Briefcase, Users, ChevronLeft, Search, Filter, Edit2, Plus, AlertTriangle, User, Trash2, ChevronDown, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Link } from "wouter";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/components/auth-provider";
@@ -70,9 +70,6 @@ const statusLabels: Record<string, string> = {
   completed: "Completed",
   on_hold: "On Hold",
   blocked: "Blocked",
-  commissioning: "Commissioning",
-  FAT: "FAT",
-  SAT: "SAT"
 };
 
 function calculateLockDays(from?: string, till?: string): number {
@@ -175,6 +172,48 @@ export default function TeamProjectTracker() {
     queryKey: ["/api/team-members"],
   });
 
+  const { data: masterEngineers = [] } = useQuery<Array<{ id: string; name: string; initials: string }>>({
+    queryKey: ["/api/engineers-master-list"],
+    queryFn: async () => {
+      const response = await fetch("/api/engineers-master-list");
+      if (!response.ok) throw new Error("Failed to fetch engineers");
+      return response.json();
+    },
+  });
+
+  const [engineerPickerOpen, setEngineerPickerOpen] = useState(false);
+  const [engineerSearch, setEngineerSearch] = useState("");
+  const engineerPickerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (engineerPickerRef.current && !engineerPickerRef.current.contains(e.target as Node)) {
+        setEngineerPickerOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const selectedEngineers = useMemo(() => {
+    if (!formData.engineerName.trim()) return [];
+    return formData.engineerName.split(",").map(n => n.trim()).filter(Boolean);
+  }, [formData.engineerName]);
+
+  const toggleEngineer = (name: string) => {
+    const current = selectedEngineers;
+    const exists = current.includes(name);
+    const updated = exists ? current.filter(n => n !== name) : [...current, name];
+    setFormData(prev => ({ ...prev, engineerName: updated.join(", ") }));
+  };
+
+  const filteredMasterEngineers = useMemo(() => {
+    if (!engineerSearch.trim()) return masterEngineers;
+    return masterEngineers.filter(e =>
+      e.name.toLowerCase().includes(engineerSearch.toLowerCase())
+    );
+  }, [masterEngineers, engineerSearch]);
+
   const updateMutation = useMutation({
     mutationFn: async ({ id, ...data }: Partial<WeeklyAssignment> & { id: string }) => {
       return apiRequest("PATCH", `/api/weekly-assignments/${id}`, data, true);
@@ -231,6 +270,8 @@ export default function TeamProjectTracker() {
       currentStatus: "not_started",
       constraint: "",
     });
+    setEngineerPickerOpen(false);
+    setEngineerSearch("");
   };
 
   const handleEdit = (assignmentId: string) => {
@@ -609,23 +650,66 @@ export default function TeamProjectTracker() {
               </datalist>
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="engineer">Engineer</Label>
-              <Input
-                id="engineer"
-                list="engineer-names-list"
-                value={formData.engineerName}
-                onChange={(e) => setFormData(prev => ({ ...prev, engineerName: e.target.value }))}
-                placeholder="Type or select engineer name"
-                data-testid="input-engineer-edit"
-              />
-              <datalist id="engineer-names-list">
-                {teamMembers.map((member) => (
-                  <option key={member.id} value={member.name} />
-                ))}
-                {uniqueEngineers.filter(e => !teamMembers.find(m => m.name === e)).map((name) => (
-                  <option key={name} value={name} />
-                ))}
-              </datalist>
+              <Label>Engineer(s)</Label>
+              <div className="relative" ref={engineerPickerRef}>
+                <button
+                  type="button"
+                  className="w-full flex items-center justify-between border rounded-md px-3 py-2 text-sm bg-background hover:bg-muted transition-colors"
+                  onClick={() => { setEngineerPickerOpen(o => !o); setEngineerSearch(""); }}
+                  data-testid="input-engineer-edit"
+                >
+                  <span className="truncate text-left">
+                    {selectedEngineers.length === 0
+                      ? "Select engineers..."
+                      : selectedEngineers.join(", ")}
+                  </span>
+                  <ChevronDown className="h-4 w-4 shrink-0 ml-2 text-muted-foreground" />
+                </button>
+                {selectedEngineers.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {selectedEngineers.map(name => (
+                      <span key={name} className="inline-flex items-center gap-1 bg-primary/10 text-primary text-xs px-2 py-0.5 rounded-full">
+                        {name}
+                        <button type="button" onClick={() => toggleEngineer(name)}><X className="h-3 w-3" /></button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {engineerPickerOpen && (
+                  <div className="absolute z-50 mt-1 w-full bg-popover border rounded-md shadow-lg max-h-56 flex flex-col">
+                    <div className="p-2 border-b">
+                      <Input
+                        placeholder="Search engineers..."
+                        value={engineerSearch}
+                        onChange={e => setEngineerSearch(e.target.value)}
+                        className="h-7 text-xs"
+                        autoFocus
+                      />
+                    </div>
+                    <div className="overflow-y-auto flex-1">
+                      {filteredMasterEngineers.map(eng => {
+                        const checked = selectedEngineers.includes(eng.name);
+                        return (
+                          <div
+                            key={eng.id}
+                            className={`flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-muted text-sm ${checked ? "bg-primary/5" : ""}`}
+                            onClick={() => toggleEngineer(eng.name)}
+                          >
+                            <div className={`h-4 w-4 rounded border flex items-center justify-center shrink-0 ${checked ? "bg-primary border-primary" : "border-input"}`}>
+                              {checked && <span className="text-primary-foreground text-[10px] font-bold">✓</span>}
+                            </div>
+                            <span className="flex-1">{eng.name}</span>
+                            <span className="text-xs text-muted-foreground">{eng.initials}</span>
+                          </div>
+                        );
+                      })}
+                      {filteredMasterEngineers.length === 0 && (
+                        <p className="text-xs text-muted-foreground text-center py-3">No engineers found</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="grid gap-2">
@@ -731,23 +815,66 @@ export default function TeamProjectTracker() {
               </datalist>
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="engineerAdd">Engineer</Label>
-              <Input
-                id="engineerAdd"
-                list="engineer-names-list-add"
-                value={formData.engineerName}
-                onChange={(e) => setFormData(prev => ({ ...prev, engineerName: e.target.value }))}
-                placeholder="Type or select engineer name"
-                data-testid="input-engineer-add"
-              />
-              <datalist id="engineer-names-list-add">
-                {teamMembers.map((member) => (
-                  <option key={member.id} value={member.name} />
-                ))}
-                {uniqueEngineers.filter(e => !teamMembers.find(m => m.name === e)).map((name) => (
-                  <option key={name} value={name} />
-                ))}
-              </datalist>
+              <Label>Engineer(s)</Label>
+              <div className="relative" ref={engineerPickerRef}>
+                <button
+                  type="button"
+                  className="w-full flex items-center justify-between border rounded-md px-3 py-2 text-sm bg-background hover:bg-muted transition-colors"
+                  onClick={() => { setEngineerPickerOpen(o => !o); setEngineerSearch(""); }}
+                  data-testid="input-engineer-add"
+                >
+                  <span className="truncate text-left">
+                    {selectedEngineers.length === 0
+                      ? "Select engineers..."
+                      : selectedEngineers.join(", ")}
+                  </span>
+                  <ChevronDown className="h-4 w-4 shrink-0 ml-2 text-muted-foreground" />
+                </button>
+                {selectedEngineers.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {selectedEngineers.map(name => (
+                      <span key={name} className="inline-flex items-center gap-1 bg-primary/10 text-primary text-xs px-2 py-0.5 rounded-full">
+                        {name}
+                        <button type="button" onClick={() => toggleEngineer(name)}><X className="h-3 w-3" /></button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {engineerPickerOpen && (
+                  <div className="absolute z-50 mt-1 w-full bg-popover border rounded-md shadow-lg max-h-56 flex flex-col">
+                    <div className="p-2 border-b">
+                      <Input
+                        placeholder="Search engineers..."
+                        value={engineerSearch}
+                        onChange={e => setEngineerSearch(e.target.value)}
+                        className="h-7 text-xs"
+                        autoFocus
+                      />
+                    </div>
+                    <div className="overflow-y-auto flex-1">
+                      {filteredMasterEngineers.map(eng => {
+                        const checked = selectedEngineers.includes(eng.name);
+                        return (
+                          <div
+                            key={eng.id}
+                            className={`flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-muted text-sm ${checked ? "bg-primary/5" : ""}`}
+                            onClick={() => toggleEngineer(eng.name)}
+                          >
+                            <div className={`h-4 w-4 rounded border flex items-center justify-center shrink-0 ${checked ? "bg-primary border-primary" : "border-input"}`}>
+                              {checked && <span className="text-primary-foreground text-[10px] font-bold">✓</span>}
+                            </div>
+                            <span className="flex-1">{eng.name}</span>
+                            <span className="text-xs text-muted-foreground">{eng.initials}</span>
+                          </div>
+                        );
+                      })}
+                      {filteredMasterEngineers.length === 0 && (
+                        <p className="text-xs text-muted-foreground text-center py-3">No engineers found</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="grid gap-2">
