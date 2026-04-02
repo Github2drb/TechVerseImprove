@@ -626,13 +626,27 @@ export class MemStorage implements IStorage {
       }
     });
 
+    // Also ensure engineers with target tasks but not in taskMap are included
+    for (const [engineerName, taskList] of this.engineerTargetTasks.entries()) {
+      const hasTodayTasks = taskList.some(t => t.date === date);
+      if (hasTodayTasks && !taskMap.has(engineerName)) {
+        taskMap.set(engineerName, []);
+      }
+    }
+
     // Return all engineers with their task info
     return Array.from(taskMap.entries()).map(([engineerName, tasks]) => {
       const completed = tasks.filter(t => t.completed).length;
       const inProgress = Math.max(0, tasks.length - completed - 1);
       const activities = this.engineerActivities.get(engineerName) ?? [];
       const todayActivities = activities.filter(a => a.date === date);
-      const targetTasksList = this.engineerTargetTasks.get(engineerName) ?? [];
+      // Case-insensitive match for target tasks
+      const targetTasksList: Array<{ id: string; text: string; date: string }> = [];
+      for (const [key, taskList] of this.engineerTargetTasks.entries()) {
+        if (key.trim().toLowerCase() === engineerName.trim().toLowerCase()) {
+          targetTasksList.push(...taskList);
+        }
+      }
       const todayTargetTasks = targetTasksList.filter(t => t.date === date);
       
       return {
@@ -688,16 +702,23 @@ export class MemStorage implements IStorage {
   }
 
   async setEngineerTargetTask(engineerName: string, task: string, date: string) {
-    const id = randomUUID();
+    let id = randomUUID();
+    // Save to GitHub first, use GitHub's id for consistency
+    try {
+      const githubResult = await GitHub.setEngineerTargetTask(engineerName, task, date);
+      if (githubResult.id) id = githubResult.id;
+    } catch (error) {
+      console.error('Failed to save target task to GitHub:', error);
+    }
+    // Update in-memory store with the same id
     if (!this.engineerTargetTasks.has(engineerName)) {
       this.engineerTargetTasks.set(engineerName, []);
     }
-    this.engineerTargetTasks.get(engineerName)?.push({ id, text: task, date });
-    // Also save to GitHub
-    try {
-      await GitHub.setEngineerTargetTask(engineerName, task, date);
-    } catch (error) {
-      console.error('Failed to save target task to GitHub:', error);
+    // Remove any duplicate (same id) before pushing
+    const existing = this.engineerTargetTasks.get(engineerName) || [];
+    if (!existing.find(t => t.id === id)) {
+      existing.push({ id, text: task, date });
+      this.engineerTargetTasks.set(engineerName, existing);
     }
     return { id, success: true };
   }
