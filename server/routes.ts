@@ -17,7 +17,8 @@ async function verifyAdminAuth(req: any): Promise<boolean> {
     const authHeader = req.headers['x-admin-auth'];
     if (!authHeader) return false;
     const decoded = JSON.parse(Buffer.from(authHeader as string, 'base64').toString('utf8'));
-    return decoded?.role === 'admin';
+    // Accept if role is admin OR if username is 'admin' (covers stale localStorage)
+    return decoded?.role === 'admin' || decoded?.username?.toLowerCase() === 'admin';
   } catch {
     return false;
   }
@@ -47,11 +48,13 @@ export async function registerRoutes(
           isAdmin: engineer.role === 'admin' 
         };
         
+        // Always enforce admin role for the admin username
+        const resolvedRole = engineer.username.toLowerCase() === 'admin' ? 'admin' : engineer.role;
         return res.json({
           id: engineer.id,
           username: engineer.username,
           name: engineer.name,
-          role: engineer.role,
+          role: resolvedRole,
           company: engineer.company,
           email: `${engineer.username}@drbtechverse.com`,
           status: 'active',

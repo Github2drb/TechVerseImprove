@@ -1158,6 +1158,10 @@ export async function authenticateEngineer(username: string, password: string): 
   if (engineer) {
     // Update last login
     engineer.lastLogin = new Date().toISOString();
+    // Always ensure the admin username has admin role
+    if (engineer.username.toLowerCase() === 'admin') {
+      engineer.role = 'admin';
+    }
     await writeEngineerCredentialsToGitHub(data);
   }
   
@@ -1208,8 +1212,9 @@ export async function initializeEngineerCredentials(): Promise<{ success: boolea
     }
   }
   
-  // Add admin account if not exists
-  if (!existingUsernames.has('admin')) {
+  // Add admin account if not exists, or fix role if it's wrong
+  const existingAdmin = existingCreds.engineers.find(e => e.username.toLowerCase() === 'admin');
+  if (!existingAdmin) {
     existingCreds.engineers.push({
       id: 'admin-1',
       name: 'Admin',
@@ -1220,6 +1225,9 @@ export async function initializeEngineerCredentials(): Promise<{ success: boolea
       createdAt: new Date().toISOString(),
     });
     created++;
+  } else if (existingAdmin.role !== 'admin') {
+    // Fix corrupted admin role
+    existingAdmin.role = 'admin';
   }
   
   existingCreds.lastUpdated = new Date().toISOString();
