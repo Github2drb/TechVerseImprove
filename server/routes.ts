@@ -348,52 +348,61 @@ export async function registerRoutes(
 
   app.get("/api/analytics/engineer-workload", async (req, res) => {
     try {
-      const assignments = await GitHub.getProjectAssignments();
-      
+      // Read from weekly-assignments.json — the single source of truth for the Team Project Tracker
+      const weeklyAssignments = await GitHub.getWeeklyAssignments();
+
       // Get current and next month
       const now = new Date();
       const currentMonth = now.toLocaleString('default', { month: 'long', year: 'numeric' });
       const nextMonthDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
       const nextMonth = nextMonthDate.toLocaleString('default', { month: 'long', year: 'numeric' });
-      
-      // Group assignments by engineer with deduplication
-      const engineerMap = new Map<string, Map<string, { projectName: string; status: string; scopeOfWork: string }>>();
-      
-      assignments.forEach((assignment) => {
-        const engineer = assignment.engineer;
-        if (!engineer) return;
 
-        // Skip completed projects - only show active workload
-        const status = (assignment.status || 'In Progress').trim().toLowerCase();
-        if (status === 'completed' || status === 'done') return;
-        
-        if (!engineerMap.has(engineer)) {
-          engineerMap.set(engineer, new Map());
-        }
-        // Use projectName as key to deduplicate
-        const projectsMap = engineerMap.get(engineer)!;
-        if (!projectsMap.has(assignment.projectName)) {
-          projectsMap.set(assignment.projectName, {
-            projectName: assignment.projectName,
-            status: assignment.status || 'In Progress',
-            scopeOfWork: assignment.notes || 'Not specified',
-          });
-        }
+      // Map currentStatus to display label
+      const statusLabel: Record<string, string> = {
+        not_started: 'Not Started',
+        in_progress: 'In Progress',
+        completed: 'Completed',
+        on_hold: 'On Hold',
+        blocked: 'Blocked',
+      };
+
+      // Group by engineer, deduplicating by projectName
+      // Split comma-separated engineer names (e.g. "Santosh N, Eswanth Potnuri")
+      const engineerMap = new Map<string, Map<string, { projectName: string; status: string; scopeOfWork: string }>>();
+
+      weeklyAssignments.forEach((assignment) => {
+        // Skip completed assignments
+        if (assignment.currentStatus === 'completed') return;
+
+        // Support comma-separated engineer names per assignment
+        const engineerNames = assignment.engineerName
+          .split(',')
+          .map(n => n.trim())
+          .filter(Boolean);
+
+        engineerNames.forEach((engineer) => {
+          if (!engineerMap.has(engineer)) {
+            engineerMap.set(engineer, new Map());
+          }
+          const projectsMap = engineerMap.get(engineer)!;
+          if (!projectsMap.has(assignment.projectName)) {
+            projectsMap.set(assignment.projectName, {
+              projectName: assignment.projectName,
+              status: statusLabel[assignment.currentStatus] || assignment.currentStatus,
+              scopeOfWork: assignment.notes || assignment.constraint || 'Not specified',
+            });
+          }
+        });
       });
-      
-      // Convert to array format
+
+      // Convert to sorted array
       const engineers = Array.from(engineerMap.entries()).map(([name, projectsMap]) => {
         const projects = Array.from(projectsMap.values());
-        return {
-          name,
-          projects,
-          projectCount: projects.length,
-        };
+        return { name, projects, projectCount: projects.length };
       }).sort((a, b) => b.projectCount - a.projectCount);
-      
-      // Calculate total unique assignments
+
       const totalUniqueAssignments = engineers.reduce((sum, eng) => sum + eng.projectCount, 0);
-      
+
       res.json({
         currentMonth,
         nextMonth,
