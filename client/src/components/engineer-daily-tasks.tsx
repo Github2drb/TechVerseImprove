@@ -147,10 +147,24 @@ export function EngineerDailyTasks({ teamMembers, isLoading }: EngineerDailyTask
       if (!response.ok) throw new Error("Failed to add target task");
       return response.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/engineer-daily-tasks"] });
+    onSuccess: (data, variables) => {
+      // Optimistically update the cache immediately so UI shows the task right away
+      const date = new Date().toISOString().split('T')[0];
+      queryClient.setQueryData<EngineerTask[]>("/api/engineer-daily-tasks", (old = []) => {
+        return old.map(eng => {
+          if (eng.engineerName.trim().toLowerCase() === variables.engineerName.trim().toLowerCase()) {
+            const newTask = { id: data.id || Date.now().toString(), text: variables.task, date };
+            return { ...eng, targetTasks: [...(eng.targetTasks || []), newTask] };
+          }
+          return eng;
+        });
+      });
       setNewTargetTask("");
       toast({ title: "Target task added successfully" });
+      // Also refetch after a delay to ensure GitHub propagation
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ["/api/engineer-daily-tasks"] });
+      }, 2000);
     },
     onError: () => {
       toast({ title: "Failed to add target task", variant: "destructive" });
@@ -339,10 +353,10 @@ export function EngineerDailyTasks({ teamMembers, isLoading }: EngineerDailyTask
               {selectedEngineer && (
                 <div className="pt-3 border-t border-blue-500/20 space-y-2">
                   <h4 className="text-sm font-semibold text-muted-foreground">{selectedEngineer}'s Target Tasks for Today</h4>
-                  {engineerTasks.find(t => t.engineerName === selectedEngineer)?.targetTasks?.length ? (
+                  {engineerTasks.find(t => t.engineerName.trim().toLowerCase() === selectedEngineer.trim().toLowerCase())?.targetTasks?.length ? (
                     <div className="space-y-2">
-                      {engineerTasks.find(t => t.engineerName === selectedEngineer)?.targetTasks?.map((task: any) => {
-                        const projects = engineerTasks.find(t => t.engineerName === selectedEngineer)?.tasks || [];
+                      {engineerTasks.find(t => t.engineerName.trim().toLowerCase() === selectedEngineer.trim().toLowerCase())?.targetTasks?.map((task: any) => {
+                        const projects = engineerTasks.find(t => t.engineerName.trim().toLowerCase() === selectedEngineer.trim().toLowerCase())?.tasks || [];
                         const projectNames = projects.map(p => p.projectName).join(", ") || "-";
                         const status = taskStatus[task.id] || "Not Yet Started";
                         
@@ -406,10 +420,10 @@ export function EngineerDailyTasks({ teamMembers, isLoading }: EngineerDailyTask
           {selectedEngineer && (
             <div className="border-t pt-3 space-y-2">
               <h4 className="text-sm font-semibold text-muted-foreground">{selectedEngineer}'s Target Tasks for Today</h4>
-              {engineerTasks.find(t => t.engineerName === selectedEngineer)?.targetTasks?.length ? (
+              {engineerTasks.find(t => t.engineerName.trim().toLowerCase() === selectedEngineer.trim().toLowerCase())?.targetTasks?.length ? (
                 <div className="space-y-3">
-                  {engineerTasks.find(t => t.engineerName === selectedEngineer)?.targetTasks?.map((task: any) => {
-                    const projects = engineerTasks.find(t => t.engineerName === selectedEngineer)?.tasks || [];
+                  {engineerTasks.find(t => t.engineerName.trim().toLowerCase() === selectedEngineer.trim().toLowerCase())?.targetTasks?.map((task: any) => {
+                    const projects = engineerTasks.find(t => t.engineerName.trim().toLowerCase() === selectedEngineer.trim().toLowerCase())?.tasks || [];
                     const projectNames = projects.map(p => p.projectName).join(", ") || "-";
                     const status = taskStatus[task.id] || "Not Yet Started";
                     
@@ -455,11 +469,11 @@ export function EngineerDailyTasks({ teamMembers, isLoading }: EngineerDailyTask
           )}
 
           {/* Selected Engineer's Custom Activities */}
-          {selectedEngineer && engineerTasks.find(t => t.engineerName === selectedEngineer)?.customActivities?.length ? (
+          {selectedEngineer && engineerTasks.find(t => t.engineerName.trim().toLowerCase() === selectedEngineer.trim().toLowerCase())?.customActivities?.length ? (
             <div className="border-t pt-3 space-y-2">
               <h4 className="text-sm font-semibold text-muted-foreground">{selectedEngineer}'s Custom Activities</h4>
               <div className="space-y-2" data-testid="custom-activities-list">
-                {engineerTasks.find(t => t.engineerName === selectedEngineer)?.customActivities?.map((activity: any) => (
+                {engineerTasks.find(t => t.engineerName.trim().toLowerCase() === selectedEngineer.trim().toLowerCase())?.customActivities?.map((activity: any) => (
                   <div
                     key={activity.id}
                     className="flex items-center gap-2 p-2 rounded-md bg-emerald-500/10 dark:bg-emerald-500/20 group"
