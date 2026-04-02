@@ -14,8 +14,9 @@ export function getAdminAuthHeader(): Record<string, string> {
   
   try {
     const user = JSON.parse(userStr);
-    if (user.role === 'admin') {
-      const authData = btoa(JSON.stringify({ username: user.username, role: user.role }));
+    const isAdminUser = user.role === 'admin' || user.username?.toLowerCase() === 'admin';
+    if (isAdminUser) {
+      const authData = btoa(JSON.stringify({ username: user.username, role: 'admin' }));
       return { "X-Admin-Auth": authData };
     }
   } catch {
