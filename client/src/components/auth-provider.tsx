@@ -79,7 +79,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const isAuthenticated = !!user;
-  const isAdmin = user?.role === 'admin';
+  // Always treat username 'admin' as admin, in case stored role is stale
+  const isAdmin = user?.role === 'admin' || user?.username?.toLowerCase() === 'admin';
 
   return (
     <AuthContext.Provider value={{ user, isLoading, isAuthenticated, isAdmin, login, logout, hasPermission }}>
