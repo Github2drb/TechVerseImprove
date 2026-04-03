@@ -4,6 +4,7 @@ import { Header } from "@/components/header";
 import { HeroSection } from "@/components/hero-section";
 import { StatsGrid } from "@/components/stats-widget";
 import { EngineerDailyTasks } from "@/components/engineer-daily-tasks";
+import { TodayActivity } from "@/components/today-activity";
 import { NavigationCards } from "@/components/navigation-cards";
 import { TeamSection } from "@/components/team-section";
 import { ProjectPreview } from "@/components/project-preview";
@@ -185,6 +186,8 @@ export default function Dashboard() {
         
         <WeeklyAssignmentsTable teamMembers={teamMembers} />
 
+
+        <TodayActivity />
 
         <EngineerDailyTasks teamMembers={teamMembers} isLoading={teamLoading} />
         
