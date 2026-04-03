@@ -43,8 +43,28 @@ export function ManagerOverview() {
     queryKey: ["/api/engineer-daily-tasks-config"],
   });
 
+  const today = new Date().toISOString().split("T")[0];
   const { data: engineerTasks = [], isLoading: tasksLoading } = useQuery<EngineerTask[]>({
-    queryKey: ["/api/engineer-daily-tasks"],
+    queryKey: ["/api/daily-activities", today],
+    queryFn: async () => {
+      const res = await fetch(`/api/daily-activities?date=${today}`);
+      if (!res.ok) throw new Error("Failed");
+      const entries = await res.json() as Array<{
+        engineerName: string;
+        targetTasks: Array<{ id: string; text: string }>;
+        completedActivities: Array<{ id: string; text: string }>;
+      }>;
+      // Map to EngineerTask shape
+      return entries.map(e => ({
+        engineerName: e.engineerName,
+        planned: e.targetTasks?.length || 0,
+        completed: e.completedActivities?.length || 0,
+        inProgress: Math.max(0, (e.targetTasks?.length || 0) - (e.completedActivities?.length || 0)),
+        targetTasks: e.targetTasks || [],
+        customActivities: e.completedActivities || [],
+      }));
+    },
+    refetchInterval: 60000,
   });
 
   const { data: assignments = [], isLoading: assignmentsLoading } = useQuery<WeeklyAssignment[]>({
