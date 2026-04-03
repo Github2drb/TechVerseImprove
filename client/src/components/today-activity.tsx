@@ -1,52 +1,37 @@
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { CheckCircle2, Clock, Calendar } from "lucide-react";
+import { CheckCircle2, Clock, Calendar, Target } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-interface EngineerTask {
+interface DailyEntry {
   engineerName: string;
-  planned: number;
-  completed: number;
-  inProgress: number;
-  customActivities: Array<{ id: string; text: string }>;
+  date: string;
   targetTasks: Array<{ id: string; text: string }>;
+  completedActivities: Array<{ id: string; text: string }>;
 }
 
-interface TodayActivityProps {
-  engineerTasks: EngineerTask[];
-  isLoading: boolean;
-}
+export function TodayActivity() {
+  const today = new Date().toISOString().split("T")[0];
 
-export function TodayActivity({ engineerTasks = [], isLoading }: TodayActivityProps) {
-  // Calculate totals from all engineers' today's tasks
-  const tasks = engineerTasks || [];
-  const totalTargetTasks = tasks.reduce((sum, task) => sum + task.targetTasks.length, 0);
-  const totalCompletedActivities = tasks.reduce((sum, task) => sum + task.customActivities.length, 0);
-  
-  // In Progress = incomplete target tasks (total target tasks - completed activities)
-  const totalInProgressTasks = Math.max(0, totalTargetTasks - totalCompletedActivities);
+  const { data: entries = [], isLoading } = useQuery<DailyEntry[]>({
+    queryKey: ["/api/daily-activities", today],
+    queryFn: async () => {
+      const res = await fetch(`/api/daily-activities?date=${today}`);
+      if (!res.ok) throw new Error("Failed to fetch daily activities");
+      return res.json();
+    },
+    refetchInterval: 60000, // refresh every minute
+  });
 
-  const planned = totalTargetTasks;
-  const completed = totalCompletedActivities;
-  const inProgress = totalInProgressTasks;
-  const pending = 0;
+  const totalTarget = entries.reduce((s, e) => s + (e.targetTasks?.length || 0), 0);
+  const totalCompleted = entries.reduce((s, e) => s + (e.completedActivities?.length || 0), 0);
+  const totalInProgress = Math.max(0, totalTarget - totalCompleted);
+  const completionRate = totalTarget > 0 ? Math.round((totalCompleted / totalTarget) * 100) : 0;
 
-  // Get all incomplete target tasks by engineer for tooltips
-  const inProgressActivitiesByEngineer = tasks
-    .map(task => ({
-      engineer: task.engineerName,
-      count: Math.max(0, task.targetTasks.length - task.customActivities.length),
-    }))
-    .filter(activity => activity.count > 0);
-
-  const completedActivitiesByEngineer = tasks
-    .map(task => ({
-      engineer: task.engineerName,
-      count: task.customActivities.length,
-    }))
-    .filter(activity => activity.count > 0);
-
-  const completionRate = planned > 0 ? Math.round((completed / planned) * 100) : 0;
+  const engineersWithActivities = entries.filter(
+    e => (e.targetTasks?.length || 0) > 0 || (e.completedActivities?.length || 0) > 0
+  );
 
   const getCompletionColor = (rate: number) => {
     if (rate === 100) return "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20";
@@ -67,9 +52,10 @@ export function TodayActivity({ engineerTasks = [], isLoading }: TodayActivityPr
         <CardContent>
           <div className="animate-pulse space-y-3">
             <div className="h-10 bg-muted rounded-md" />
-            <div className="grid grid-cols-2 gap-3">
-              <div className="h-12 bg-muted rounded-md" />
-              <div className="h-12 bg-muted rounded-md" />
+            <div className="grid grid-cols-3 gap-3">
+              <div className="h-20 bg-muted rounded-md" />
+              <div className="h-20 bg-muted rounded-md" />
+              <div className="h-20 bg-muted rounded-md" />
             </div>
           </div>
         </CardContent>
@@ -86,44 +72,35 @@ export function TodayActivity({ engineerTasks = [], isLoading }: TodayActivityPr
             Today's Activity
           </CardTitle>
           <Badge variant="secondary" data-testid="badge-planned-count">
-            {planned} Planned
+            {totalTarget} Planned
           </Badge>
         </div>
       </CardHeader>
       <CardContent>
         <div className="space-y-4">
-          {planned > 0 ? (
+          {totalTarget > 0 || totalCompleted > 0 ? (
             <>
               <div className="grid grid-cols-3 gap-3">
-                <div className="flex flex-col items-center gap-2 p-3 rounded-lg bg-emerald-500/10 dark:bg-emerald-500/20 border border-emerald-500/20">
-                  <CheckCircle2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
-                  <div className="text-center">
-                    <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400" data-testid="text-completed-count">
-                      {completed}
-                    </p>
-                    <p className="text-xs text-muted-foreground">Completed</p>
-                  </div>
-                </div>
-
+                {/* Completed */}
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <div className="flex flex-col items-center gap-2 p-3 rounded-lg bg-blue-500/10 dark:bg-blue-500/20 border border-blue-500/20 cursor-help hover:bg-blue-500/20 dark:hover:bg-blue-500/30 transition-colors" data-testid="in-progress-hover">
-                      <Clock className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                    <div className="flex flex-col items-center gap-2 p-3 rounded-lg bg-emerald-500/10 dark:bg-emerald-500/20 border border-emerald-500/20 cursor-help">
+                      <CheckCircle2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
                       <div className="text-center">
-                        <p className="text-2xl font-bold text-blue-600 dark:text-blue-400" data-testid="text-in-progress-count">
-                          {inProgress}
+                        <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400" data-testid="text-completed-count">
+                          {totalCompleted}
                         </p>
-                        <p className="text-xs text-muted-foreground">In Progress</p>
+                        <p className="text-xs text-muted-foreground">Completed</p>
                       </div>
                     </div>
                   </TooltipTrigger>
-                  {inProgress > 0 && (
+                  {totalCompleted > 0 && (
                     <TooltipContent side="top" className="max-w-xs">
                       <div className="space-y-1">
-                        <p className="font-semibold text-sm mb-2">In Progress by Engineer:</p>
-                        {inProgressActivitiesByEngineer.map((activity) => (
-                          <p key={activity.engineer} className="text-xs" data-testid={`tooltip-engineer-${activity.engineer}`}>
-                            • {activity.engineer}: {activity.count} task(s)
+                        <p className="font-semibold text-sm mb-2">Completed by Engineer:</p>
+                        {entries.filter(e => e.completedActivities?.length > 0).map(e => (
+                          <p key={e.engineerName} className="text-xs">
+                            • {e.engineerName}: {e.completedActivities.length} activity
                           </p>
                         ))}
                       </div>
@@ -131,17 +108,62 @@ export function TodayActivity({ engineerTasks = [], isLoading }: TodayActivityPr
                   )}
                 </Tooltip>
 
-                <div className="flex flex-col items-center gap-2 p-3 rounded-lg bg-amber-500/10 dark:bg-amber-500/20 border border-amber-500/20">
-                  <Calendar className="h-5 w-5 text-amber-600 dark:text-amber-400" />
-                  <div className="text-center">
-                    <p className="text-2xl font-bold text-amber-600 dark:text-amber-400" data-testid="text-pending-count">
-                      {pending}
-                    </p>
-                    <p className="text-xs text-muted-foreground">Pending</p>
-                  </div>
-                </div>
+                {/* In Progress */}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex flex-col items-center gap-2 p-3 rounded-lg bg-blue-500/10 dark:bg-blue-500/20 border border-blue-500/20 cursor-help hover:bg-blue-500/20 transition-colors" data-testid="in-progress-hover">
+                      <Clock className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                      <div className="text-center">
+                        <p className="text-2xl font-bold text-blue-600 dark:text-blue-400" data-testid="text-in-progress-count">
+                          {totalInProgress}
+                        </p>
+                        <p className="text-xs text-muted-foreground">In Progress</p>
+                      </div>
+                    </div>
+                  </TooltipTrigger>
+                  {totalInProgress > 0 && (
+                    <TooltipContent side="top" className="max-w-xs">
+                      <div className="space-y-1">
+                        <p className="font-semibold text-sm mb-2">Pending by Engineer:</p>
+                        {entries.filter(e => (e.targetTasks?.length || 0) > (e.completedActivities?.length || 0)).map(e => (
+                          <p key={e.engineerName} className="text-xs">
+                            • {e.engineerName}: {Math.max(0, (e.targetTasks?.length || 0) - (e.completedActivities?.length || 0))} pending
+                          </p>
+                        ))}
+                      </div>
+                    </TooltipContent>
+                  )}
+                </Tooltip>
+
+                {/* Target */}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex flex-col items-center gap-2 p-3 rounded-lg bg-purple-500/10 dark:bg-purple-500/20 border border-purple-500/20 cursor-help">
+                      <Target className="h-5 w-5 text-purple-600 dark:text-purple-400" />
+                      <div className="text-center">
+                        <p className="text-2xl font-bold text-purple-600 dark:text-purple-400">
+                          {totalTarget}
+                        </p>
+                        <p className="text-xs text-muted-foreground">Target Tasks</p>
+                      </div>
+                    </div>
+                  </TooltipTrigger>
+                  {totalTarget > 0 && (
+                    <TooltipContent side="top" className="max-w-xs">
+                      <div className="space-y-1">
+                        <p className="font-semibold text-sm mb-2">Target by Engineer:</p>
+                        {entries.filter(e => e.targetTasks?.length > 0).map(e => (
+                          <p key={e.engineerName} className="text-xs">
+                            • {e.engineerName}: {e.targetTasks.length} task(s)
+                          </p>
+                        ))}
+                      </div>
+                    </TooltipContent>
+                  )}
+                </Tooltip>
               </div>
 
+              {/* Completion Rate Bar */}
               <div className="pt-2">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-medium text-muted-foreground">Completion Rate</span>
@@ -157,6 +179,32 @@ export function TodayActivity({ engineerTasks = [], isLoading }: TodayActivityPr
                   />
                 </div>
               </div>
+
+              {/* Per-engineer breakdown */}
+              {engineersWithActivities.length > 0 && (
+                <div className="pt-2 border-t space-y-2">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Today's Breakdown</p>
+                  <div className="space-y-1.5">
+                    {engineersWithActivities.map(e => {
+                      const done = e.completedActivities?.length || 0;
+                      const target = e.targetTasks?.length || 0;
+                      const pct = target > 0 ? Math.round((done / target) * 100) : 0;
+                      return (
+                        <div key={e.engineerName} className="flex items-center gap-3">
+                          <span className="text-xs font-medium w-28 truncate" title={e.engineerName}>{e.engineerName}</span>
+                          <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-emerald-500 rounded-full"
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                          <span className="text-xs text-muted-foreground w-14 text-right">{done}/{target} ({pct}%)</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </>
           ) : (
             <div className="text-center py-6">
