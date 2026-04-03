@@ -102,13 +102,13 @@ export function ManagerOverview() {
   const inProgressProjects = assignments.filter(a => a.currentStatus === 'in_progress').length;
   const blockedProjects = assignments.filter(a => a.currentStatus === 'blocked').length;
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const todayDate = new Date();
+  todayDate.setHours(0, 0, 0, 0);
   const overdueAssignments = assignments.filter(a => {
     if (!a.resourceLockedTill || a.currentStatus === 'completed') return false;
     const tillDate = new Date(a.resourceLockedTill);
     tillDate.setHours(0, 0, 0, 0);
-    return tillDate < today;
+    return tillDate < todayDate;
   });
 
   const utilizationRate = totalEngineers > 0 
