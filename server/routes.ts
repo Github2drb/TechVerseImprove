@@ -235,6 +235,44 @@ export async function registerRoutes(
     }
   });
 
+  // Direct read from daily-activities.json for a given date (default: today)
+  app.get("/api/daily-activities", async (req, res) => {
+    try {
+      const date = req.query.date as string || new Date().toISOString().split('T')[0];
+      const data = await GitHub.readDailyActivitiesFromGitHub();
+      const allEntries = data.engineerDailyData || [];
+
+      // Filter by date, merge entries for same engineer on same date
+      const byEngineer = new Map<string, { engineerName: string; date: string; targetTasks: Array<{id:string;text:string}>; completedActivities: Array<{id:string;text:string}> }>();
+
+      allEntries
+        .filter(entry => entry.date === date)
+        .forEach(entry => {
+          const key = entry.engineerName.trim().toLowerCase();
+          if (!byEngineer.has(key)) {
+            byEngineer.set(key, {
+              engineerName: entry.engineerName,
+              date: entry.date,
+              targetTasks: [...(entry.targetTasks || [])],
+              completedActivities: [...(entry.completedActivities || [])],
+            });
+          } else {
+            const existing = byEngineer.get(key)!;
+            // Merge, deduplicating by id
+            const existingTargetIds = new Set(existing.targetTasks.map(t => t.id));
+            const existingActivityIds = new Set(existing.completedActivities.map(a => a.id));
+            (entry.targetTasks || []).forEach(t => { if (!existingTargetIds.has(t.id)) existing.targetTasks.push(t); });
+            (entry.completedActivities || []).forEach(a => { if (!existingActivityIds.has(a.id)) existing.completedActivities.push(a); });
+          }
+        });
+
+      res.json(Array.from(byEngineer.values()));
+    } catch (error) {
+      console.error('Error fetching daily activities:', error);
+      res.status(500).json({ message: "Failed to fetch daily activities" });
+    }
+  });
+
   app.get("/api/engineer-daily-tasks", async (req, res) => {
     try {
       const date = req.query.date as string || new Date().toISOString().split('T')[0];
