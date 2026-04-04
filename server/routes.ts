@@ -416,26 +416,56 @@ export async function registerRoutes(
       // Split comma-separated engineer names (e.g. "Santosh N, Eswanth Potnuri")
       const engineerMap = new Map<string, Map<string, { projectName: string; status: string; scopeOfWork: string }>>();
 
+      // Load master engineer list for name normalisation
+      let masterEngineers: Array<{ name: string; initials: string }> = [];
+      try {
+        const masterData = await GitHub.readEngineerMasterListFromGitHub();
+        masterEngineers = masterData.engineers || [];
+      } catch {}
+
+      // Resolve engineer name against master list (case-insensitive, ignoring company suffix)
+      const resolveEngineerName = (raw: string): string => {
+        const clean = raw.trim();
+        // Try exact match first
+        const exact = masterEngineers.find(e => e.name.trim() === clean);
+        if (exact) return exact.name;
+        // Try case-insensitive match ignoring parenthetical
+        const cleanLower = clean.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase();
+        const fuzzy = masterEngineers.find(e =>
+          e.name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase() === cleanLower
+        );
+        return fuzzy ? fuzzy.name : clean; // fallback to raw name
+      };
+
+      // Extract project number key for deduplication (e.g. "3A-DK2-25143")
+      const extractProjectKey = (name: string): string => {
+        const m = name.trim().match(/^([A-Z0-9]{1,4}-[A-Z0-9]{1,5}-\d{4,6})/i);
+        return m ? m[1].toUpperCase() : name.trim().toUpperCase();
+      };
+
       weeklyAssignments.forEach((assignment) => {
         // Skip completed assignments
         if (assignment.currentStatus === 'completed') return;
 
-        // Split comma-separated engineer names (e.g. "Santosh N,Dyumith NV,Meghana(PAES)")
+        // Split comma-separated engineer names and resolve against master list
         const engineerNames = assignment.engineerName
           .split(',')
-          .map(n => n.trim())
+          .map(n => resolveEngineerName(n.trim()))
           .filter(Boolean);
+
+        const projectKey = extractProjectKey(assignment.projectName);
 
         engineerNames.forEach((engineer) => {
           if (!engineerMap.has(engineer)) {
             engineerMap.set(engineer, new Map());
           }
           const projectsMap = engineerMap.get(engineer)!;
-          if (!projectsMap.has(assignment.projectName)) {
-            // co-engineers = all others assigned to same project
+          // Deduplicate by project number key, prefer longer project name
+          const existing = projectsMap.get(projectKey);
+          if (!existing || assignment.projectName.trim().length > existing.projectName.trim().length) {
             const coEngineers = engineerNames.filter(n => n !== engineer);
-            projectsMap.set(assignment.projectName, {
-              projectName: assignment.projectName,
+            projectsMap.set(projectKey, {
+              projectName: assignment.projectName.trim(),
               status: statusLabel[assignment.currentStatus] || assignment.currentStatus,
               scopeOfWork: assignment.notes || assignment.constraint || 'Not specified',
               coEngineers,
@@ -705,7 +735,19 @@ export async function registerRoutes(
 
   app.get("/api/project-assignments", async (req, res) => {
     try {
-      const assignments = await GitHub.getProjectAssignments();
+      // Read from weekly-assignments.json (single source of truth)
+      const weeklyAssignments = await GitHub.getWeeklyAssignments();
+      // Map to legacy ProjectAssignment shape for backward compatibility
+      const assignments = weeklyAssignments.map(a => ({
+        projectName: a.projectName,
+        engineer: a.engineerName,
+        startDate: a.resourceLockedFrom || a.weekStart || '',
+        endDate: a.resourceLockedTill || '',
+        daysAssigned: 0,
+        remainingDays: 0,
+        status: a.currentStatus,
+        notes: a.notes || a.constraint || '',
+      }));
       res.json(assignments);
     } catch (error) {
       console.error('Error fetching project assignments:', error);
@@ -950,40 +992,31 @@ export async function registerRoutes(
   // Get project names from data.json
   app.get("/api/project-names", async (req, res) => {
     try {
-      const octokit = await GitHub.getGitHubClient();
-      const response = await octokit.repos.getContent({
-        owner: 'Github2drb',
-        repo: 'Controls_Team_Tracker',
-        path: 'data.json',
-      });
+      // Read project names from weekly-assignments.json (single source of truth)
+      const weeklyAssignments = await GitHub.getWeeklyAssignments();
 
-      if (Array.isArray(response.data) || !('content' in response.data)) {
-        throw new Error('Invalid file response');
-      }
-
-      const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
-      const data = JSON.parse(content);
-      
-      // Extract and deduplicate project names
-      // Normalise: trim whitespace, remove leading numbers like "13) ", standardise separators
+      // Normalise for deduplication: strip leading numbers, collapse spaces
       const normalise = (name: string) => name
         .trim()
-        .replace(/^\d+\)\s*/, '')          // remove leading "13) "
-        .replace(/\s+/g, ' ')               // collapse multiple spaces
+        .replace(/^\d+\)\s*/, '')
+        .replace(/\s+/g, ' ')
         .toUpperCase();
 
-      const allNames: string[] = (data.data || data.assignments || [])
-        .map((item: any) => (item.projectName || '').trim())
-        .filter((n: string) => n.length > 0);
+      // Extract project number prefix for strong deduplication (e.g. "3A-DK2-25143")
+      const extractProjectKey = (name: string): string => {
+        const m = name.trim().match(/^([A-Z0-9]{1,4}-[A-Z0-9]{1,5}-\d{4,6})/i);
+        return m ? m[1].toUpperCase() : normalise(name);
+      };
 
-      // Deduplicate: keep the longest/cleanest version when normalised names match
+      // Deduplicate: prefer longer/more descriptive name when project number matches
       const seen = new Map<string, string>();
-      for (const name of allNames) {
-        const key = normalise(name);
+      for (const a of weeklyAssignments) {
+        const name = (a.projectName || '').trim();
+        if (!name) continue;
+        const key = extractProjectKey(name);
         const existing = seen.get(key);
-        // Prefer names without leading spaces, shorter prefixes stripped
-        if (!existing || name.trim().length > existing.trim().length) {
-          seen.set(key, name.trim());
+        if (!existing || name.length > existing.length) {
+          seen.set(key, name);
         }
       }
 
