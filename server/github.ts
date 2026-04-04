@@ -287,42 +287,66 @@ export interface ProjectAssignment {
   notes: string;
 }
 
-export async function getUniqueEngineers(): Promise<string[]> {
+export async function getUniqueEngineers(includeUnassigned: boolean = false): Promise<string[]> {
   try {
     const octokit = await getGitHubClient();
-    const response = await octokit.repos.getContent({
-      owner: 'Github2drb',
-      repo: 'Controls_Team_Tracker',
-      path: 'data.json',
-    });
-
-    if (Array.isArray(response.data)) {
-      throw new Error('Expected a file, got a directory');
+    const [dataResponse, masterResponse] = await Promise.all([
+      octokit.repos.getContent({
+        owner: 'Github2drb',
+        repo: 'Controls_Team_Tracker',
+        path: 'data.json',
+      }),
+      octokit.repos.getContent({
+        owner: 'Github2drb',
+        repo: 'Controls_Team_Tracker',
+        path: 'engineers_master_list.json',
+      })
+    ]);
+    if (Array.isArray(dataResponse.data) || !('content' in dataResponse.data)) {
+      throw new Error('Invalid data.json response');
     }
+    const dataContent = Buffer.from(dataResponse.data.content, 'base64').toString('utf-8');
+    const data = JSON.parse(dataContent);
 
-    if (!('content' in response.data)) {
-      throw new Error('File has no content');
+    if (Array.isArray(masterResponse.data) || !('content' in masterResponse.data)) {
+      throw new Error('Invalid engineers_master_list.json response');
     }
-
-    const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
-    const data = JSON.parse(content);
+    const masterContent = Buffer.from(masterResponse.data.content, 'base64').toString('utf-8');
+    const masterData = JSON.parse(masterContent);
+    const masterEngineers: Array<{ name: string; id: string }> = masterData.engineers || [];
+    
     
     // Extract engineer names from assignments
-    const assignments: ProjectAssignment[] = data.assignments || [];
-    const uniqueEngineers = new Set<string>();
+    const assignments: ProjectAssignment[] = data.assignments || data.data || [];
+    const assignedEngineers = new Set<string>();
     
     assignments.forEach((assignment: ProjectAssignment) => {
-      if (assignment.engineer) {
-        uniqueEngineers.add(assignment.engineer.trim());
+      if (assignment.engineer || assignment.engineerName) {
+        const name = (assignment.engineer || assignment.engineerName).trim();
+        if (name) assignedEngineers.add(name);
       }
     });
-    
-    return Array.from(uniqueEngineers).sort();
-  } catch (error) {
+    if (includeUnassigned) {
+      // Return ALL engineers from master list, sorted
+      return masterEngineers.map(e => e.name).sort();
+    } else {
+      // Return only assigned engineers, but normalize against master list
+      const normalizedAssigned = new Set<string>();
+      
+      for (const assignedName of assignedEngineers) {
+        const canonical = findCanonicalEngineerName(assignedName, masterEngineers);
+        normalizedAssigned.add(canonical || assignedName);
+      }
+      
+      return Array.from(normalizedAssigned).sort();
+    }
+    } catch (error) {
     console.error('Error fetching unique engineers from GitHub:', error);
     return [];
   }
 }
+    
+    
 
 export async function getProjectAssignments(): Promise<ProjectAssignment[]> {
   try {
