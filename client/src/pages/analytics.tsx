@@ -102,6 +102,9 @@ export default function Analytics() {
 
   const { data: workloadData, isLoading: isLoadingWorkload } = useQuery<EngineerWorkloadData>({
     queryKey: ["/api/analytics/engineer-workload"],
+    staleTime: 0,           // always considered stale
+    refetchOnMount: true,   // refetch every time the page is visited
+    refetchInterval: false,
   });
 
   return (
