@@ -106,9 +106,33 @@ export async function readDataFromGitHub(): Promise<{ engineerDailyData: Enginee
   }
 }
 
-export async function writeDataToGitHub(data: { engineerDailyData: EngineerDailyData[] }): Promise<boolean> {
+export async function writeDataToGitHub(data: { 
+  engineerDailyData: EngineerDailyData[];
+  assignments?: ProjectAssignment[];
+  data?: any[];
+}): Promise<boolean> {
   try {
     const octokit = await getGitHubClient();
+    
+    // Get master list for validation
+    const masterData = await readEngineerMasterListFromGitHub();
+    if (data.assignments || data.data) {
+      const assignments = data.assignments || data.data || [];
+      const validated: any[] = [];
+      
+      for (const assignment of assignments) {
+        const { normalized, warnings } = await validateAndNormalizeAssignment(
+          assignment, 
+          masterData.engineers
+        );
+        validated.push(normalized);
+        if (warnings.length > 0) {
+          console.log(`Assignment validation: ${warnings.join('; ')}`);
+        }
+      }
+      if (data.assignments) data.assignments = validated;
+      if (data.data) data.data = validated;
+    }
     
     // Get current file to get the SHA
     const currentFile = await octokit.repos.getContent({
@@ -116,12 +140,8 @@ export async function writeDataToGitHub(data: { engineerDailyData: EngineerDaily
       repo: 'Controls_Team_Tracker',
       path: 'data.json',
     });
-
-    if (Array.isArray(currentFile.data)) {
-      throw new Error('Expected a file, got a directory');
-    }
-
-    if (!('sha' in currentFile.data)) {
+    
+    if (Array.isArray(currentFile.data) || !('sha' in currentFile.data)) {
       throw new Error('File has no sha');
     }
 
@@ -132,7 +152,7 @@ export async function writeDataToGitHub(data: { engineerDailyData: EngineerDaily
       owner: 'Github2drb',
       repo: 'Controls_Team_Tracker',
       path: 'data.json',
-      message: `Update engineer daily tasks and activities - ${new Date().toISOString()}`,
+      message: `Update data with validation - ${new Date().toISOString()}`,
       content: newContent,
       sha: sha,
     });
@@ -143,7 +163,6 @@ export async function writeDataToGitHub(data: { engineerDailyData: EngineerDaily
     return false;
   }
 }
-
 // Separate functions for daily activities (target tasks and completed activities)
 export async function readDailyActivitiesFromGitHub(): Promise<{ engineerDailyData: EngineerDailyData[] }> {
   try {
