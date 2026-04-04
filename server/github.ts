@@ -1,4 +1,30 @@
 import { Octokit } from '@octokit/rest';
+async function validateAndNormalizeAssignment(
+  assignment: any,
+  masterEngineers: Array<{ name: string }>
+): Promise<{ valid: boolean; normalized: any; warnings: string[] }> {
+  const warnings: string[] = [];
+  
+  // Validate engineer name
+  if (assignment.engineerName) {
+    const canonical = findCanonicalEngineerName(assignment.engineerName, masterEngineers);
+    if (canonical && canonical !== assignment.engineerName) {
+      warnings.push(`Engineer name normalized: "${assignment.engineerName}" → "${canonical}"`);
+      assignment.engineerName = canonical;
+    } else if (!canonical) {
+      warnings.push(`Warning: Engineer "${assignment.engineerName}" not found in master list`);
+    }
+  }
+  
+  // Normalize project name using extractProjectNumber for consistency
+  if (assignment.projectName) {
+    const projectNum = extractProjectNumber(assignment.projectName);
+    // Optional: store normalized project number for indexing
+    assignment._projectKey = projectNum;
+  }
+  
+  return { valid: true, normalized: assignment, warnings };
+}
 
 let connectionSettings: any;
 
