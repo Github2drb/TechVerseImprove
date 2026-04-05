@@ -124,7 +124,16 @@ export function extractProjectNumber(projectName: string): string {
 // ============================================================================
 
 async function getAccessToken() {
-  if (connectionSettings && connectionSettings.settings.expires_at && new Date(connectionSettings.settings.expires_at).getTime() > Date.now()) {
+  // ── Primary: use GITHUB_TOKEN env var (Render, local dev) ──────────────────
+  const githubToken = process.env.GITHUB_TOKEN;
+  if (githubToken) {
+    return githubToken;
+  }
+
+  // ── Legacy fallback: Replit connector OAuth flow ────────────────────────────
+  // Only used when running inside a Replit environment
+  if (connectionSettings && connectionSettings.settings?.expires_at &&
+      new Date(connectionSettings.settings.expires_at).getTime() > Date.now()) {
     return connectionSettings.settings.access_token;
   }
 
@@ -135,26 +144,26 @@ async function getAccessToken() {
     ? 'depl ' + process.env.WEB_REPL_RENEWAL
     : null;
 
-  if (!xReplitToken) {
-    throw new Error('X_REPLIT_TOKEN not found for repl/depl');
-  }
-
-  connectionSettings = await fetch(
-    'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=github',
-    {
-      headers: {
-        'Accept': 'application/json',
-        'X_REPLIT_TOKEN': xReplitToken
+  if (hostname && xReplitToken) {
+    connectionSettings = await fetch(
+      'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=github',
+      {
+        headers: {
+          'Accept': 'application/json',
+          'X_REPLIT_TOKEN': xReplitToken
+        }
       }
-    }
-  ).then(res => res.json()).then(data => data.items?.[0]);
+    ).then(res => res.json()).then(data => data.items?.[0]);
 
-  const accessToken = connectionSettings?.settings?.access_token || connectionSettings.settings?.oauth?.credentials?.access_token;
+    const accessToken = connectionSettings?.settings?.access_token ||
+      connectionSettings?.settings?.oauth?.credentials?.access_token;
 
-  if (!connectionSettings || !accessToken) {
-    throw new Error('GitHub not connected');
+    if (accessToken) return accessToken;
   }
-  return accessToken;
+
+  throw new Error(
+    'GitHub token not found. Set the GITHUB_TOKEN environment variable in Render dashboard.'
+  );
 }
 
 export async function getGitHubClient() {
