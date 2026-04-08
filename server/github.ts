@@ -1,208 +1,255 @@
-import { Octokit } from '@octokit/rest';
+// server/github.ts
+// Full GitHub integration — reads/writes all JSON files in Controls_Team_Tracker repo.
+// Added: project_master_list.json read/write + deduplication helpers.
 
-let connectionSettings: any;
+import { Octokit } from "@octokit/rest";
 
-// ============================================================================
-// 🔧 ENGINEER NAME NORMALIZATION UTILITIES (NEW)
-// ============================================================================
+const OWNER = "Github2drb";
+const REPO = "Controls_Team_Tracker";
+const BRANCH = "main";
 
-/**
- * Normalizes engineer names for consistent matching across data sources
- * Handles: case, extra spaces, parenthetical company names, suffixes
- */
-export function normalizeEngineerName(name: string): string {
-  if (!name) return '';
-  return name
-    .trim()
-    .toLowerCase()
-    // Remove parenthetical content like "(Ampere)", "(PAES)", "(D.I.C.S)"
-    .replace(/\s*\([^)]*\)\s*/g, ' ')
-    // Remove common suffixes that vary between sources (M, C, etc.)
-    .replace(/\s+[cm]$/i, '')
-    // Collapse multiple spaces
-    .replace(/\s+/g, ' ')
-    .trim();
+function getOctokit(): Octokit {
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) throw new Error("GITHUB_TOKEN environment variable not set");
+  return new Octokit({ auth: token });
 }
 
-/**
- * Finds the canonical engineer name from master list matching a raw name
- * @param rawName - Name from data.json assignment
- * @param masterList - Array from engineers_master_list.json
- * @returns Canonical name from master list, or null if no match
- */
-export function findCanonicalEngineerName(
-  rawName: string,
-  masterList: Array<{ name: string; id: string; initials?: string }>
-): string | null {
-  const normalizedRaw = normalizeEngineerName(rawName);
-  
-  // Try exact normalized match first
-  const exactMatch = masterList.find(
-    e => normalizeEngineerName(e.name) === normalizedRaw
-  );
-  if (exactMatch) return exactMatch.name;
-  
-  // Try fuzzy match: check if raw name is contained in master name
-  const fuzzyMatch = masterList.find(e => {
-    const normalizedMaster = normalizeEngineerName(e.name);
-    return normalizedMaster.includes(normalizedRaw) || 
-           normalizedRaw.includes(normalizedMaster);
+// ─── Generic helpers ─────────────────────────────────────────────────────────
+
+async function getFileSha(octokit: Octokit, path: string): Promise<string | undefined> {
+  try {
+    const res = await octokit.repos.getContent({ owner: OWNER, repo: REPO, path, ref: BRANCH });
+    const data = res.data as { sha: string };
+    return data.sha;
+  } catch {
+    return undefined;
+  }
+}
+
+async function readJsonFile<T>(path: string): Promise<T | null> {
+  try {
+    const octokit = getOctokit();
+    const res = await octokit.repos.getContent({ owner: OWNER, repo: REPO, path, ref: BRANCH });
+    const data = res.data as { content: string };
+    const decoded = Buffer.from(data.content, "base64").toString("utf-8");
+    return JSON.parse(decoded) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function writeJsonFile(path: string, content: unknown, message: string): Promise<void> {
+  const octokit = getOctokit();
+  const sha = await getFileSha(octokit, path);
+  const encoded = Buffer.from(JSON.stringify(content, null, 2)).toString("base64");
+  await octokit.repos.createOrUpdateFileContents({
+    owner: OWNER,
+    repo: REPO,
+    path,
+    message,
+    content: encoded,
+    sha,
+    branch: BRANCH,
   });
-  
-  return fuzzyMatch?.name || null;
 }
 
-/**
- * Validates that an engineer name exists in the master list
- * Returns suggestion if close match found
- */
-export function validateEngineerName(
-  name: string,
-  masterList: Array<{ name: string }>
-): { valid: boolean; suggestion?: string } {
-  const canonical = findCanonicalEngineerName(name, masterList);
-  
-  if (canonical) {
-    if (canonical.toLowerCase() === name.toLowerCase().trim()) {
-      return { valid: true };
-    }
-    return { valid: false, suggestion: canonical };
-  }
-  
-  return { valid: false };
+// ─── Engineers Master List ────────────────────────────────────────────────────
+
+export interface Engineer {
+  id: string;
+  name: string;
+  initials: string;
 }
 
-// ============================================================================
-// 🔧 IMPROVED PROJECT NUMBER EXTRACTION (FIXED REGEX)
-// ============================================================================
-
-/**
- * Extracts the project number from a project name.
- * Handles edge cases: leading numbers, parentheses, spaces, non-standard formats
- * 
- * Examples:
- * "3A-DK2-25143 Leak Testing Machine" → "3A-DK2-25143"
- * "13) 3A-GB1-25038_(Type-1)..." → "3A-GB1-25038"
- * " A-GB1-25062_GE_..." → "A-GB1-25062"
- * "IMTEX-2026" → "IMTEX-2026"
- * "3A2409 - GLASS..." → "3A2409"
- */
-export function extractProjectNumber(projectName: string): string {
-  if (!projectName) return '';
-  
-  // Clean: trim and remove leading numbering like "13) ", "20) ", etc.
-  let cleaned = projectName.trim().replace(/^\d+\)\s*/, '');
-  
-  // Try to match standard project code pattern: XXX-XXX-NNNNN or XX-XX-NNNN
-  const standardPattern = /([A-Z0-9]{1,4}-[A-Z0-9]{2,5}-\d{4,6})/i;
-  const standardMatch = cleaned.match(standardPattern);
-  if (standardMatch) {
-    return standardMatch[1].toUpperCase();
-  }
-  
-  // Fallback: extract first alphanumeric code block that looks like a project ID
-  // Handles: "IMTEX-2026", "3A2409", "DK1-25110"
-  const fallbackPattern = /([A-Z0-9]{2,4}-?[A-Z0-9]{2,4}-?\d{4,6})/i;
-  const fallbackMatch = cleaned.match(fallbackPattern);
-  if (fallbackMatch) {
-    return fallbackMatch[1].toUpperCase();
-  }
-  
-  // Last resort: return first "word" that contains letters and numbers
-  const parts = cleaned.split(/[\s_\-\(\)]+/).filter(p => p.length > 0);
-  const codeLike = parts.find(p => /[A-Z]/i.test(p) && /\d/.test(p));
-  if (codeLike) {
-    return codeLike.toUpperCase();
-  }
-  
-  // Ultimate fallback: return cleaned first part
-  return parts[0]?.toUpperCase() || cleaned.toUpperCase();
+interface EngineersMasterList {
+  engineers: Engineer[];
+  lastUpdated: string;
 }
 
-// ============================================================================
-// 🔐 GITHUB CLIENT SETUP
-// ============================================================================
+export async function getEngineersMasterList(): Promise<Engineer[]> {
+  const data = await readJsonFile<EngineersMasterList>("engineers_master_list.json");
+  return data?.engineers ?? [];
+}
 
-async function getAccessToken() {
-  // ── Primary: use GITHUB_TOKEN env var (Render, local dev) ──────────────────
-  const githubToken = process.env.GITHUB_TOKEN;
-  if (githubToken) {
-    return githubToken;
+/** Validate that an engineer name exists in the master list (case-insensitive trim). */
+export function validateEngineerName(name: string, masterList: Engineer[]): boolean {
+  const normalized = name.trim().toLowerCase();
+  return masterList.some((e) => e.name.trim().toLowerCase() === normalized);
+}
+
+// ─── Project Master List ──────────────────────────────────────────────────────
+
+export interface ProjectMasterEntry {
+  projectNumber: string;      // e.g. "3A-DK1-25077"
+  projectName: string;        // full project name stored at creation time
+  createdAt: string;          // ISO timestamp
+}
+
+interface ProjectMasterList {
+  projects: ProjectMasterEntry[];
+  lastUpdated: string;
+}
+
+export async function getProjectMasterList(): Promise<ProjectMasterEntry[]> {
+  const data = await readJsonFile<ProjectMasterList>("project_master_list.json");
+  return data?.projects ?? [];
+}
+
+/** Add a project to project_master_list.json if it doesn't already exist. Returns false if duplicate. */
+export async function addProjectToMasterList(
+  projectNumber: string,
+  projectName: string
+): Promise<{ success: boolean; message: string }> {
+  const data = (await readJsonFile<ProjectMasterList>("project_master_list.json")) ?? {
+    projects: [],
+    lastUpdated: "",
+  };
+
+  const exists = data.projects.some(
+    (p) => p.projectNumber.trim().toLowerCase() === projectNumber.trim().toLowerCase()
+  );
+  if (exists) {
+    return { success: false, message: `Project number "${projectNumber}" already exists in master list.` };
   }
 
-  // ── Legacy fallback: Replit connector OAuth flow ────────────────────────────
-  // Only used when running inside a Replit environment
-  if (connectionSettings && connectionSettings.settings?.expires_at &&
-      new Date(connectionSettings.settings.expires_at).getTime() > Date.now()) {
-    return connectionSettings.settings.access_token;
-  }
+  data.projects.push({
+    projectNumber: projectNumber.trim(),
+    projectName: projectName.trim(),
+    createdAt: new Date().toISOString(),
+  });
+  data.lastUpdated = new Date().toISOString();
 
-  const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
-  const xReplitToken = process.env.REPL_IDENTITY
-    ? 'repl ' + process.env.REPL_IDENTITY
-    : process.env.WEB_REPL_RENEWAL
-    ? 'depl ' + process.env.WEB_REPL_RENEWAL
-    : null;
+  await writeJsonFile("project_master_list.json", data, `Add project ${projectNumber} to master list`);
+  return { success: true, message: "Project added to master list." };
+}
 
-  if (hostname && xReplitToken) {
-    connectionSettings = await fetch(
-      'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=github',
-      {
-        headers: {
-          'Accept': 'application/json',
-          'X_REPLIT_TOKEN': xReplitToken
-        }
-      }
-    ).then(res => res.json()).then(data => data.items?.[0]);
-
-    const accessToken = connectionSettings?.settings?.access_token ||
-      connectionSettings?.settings?.oauth?.credentials?.access_token;
-
-    if (accessToken) return accessToken;
-  }
-
-  throw new Error(
-    'GitHub token not found. Set the GITHUB_TOKEN environment variable in Render dashboard.'
+/** Validate that a project number exists in the master list. */
+export function validateProjectNumber(projectNumber: string, masterList: ProjectMasterEntry[]): boolean {
+  return masterList.some(
+    (p) => p.projectNumber.trim().toLowerCase() === projectNumber.trim().toLowerCase()
   );
 }
 
-export async function getGitHubClient() {
-  const accessToken = await getAccessToken();
-  return new Octokit({ auth: accessToken });
-}
-
-// ============================================================================
-// 📊 DATA TYPES
-// ============================================================================
-
-export interface EngineerDailyData {
-  engineerName: string;
-  date: string;
-  targetTasks: Array<{ id: string; text: string }>;
-  completedActivities: Array<{ id: string; text: string }>;
-}
+// ─── data.json ────────────────────────────────────────────────────────────────
 
 export interface ProjectAssignment {
+  id: number;
   projectName: string;
-  engineer: string;
+  engineerName: string;
   startDate: string;
   endDate: string;
-  daysAssigned: number;
+  totalDays: number;
+  assignedDays: number;
   remainingDays: number;
   status: string;
   notes: string;
 }
 
-export interface ProjectStatusEntry {
-  engineerName: string;
-  projectName: string;
-  statuses: Record<string, string>;
+interface DataJson {
+  data: ProjectAssignment[];
 }
 
-export interface ProjectStatusData {
-  projectStatuses: ProjectStatusEntry[];
-  lastUpdated: string;
+export async function getProjectData(): Promise<ProjectAssignment[]> {
+  const data = await readJsonFile<DataJson>("data.json");
+  return data?.data ?? [];
 }
+
+/**
+ * Save a new project assignment to data.json.
+ * Also registers the project in project_master_list.json.
+ * Validates engineer against engineers_master_list.json.
+ * Prevents duplicate project+engineer combos in data.json.
+ */
+export async function saveProjectAssignment(
+  assignment: Omit<ProjectAssignment, "id">
+): Promise<{ success: boolean; message: string; id?: number }> {
+
+  // 1. Validate engineer name
+  const engineers = await getEngineersMasterList();
+  if (!validateEngineerName(assignment.engineerName, engineers)) {
+    return {
+      success: false,
+      message: `Engineer "${assignment.engineerName}" is not in the engineers master list.`,
+    };
+  }
+
+  // 2. Load current data.json
+  const current = (await readJsonFile<DataJson>("data.json")) ?? { data: [] };
+
+  // 3. Prevent duplicate project+engineer combo
+  const duplicate = current.data.some(
+    (d) =>
+      d.projectName.trim().toLowerCase() === assignment.projectName.trim().toLowerCase() &&
+      d.engineerName.trim().toLowerCase() === assignment.engineerName.trim().toLowerCase()
+  );
+  if (duplicate) {
+    return {
+      success: false,
+      message: `Engineer "${assignment.engineerName}" is already assigned to project "${assignment.projectName}".`,
+    };
+  }
+
+  // 4. Create new record
+  const id = Date.now();
+  const newEntry: ProjectAssignment = { id, ...assignment };
+  current.data.push(newEntry);
+
+  await writeJsonFile("data.json", current, `Add assignment: ${assignment.projectName} → ${assignment.engineerName}`);
+
+  // 5. Register project number in master list (extract project number from name e.g. "3A-DK1-25077")
+  const projectNumber = extractProjectNumber(assignment.projectName);
+  if (projectNumber) {
+    await addProjectToMasterList(projectNumber, assignment.projectName);
+  }
+
+  return { success: true, message: "Assignment saved.", id };
+}
+
+/** Update an existing assignment in data.json. */
+export async function updateProjectAssignment(
+  id: number,
+  updates: Partial<ProjectAssignment>
+): Promise<{ success: boolean; message: string }> {
+  const current = await readJsonFile<DataJson>("data.json");
+  if (!current) return { success: false, message: "data.json not found." };
+
+  const idx = current.data.findIndex((d) => d.id === id);
+  if (idx === -1) return { success: false, message: `Assignment id ${id} not found.` };
+
+  // If engineer is being changed, validate new name
+  if (updates.engineerName && updates.engineerName !== current.data[idx].engineerName) {
+    const engineers = await getEngineersMasterList();
+    if (!validateEngineerName(updates.engineerName, engineers)) {
+      return {
+        success: false,
+        message: `Engineer "${updates.engineerName}" is not in the engineers master list.`,
+      };
+    }
+  }
+
+  current.data[idx] = { ...current.data[idx], ...updates };
+  await writeJsonFile("data.json", current, `Update assignment id ${id}`);
+  return { success: true, message: "Assignment updated." };
+}
+
+/** Delete an assignment from data.json by id. */
+export async function deleteProjectAssignment(
+  id: number
+): Promise<{ success: boolean; message: string }> {
+  const current = await readJsonFile<DataJson>("data.json");
+  if (!current) return { success: false, message: "data.json not found." };
+
+  const filtered = current.data.filter((d) => d.id !== id);
+  if (filtered.length === current.data.length) {
+    return { success: false, message: `Assignment id ${id} not found.` };
+  }
+
+  current.data = filtered;
+  await writeJsonFile("data.json", current, `Delete assignment id ${id}`);
+  return { success: true, message: "Assignment deleted." };
+}
+
+// ─── project-activities.json ──────────────────────────────────────────────────
 
 export interface ProjectActivity {
   projectName: string;
@@ -210,1215 +257,144 @@ export interface ProjectActivity {
   activities: Record<string, string>;
 }
 
-export interface WeeklyAssignmentTask {
-  id: string;
-  taskName: string;
-  targetDate?: string;
-  completionDate?: string;
-  status: "not_started" | "in_progress" | "completed" | "blocked";
-}
-
-export interface WeeklyAssignment {
-  id: string;
-  engineerName: string;
-  weekStart: string;
-  projectName: string;
-  projectTargetDate?: string;
-  resourceLockedFrom?: string;
-  resourceLockedTill?: string;
-  internalTarget?: string;
-  customerTarget?: string;
-  tasks: WeeklyAssignmentTask[];
-  currentStatus: "not_started" | "in_progress" | "completed" | "on_hold" | "blocked";
-  notes?: string;
-  constraint?: string;
-}
-
-export interface EngineerTaskConfig {
-  id: string;
-  name: string;
-  initials: string;
-}
-
-export interface EngineerCredential {
-  id: string;
-  name: string;
-  username: string;
-  password: string;
-  role: 'admin' | 'engineer';
-  company?: string;
-  isActive: boolean;
-  createdAt: string;
-  lastLogin?: string;
-}
-
-// ============================================================================
-// 📥 READ FUNCTIONS
-// ============================================================================
-
-export async function readDataFromGitHub(): Promise<{ engineerDailyData: EngineerDailyData[] }> {
-  try {
-    const octokit = await getGitHubClient();
-    const response = await octokit.repos.getContent({
-      owner: 'Github2drb',
-      repo: 'Controls_Team_Tracker',
-      path: 'data.json',
-    });
-
-    if (Array.isArray(response.data)) {
-      throw new Error('Expected a file, got a directory');
-    }
-
-    if (!('content' in response.data)) {
-      throw new Error('File has no content');
-    }
-
-    const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
-    const data = JSON.parse(content);
-
-    if (!data.engineerDailyData) {
-      data.engineerDailyData = [];
-    }
-
-    return { engineerDailyData: data.engineerDailyData || [] };
-  } catch (error) {
-    console.error('Error reading from GitHub:', error);
-    return { engineerDailyData: [] };
-  }
-}
-
-export async function readDailyActivitiesFromGitHub(): Promise<{ engineerDailyData: EngineerDailyData[] }> {
-  try {
-    const octokit = await getGitHubClient();
-    const response = await octokit.repos.getContent({
-      owner: 'Github2drb',
-      repo: 'Controls_Team_Tracker',
-      path: 'daily-activities.json',
-    });
-
-    if (Array.isArray(response.data)) {
-      throw new Error('Expected a file, got a directory');
-    }
-
-    if (!('content' in response.data)) {
-      throw new Error('File has no content');
-    }
-
-    const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
-    const data = JSON.parse(content);
-
-    if (!data.engineerDailyData) {
-      data.engineerDailyData = [];
-    }
-
-    return { engineerDailyData: data.engineerDailyData || [] };
-  } catch (error) {
-    console.error('Error reading daily activities from GitHub:', error);
-    return { engineerDailyData: [] };
-  }
-}
-
-export async function getEngineerDataByDate(date: string): Promise<EngineerDailyData[]> {
-  const data = await readDailyActivitiesFromGitHub();
-  return (data?.engineerDailyData || []).filter(item => item.date === date);
-}
-
-export async function readProjectStatusFromGitHub(): Promise<ProjectStatusData> {
-  try {
-    const octokit = await getGitHubClient();
-    const response = await octokit.repos.getContent({
-      owner: 'Github2drb',
-      repo: 'Controls_Team_Tracker',
-      path: 'project-status.json',
-    });
-
-    if (Array.isArray(response.data) || !('content' in response.data)) {
-      throw new Error('Invalid file response');
-    }
-
-    const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
-    return JSON.parse(content);
-  } catch (error: any) {
-    if (error.status === 404) {
-      return { projectStatuses: [], lastUpdated: new Date().toISOString() };
-    }
-    console.error('Error reading project status from GitHub:', error);
-    return { projectStatuses: [], lastUpdated: new Date().toISOString() };
-  }
-}
-
-async function readProjectActivitiesFromGitHub(): Promise<{ projectActivities: ProjectActivity[]; lastUpdated: string }> {
-  try {
-    const octokit = await getGitHubClient();
-    const response = await octokit.repos.getContent({
-      owner: 'Github2drb',
-      repo: 'Controls_Team_Tracker',
-      path: 'project-activities.json',
-    });
-
-    if (Array.isArray(response.data) || !('content' in response.data)) {
-      throw new Error('Invalid file response');
-    }
-
-    const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
-    return JSON.parse(content);
-  } catch (error: any) {
-    if (error.status === 404) {
-      return { projectActivities: [], lastUpdated: new Date().toISOString() };
-    }
-    console.error('Error reading project activities from GitHub:', error);
-    return { projectActivities: [], lastUpdated: new Date().toISOString() };
-  }
-}
-
-async function readWeeklyAssignmentsFromGitHub(): Promise<{ assignments: WeeklyAssignment[]; lastUpdated: string }> {
-  try {
-    const octokit = await getGitHubClient();
-    const response = await octokit.repos.getContent({
-      owner: 'Github2drb',
-      repo: 'Controls_Team_Tracker',
-      path: 'weekly-assignments.json',
-    });
-
-    if (Array.isArray(response.data) || !('content' in response.data)) {
-      throw new Error('Invalid file response');
-    }
-
-    const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
-    return JSON.parse(content);
-  } catch (error: any) {
-    if (error.status === 404) {
-      return { assignments: [], lastUpdated: new Date().toISOString() };
-    }
-    console.error('Error reading weekly assignments from GitHub:', error);
-    return { assignments: [], lastUpdated: new Date().toISOString() };
-  }
-}
-
-export async function readEngineerMasterListFromGitHub(): Promise<{ engineers: EngineerTaskConfig[]; lastUpdated: string }> {
-  try {
-    const octokit = await getGitHubClient();
-    const response = await octokit.repos.getContent({
-      owner: 'Github2drb',
-      repo: 'Controls_Team_Tracker',
-      path: 'engineers_master_list.json',
-    });
-
-    if (Array.isArray(response.data) || !('content' in response.data)) {
-      throw new Error('Invalid file response');
-    }
-
-    const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
-    return JSON.parse(content);
-  } catch (error: any) {
-    if (error.status === 404) {
-      return { engineers: [], lastUpdated: new Date().toISOString() };
-    }
-    console.error('Error reading engineer master list from GitHub:', error);
-    return { engineers: [], lastUpdated: new Date().toISOString() };
-  }
-}
-
-async function readEngineerDailyTasksFromGitHub(): Promise<{ engineers: EngineerTaskConfig[]; lastUpdated: string }> {
-  try {
-    const octokit = await getGitHubClient();
-    const response = await octokit.repos.getContent({
-      owner: 'Github2drb',
-      repo: 'Controls_Team_Tracker',
-      path: 'engineer-daily-tasks.json',
-    });
-
-    if (Array.isArray(response.data) || !('content' in response.data)) {
-      throw new Error('Invalid file response');
-    }
-
-    const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
-    return JSON.parse(content);
-  } catch (error: any) {
-    if (error.status === 404) {
-      return { engineers: [], lastUpdated: new Date().toISOString() };
-    }
-    console.error('Error reading engineer daily tasks from GitHub:', error);
-    return { engineers: [], lastUpdated: new Date().toISOString() };
-  }
-}
-
-export async function readEngineerCredentialsFromGitHub(): Promise<{ engineers: EngineerCredential[]; lastUpdated: string }> {
-  try {
-    const octokit = await getGitHubClient();
-    const response = await octokit.repos.getContent({
-      owner: 'Github2drb',
-      repo: 'Controls_Team_Tracker',
-      path: 'engineers_auth.json',
-    });
-
-    if (Array.isArray(response.data) || !('content' in response.data)) {
-      throw new Error('Invalid file response');
-    }
-
-    const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
-    return JSON.parse(content);
-  } catch (error: any) {
-    if (error.status === 404) {
-      return { engineers: [], lastUpdated: new Date().toISOString() };
-    }
-    console.error('Error reading engineer credentials from GitHub:', error);
-    return { engineers: [], lastUpdated: new Date().toISOString() };
-  }
-}
-
-// ============================================================================
-// 📤 WRITE FUNCTIONS
-// ============================================================================
-
-export async function writeDataToGitHub(data: { engineerDailyData: EngineerDailyData[] }): Promise<boolean> {
-  try {
-    const octokit = await getGitHubClient();
-
-    const currentFile = await octokit.repos.getContent({
-      owner: 'Github2drb',
-      repo: 'Controls_Team_Tracker',
-      path: 'data.json',
-    });
-
-    if (Array.isArray(currentFile.data)) {
-      throw new Error('Expected a file, got a directory');
-    }
-
-    if (!('sha' in currentFile.data)) {
-      throw new Error('File has no sha');
-    }
-
-    const sha = currentFile.data.sha;
-    const newContent = Buffer.from(JSON.stringify(data, null, 2)).toString('base64');
-
-    await octokit.repos.createOrUpdateFileContents({
-      owner: 'Github2drb',
-      repo: 'Controls_Team_Tracker',
-      path: 'data.json',
-      message: `Update engineer daily tasks and activities - ${new Date().toISOString()}`,
-      content: newContent,
-      sha: sha,
-    });
-
-    return true;
-  } catch (error) {
-    console.error('Error writing to GitHub:', error);
-    return false;
-  }
-}
-
-export async function writeDailyActivitiesToGitHub(data: { engineerDailyData: EngineerDailyData[] }): Promise<boolean> {
-  try {
-    const octokit = await getGitHubClient();
-
-    try {
-      const currentFile = await octokit.repos.getContent({
-        owner: 'Github2drb',
-        repo: 'Controls_Team_Tracker',
-        path: 'daily-activities.json',
-      });
-
-      if (Array.isArray(currentFile.data)) {
-        throw new Error('Expected a file, got a directory');
-      }
-
-      if (!('sha' in currentFile.data)) {
-        throw new Error('File has no sha');
-      }
-
-      const sha = currentFile.data.sha;
-      const newContent = Buffer.from(JSON.stringify(data, null, 2)).toString('base64');
-
-      await octokit.repos.createOrUpdateFileContents({
-        owner: 'Github2drb',
-        repo: 'Controls_Team_Tracker',
-        path: 'daily-activities.json',
-        message: `Update engineer daily activities - ${new Date().toISOString()}`,
-        content: newContent,
-        sha: sha,
-      });
-    } catch (error: any) {
-      if (error.status === 404) {
-        const newContent = Buffer.from(JSON.stringify(data, null, 2)).toString('base64');
-        await octokit.repos.createOrUpdateFileContents({
-          owner: 'Github2drb',
-          repo: 'Controls_Team_Tracker',
-          path: 'daily-activities.json',
-          message: `Create daily activities file - ${new Date().toISOString()}`,
-          content: newContent,
-        });
-      } else {
-        throw error;
-      }
-    }
-
-    return true;
-  } catch (error) {
-    console.error('Error writing daily activities to GitHub:', error);
-    return false;
-  }
-}
-
-export async function writeProjectStatusToGitHub(data: ProjectStatusData): Promise<boolean> {
-  try {
-    const octokit = await getGitHubClient();
-
-    let sha: string | undefined;
-    try {
-      const currentFile = await octokit.repos.getContent({
-        owner: 'Github2drb',
-        repo: 'Controls_Team_Tracker',
-        path: 'project-status.json',
-      });
-
-      if (!Array.isArray(currentFile.data) && 'sha' in currentFile.data) {
-        sha = currentFile.data.sha;
-      }
-    } catch (error: any) {
-      if (error.status !== 404) throw error;
-    }
-
-    const newContent = Buffer.from(JSON.stringify(data, null, 2)).toString('base64');
-
-    await octokit.repos.createOrUpdateFileContents({
-      owner: 'Github2drb',
-      repo: 'Controls_Team_Tracker',
-      path: 'project-status.json',
-      message: `Update project status tracking - ${new Date().toISOString()}`,
-      content: newContent,
-      ...(sha ? { sha } : {}),
-    });
-
-    return true;
-  } catch (error) {
-    console.error('Error writing project status to GitHub:', error);
-    return false;
-  }
-}
-
-async function writeProjectActivitiesToGitHub(data: { projectActivities: ProjectActivity[]; lastUpdated: string }): Promise<boolean> {
-  try {
-    const octokit = await getGitHubClient();
-    const newContent = Buffer.from(JSON.stringify(data, null, 2)).toString('base64');
-
-    let sha: string | undefined;
-    try {
-      const currentFile = await octokit.repos.getContent({
-        owner: 'Github2drb',
-        repo: 'Controls_Team_Tracker',
-        path: 'project-activities.json',
-      });
-      if (!Array.isArray(currentFile.data) && 'sha' in currentFile.data) {
-        sha = currentFile.data.sha;
-      }
-    } catch (error: any) {
-      if (error.status !== 404) throw error;
-    }
-
-    await octokit.repos.createOrUpdateFileContents({
-      owner: 'Github2drb',
-      repo: 'Controls_Team_Tracker',
-      path: 'project-activities.json',
-      message: `Update project activities - ${new Date().toISOString()}`,
-      content: newContent,
-      sha,
-    });
-
-    return true;
-  } catch (error) {
-    console.error('Error writing project activities to GitHub:', error);
-    return false;
-  }
-}
-
-async function writeWeeklyAssignmentsToGitHub(data: { assignments: WeeklyAssignment[]; lastUpdated: string }): Promise<boolean> {
-  try {
-    const octokit = await getGitHubClient();
-    const newContent = Buffer.from(JSON.stringify(data, null, 2)).toString('base64');
-
-    let sha: string | undefined;
-    try {
-      const currentFile = await octokit.repos.getContent({
-        owner: 'Github2drb',
-        repo: 'Controls_Team_Tracker',
-        path: 'weekly-assignments.json',
-      });
-      if (!Array.isArray(currentFile.data) && 'sha' in currentFile.data) {
-        sha = currentFile.data.sha;
-      }
-    } catch (e: any) {
-      if (e.status !== 404) throw e;
-    }
-
-    await octokit.repos.createOrUpdateFileContents({
-      owner: 'Github2drb',
-      repo: 'Controls_Team_Tracker',
-      path: 'weekly-assignments.json',
-      message: 'Update weekly assignments',
-      content: newContent,
-      sha,
-    });
-    return true;
-  } catch (error) {
-    console.error('Error writing weekly assignments to GitHub:', error);
-    return false;
-  }
-}
-
-export async function writeEngineerMasterListToGitHub(data: { engineers: EngineerTaskConfig[]; lastUpdated: string }): Promise<boolean> {
-  try {
-    const octokit = await getGitHubClient();
-    const newContent = Buffer.from(JSON.stringify(data, null, 2)).toString('base64');
-
-    let sha: string | undefined;
-    try {
-      const currentFile = await octokit.repos.getContent({
-        owner: 'Github2drb',
-        repo: 'Controls_Team_Tracker',
-        path: 'engineers_master_list.json',
-      });
-      if (!Array.isArray(currentFile.data) && 'sha' in currentFile.data) {
-        sha = currentFile.data.sha;
-      }
-    } catch (error: any) {
-      if (error.status !== 404) throw error;
-    }
-
-    await octokit.repos.createOrUpdateFileContents({
-      owner: 'Github2drb',
-      repo: 'Controls_Team_Tracker',
-      path: 'engineers_master_list.json',
-      message: `Update engineers master list - ${new Date().toISOString()}`,
-      content: newContent,
-      sha,
-    });
-
-    return true;
-  } catch (error) {
-    console.error('Error writing engineer master list to GitHub:', error);
-    return false;
-  }
-}
-
-async function writeEngineerDailyTasksToGitHub(data: { engineers: EngineerTaskConfig[]; lastUpdated: string }): Promise<boolean> {
-  try {
-    const octokit = await getGitHubClient();
-    const newContent = Buffer.from(JSON.stringify(data, null, 2)).toString('base64');
-
-    let sha: string | undefined;
-    try {
-      const currentFile = await octokit.repos.getContent({
-        owner: 'Github2drb',
-        repo: 'Controls_Team_Tracker',
-        path: 'engineer-daily-tasks.json',
-      });
-      if (!Array.isArray(currentFile.data) && 'sha' in currentFile.data) {
-        sha = currentFile.data.sha;
-      }
-    } catch (error: any) {
-      if (error.status !== 404) throw error;
-    }
-
-    await octokit.repos.createOrUpdateFileContents({
-      owner: 'Github2drb',
-      repo: 'Controls_Team_Tracker',
-      path: 'engineer-daily-tasks.json',
-      message: `Update engineer daily tasks config - ${new Date().toISOString()}`,
-      content: newContent,
-      sha,
-    });
-
-    return true;
-  } catch (error) {
-    console.error('Error writing engineer daily tasks to GitHub:', error);
-    return false;
-  }
-}
-
-export async function writeEngineerCredentialsToGitHub(data: { engineers: EngineerCredential[]; lastUpdated: string }): Promise<boolean> {
-  try {
-    const octokit = await getGitHubClient();
-    const newContent = Buffer.from(JSON.stringify(data, null, 2)).toString('base64');
-
-    let sha: string | undefined;
-    try {
-      const currentFile = await octokit.repos.getContent({
-        owner: 'Github2drb',
-        repo: 'Controls_Team_Tracker',
-        path: 'engineers_auth.json',
-      });
-      if (!Array.isArray(currentFile.data) && 'sha' in currentFile.data) {
-        sha = currentFile.data.sha;
-      }
-    } catch (error: any) {
-      if (error.status !== 404) throw error;
-    }
-
-    await octokit.repos.createOrUpdateFileContents({
-      owner: 'Github2drb',
-      repo: 'Controls_Team_Tracker',
-      path: 'engineers_auth.json',
-      message: `Update engineer credentials - ${new Date().toISOString()}`,
-      content: newContent,
-      sha,
-    });
-
-    return true;
-  } catch (error) {
-    console.error('Error writing engineer credentials to GitHub:', error);
-    return false;
-  }
-}
-
-// ============================================================================
-// 🔍 QUERY FUNCTIONS (FIXED)
-// ============================================================================
-
-/**
- * ✅ FIXED: Returns ALL engineers from master list, with option to filter by active assignments
- * Uses normalized name matching to handle spelling variations
- */
-export async function getUniqueEngineers(includeUnassigned: boolean = false): Promise<string[]> {
-  try {
-    const octokit = await getGitHubClient();
-    
-    // Read both data sources
-    const [dataResponse, masterResponse] = await Promise.all([
-      octokit.repos.getContent({
-        owner: 'Github2drb',
-        repo: 'Controls_Team_Tracker',
-        path: 'data.json',
-      }),
-      octokit.repos.getContent({
-        owner: 'Github2drb',
-        repo: 'Controls_Team_Tracker',
-        path: 'engineers_master_list.json',
-      })
-    ]);
-
-    if (Array.isArray(dataResponse.data) || !('content' in dataResponse.data)) {
-      throw new Error('Invalid data.json response');
-    }
-    const dataContent = Buffer.from(dataResponse.data.content, 'base64').toString('utf-8');
-    const data = JSON.parse(dataContent);
-    
-    if (Array.isArray(masterResponse.data) || !('content' in masterResponse.data)) {
-      throw new Error('Invalid engineers_master_list.json response');
-    }
-    const masterContent = Buffer.from(masterResponse.data.content, 'base64').toString('utf-8');
-    const masterData = JSON.parse(masterContent);
-    const masterEngineers: Array<{ name: string; id: string }> = masterData.engineers || [];
-
-    // Extract engineers from assignments (handle both 'engineer' and 'engineerName' fields)
-    const assignments: any[] = data.assignments || data.data || [];
-    const assignedEngineers = new Set<string>();
-    
-    assignments.forEach((assignment: any) => {
-      const name = assignment.engineer || assignment.engineerName;
-      if (name) {
-        assignedEngineers.add(name.trim());
-      }
-    });
-
-    if (includeUnassigned) {
-      // Return ALL engineers from master list, sorted
-      return masterEngineers.map(e => e.name).sort();
-    } else {
-      // Return only assigned engineers, but normalize against master list for consistency
-      const normalizedAssigned = new Set<string>();
-      
-      for (const assignedName of assignedEngineers) {
-        const canonical = findCanonicalEngineerName(assignedName, masterEngineers);
-        normalizedAssigned.add(canonical || assignedName);
-      }
-      
-      return Array.from(normalizedAssigned).sort();
-    }
-    
-  } catch (error) {
-    console.error('Error fetching unique engineers from GitHub:', error);
-    return [];
-  }
-}
-
-export async function getProjectAssignments(): Promise<ProjectAssignment[]> {
-  try {
-    const octokit = await getGitHubClient();
-    const response = await octokit.repos.getContent({
-      owner: 'Github2drb',
-      repo: 'Controls_Team_Tracker',
-      path: 'data.json',
-    });
-
-    if (Array.isArray(response.data)) {
-      throw new Error('Expected a file, got a directory');
-    }
-
-    if (!('content' in response.data)) {
-      throw new Error('File has no content');
-    }
-
-    const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
-    const data = JSON.parse(content);
-
-    const assignments = data.assignments || data.projectAssignments || data.projects || data.data || [];
-
-    return (Array.isArray(assignments) ? assignments : []).map((item: any) => ({
-      projectName: item.projectName || item.project || '',
-      engineer: item.engineer || item.engineerName || '',
-      startDate: item.startDate || '',
-      endDate: item.endDate || '',
-      daysAssigned: item.daysAssigned || item.assignedDays || 0,
-      remainingDays: item.remainingDays || 0,
-      status: item.status || 'In Progress',
-      notes: item.notes || '',
-    }));
-  } catch (error) {
-    console.error('Error fetching project assignments from GitHub:', error);
-    return [];
-  }
-}
-
-export async function getProjectStatusTracking(): Promise<Array<{
-  engineerName: string;
-  projectName: string;
-  currentStatus: string;
-  statuses: Record<string, string>;
-  completionPercentage: number;
-}>> {
-  const assignments = await getProjectAssignments();
-  const statusData = await readProjectStatusFromGitHub();
-
-  const startDate = new Date('2024-12-05');
-  const endDate = new Date('2025-02-28');
-  const totalDays = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-
-  return assignments.map((assignment) => {
-    const statusEntry = statusData.projectStatuses.find(
-      (p) => p.engineerName === assignment.engineer && p.projectName === assignment.projectName
-    );
-
-    const statuses = statusEntry?.statuses || {};
-    const completedCount = Object.values(statuses).filter(
-      (s) => s === 'Completed' || s === 'Done'
-    ).length;
-
-    const completionPercentage = Math.round((completedCount / totalDays) * 100);
-
-    return {
-      engineerName: assignment.engineer,
-      projectName: assignment.projectName,
-      currentStatus: assignment.status,
-      statuses,
-      completionPercentage,
-    };
-  });
+interface ProjectActivitiesJson {
+  projectActivities: ProjectActivity[];
+  lastUpdated: string;
 }
 
 export async function getProjectActivities(): Promise<ProjectActivity[]> {
-  const assignments = await getProjectAssignments();
-  const activitiesData = await readProjectActivitiesFromGitHub();
-
-  const uniqueProjects = new Map<string, { projectName: string; status: string }>();
-  assignments.forEach((assignment) => {
-    const key = extractProjectNumber(assignment.projectName);
-    const existing = uniqueProjects.get(key);
-    if (!existing || assignment.projectName.trim().length > existing.projectName.trim().length) {
-      uniqueProjects.set(key, {
-        projectName: assignment.projectName.trim(),
-        status: assignment.status,
-      });
-    }
-  });
-
-  return Array.from(uniqueProjects.values()).map(({ projectName, status }) => {
-    const key = extractProjectNumber(projectName);
-    const activityEntry = activitiesData.projectActivities.find(
-      (p) => extractProjectNumber(p.projectName) === key
-    );
-
-    return {
-      projectName,
-      currentStatus: activityEntry?.currentStatus || status,
-      activities: activityEntry?.activities || {},
-    };
-  });
+  const data = await readJsonFile<ProjectActivitiesJson>("project-activities.json");
+  return data?.projectActivities ?? [];
 }
-
-export async function getWeeklyAssignments(weekStart?: string): Promise<WeeklyAssignment[]> {
-  const data = await readWeeklyAssignmentsFromGitHub();
-  if (weekStart) {
-    return data.assignments.filter(a => a.weekStart === weekStart);
-  }
-  return data.assignments;
-}
-
-export async function getEngineerDailyTasksConfig(): Promise<EngineerTaskConfig[]> {
-  const masterData = await readEngineerMasterListFromGitHub();
-
-  if (masterData.engineers.length === 0) {
-    await initializeEngineerMasterList();
-    const newData = await readEngineerMasterListFromGitHub();
-    return newData.engineers;
-  }
-
-  return masterData.engineers;
-}
-
-// ============================================================================
-// ✏️ UPDATE FUNCTIONS
-// ============================================================================
-
-export async function addEngineerActivity(engineerName: string, activity: string, date: string): Promise<{ id: string; success: boolean }> {
-  const data = await readDailyActivitiesFromGitHub();
-  const id = Math.random().toString(36).substr(2, 9);
-
-  const existingIndex = data.engineerDailyData.findIndex(item => item.engineerName === engineerName && item.date === date);
-
-  if (existingIndex > -1) {
-    data.engineerDailyData[existingIndex].completedActivities.push({ id, text: activity });
-  } else {
-    data.engineerDailyData.push({
-      engineerName,
-      date,
-      targetTasks: [],
-      completedActivities: [{ id, text: activity }],
-    });
-  }
-
-  await writeDailyActivitiesToGitHub(data);
-  return { id, success: true };
-}
-
-export async function deleteEngineerActivity(engineerName: string, activityId: string, date: string): Promise<{ success: boolean }> {
-  const data = await readDailyActivitiesFromGitHub();
-  const index = data.engineerDailyData.findIndex(item => item.engineerName === engineerName && item.date === date);
-
-  if (index > -1) {
-    data.engineerDailyData[index].completedActivities = data.engineerDailyData[index].completedActivities.filter(a => a.id !== activityId);
-  }
-
-  await writeDailyActivitiesToGitHub(data);
-  return { success: true };
-}
-
-export async function setEngineerTargetTask(engineerName: string, task: string, date: string): Promise<{ id: string; success: boolean }> {
-  const data = await readDailyActivitiesFromGitHub();
-  const id = Math.random().toString(36).substr(2, 9);
-
-  const existingIndex = data.engineerDailyData.findIndex(item => item.engineerName === engineerName && item.date === date);
-
-  if (existingIndex > -1) {
-    data.engineerDailyData[existingIndex].targetTasks.push({ id, text: task });
-  } else {
-    data.engineerDailyData.push({
-      engineerName,
-      date,
-      targetTasks: [{ id, text: task }],
-      completedActivities: [],
-    });
-  }
-
-  await writeDailyActivitiesToGitHub(data);
-  return { id, success: true };
-}
-
-export async function deleteEngineerTargetTask(engineerName: string, taskId: string, date: string): Promise<{ success: boolean }> {
-  const data = await readDailyActivitiesFromGitHub();
-  const index = data.engineerDailyData.findIndex(item => item.engineerName === engineerName && item.date === date);
-
-  if (index > -1) {
-    data.engineerDailyData[index].targetTasks = data.engineerDailyData[index].targetTasks.filter(t => t.id !== taskId);
-  }
-
-  await writeDailyActivitiesToGitHub(data);
-  return { success: true };
-}
-
-export async function updateProjectStatus(
-  engineerName: string,
-  projectName: string,
-  date: string,
-  status: string
-): Promise<{ success: boolean }> {
-  const data = await readProjectStatusFromGitHub();
-
-  let entry = data.projectStatuses.find(
-    (p) => p.engineerName === engineerName && p.projectName === projectName
-  );
-
-  if (!entry) {
-    entry = { engineerName, projectName, statuses: {} };
-    data.projectStatuses.push(entry);
-  }
-
-  entry.statuses[date] = status;
-  data.lastUpdated = new Date().toISOString();
-
-  const success = await writeProjectStatusToGitHub(data);
-  return { success };
-}
-
-export async function updateProjectActivity(
-  projectName: string,
-  date: string,
-  activity: string
-): Promise<{ success: boolean }> {
-  const data = await readProjectActivitiesFromGitHub();
-
-  let entry = data.projectActivities.find((p) => p.projectName === projectName);
-  if (!entry) {
-    entry = { projectName, currentStatus: "In Progress", activities: {} };
-    data.projectActivities.push(entry);
-  }
-
-  if (activity) {
-    entry.activities[date] = activity;
-  } else {
-    delete entry.activities[date];
-  }
-  data.lastUpdated = new Date().toISOString();
-
-  const success = await writeProjectActivitiesToGitHub(data);
-  return { success };
-}
-
-export async function updateProjectCurrentStatus(
-  projectName: string,
-  status: string
-): Promise<{ success: boolean }> {
-  const data = await readProjectActivitiesFromGitHub();
-
-  let entry = data.projectActivities.find((p) => p.projectName === projectName);
-  if (!entry) {
-    entry = { projectName, currentStatus: status, activities: {} };
-    data.projectActivities.push(entry);
-  } else {
-    entry.currentStatus = status;
-  }
-  data.lastUpdated = new Date().toISOString();
-
-  const success = await writeProjectActivitiesToGitHub(data);
-  return { success };
-}
-
-export async function upsertWeeklyAssignment(assignment: WeeklyAssignment): Promise<{ success: boolean; assignment?: WeeklyAssignment }> {
-  const data = await readWeeklyAssignmentsFromGitHub();
-
-  const existingIndex = data.assignments.findIndex(a => a.id === assignment.id);
-  if (existingIndex >= 0) {
-    data.assignments[existingIndex] = assignment;
-  } else {
-    data.assignments.push(assignment);
-  }
-  data.lastUpdated = new Date().toISOString();
-
-  const success = await writeWeeklyAssignmentsToGitHub(data);
-  return { success, assignment: success ? assignment : undefined };
-}
-
-export async function deleteWeeklyAssignment(id: string): Promise<{ success: boolean }> {
-  const data = await readWeeklyAssignmentsFromGitHub();
-
-  const existingIndex = data.assignments.findIndex(a => a.id === id);
-  if (existingIndex >= 0) {
-    data.assignments.splice(existingIndex, 1);
-    data.lastUpdated = new Date().toISOString();
-    const success = await writeWeeklyAssignmentsToGitHub(data);
-    return { success };
-  }
-  return { success: false };
-}
-
-export async function updateAssignmentTask(
-  assignmentId: string,
-  task: WeeklyAssignmentTask
-): Promise<{ success: boolean }> {
-  const data = await readWeeklyAssignmentsFromGitHub();
-
-  const assignment = data.assignments.find(a => a.id === assignmentId);
-  if (!assignment) {
-    return { success: false };
-  }
-
-  const taskIndex = assignment.tasks.findIndex(t => t.id === task.id);
-  if (taskIndex >= 0) {
-    assignment.tasks[taskIndex] = task;
-  } else {
-    assignment.tasks.push(task);
-  }
-  data.lastUpdated = new Date().toISOString();
-
-  const success = await writeWeeklyAssignmentsToGitHub(data);
-  return { success };
-}
-
-export async function deleteAssignmentTask(
-  assignmentId: string,
-  taskId: string
-): Promise<{ success: boolean }> {
-  const data = await readWeeklyAssignmentsFromGitHub();
-
-  const assignment = data.assignments.find(a => a.id === assignmentId);
-  if (!assignment) {
-    return { success: false };
-  }
-
-  const taskIndex = assignment.tasks.findIndex(t => t.id === taskId);
-  if (taskIndex >= 0) {
-    assignment.tasks.splice(taskIndex, 1);
-    data.lastUpdated = new Date().toISOString();
-    const success = await writeWeeklyAssignmentsToGitHub(data);
-    return { success };
-  }
-  return { success: false };
-}
-
-export async function removeEngineersFromConfig(namesToRemove: string[]): Promise<{ success: boolean }> {
-  try {
-    const existingData = await readEngineerDailyTasksFromGitHub();
-    const lowerCaseNames = namesToRemove.map(n => n.toLowerCase());
-
-    const filteredEngineers = existingData.engineers.filter(
-      e => !lowerCaseNames.includes(e.name.toLowerCase())
-    );
-
-    const data = {
-      engineers: filteredEngineers,
-      lastUpdated: new Date().toISOString(),
-    };
-
-    const success = await writeEngineerDailyTasksToGitHub(data);
-    return { success };
-  } catch (error) {
-    console.error('Error removing engineers from config:', error);
-    return { success: false };
-  }
-}
-
-export async function initializeEngineerMasterList(): Promise<{ success: boolean }> {
-  const existingData = await readEngineerMasterListFromGitHub();
-
-  if (existingData.engineers.length === 0) {
-    const defaultEngineers: EngineerTaskConfig[] = [
-      { id: "1", name: "Susanth K M", initials: "SKM" },
-      { id: "2", name: "Keerthi BH", initials: "KB" },
-      { id: "4", name: "Dyumith NV", initials: "DN" },
-      { id: "5", name: "Anand", initials: "S" },
-      { id: "7", name: "Eswanth Potnuri", initials: "P" },
-      { id: "8", name: "Deekshitha HC", initials: "DH" },
-      { id: "9", name: "Praveen Kumar C", initials: "PKC" },
-      { id: "10", name: "Ramkumar Annamalai", initials: "RA" },
-      { id: "12", name: "Harsha", initials: "H" },
-      { id: "13", name: "Veeresh M", initials: "VM" },
-      { id: "eng-5", name: "Santhosh N", initials: "SN" },
-      { id: "eng-10", name: "Dhanesh M", initials: "DM" },
-    ];
-
-    const data = {
-      engineers: defaultEngineers,
-      lastUpdated: new Date().toISOString(),
-    };
-
-    const success = await writeEngineerMasterListToGitHub(data);
-    return { success };
-  }
-
-  return { success: true };
-}
-
-export async function initializeEngineerDailyTasksFile(): Promise<{ success: boolean }> {
-  const existingData = await readEngineerDailyTasksFromGitHub();
-
-  if (existingData.engineers.length === 0) {
-    const defaultEngineers: EngineerTaskConfig[] = [
-      { id: "1", name: "Susanth K M", initials: "SKM" },
-      { id: "2", name: "Keerthi BH", initials: "KB" },
-      { id: "4", name: "Dyumith NV", initials: "DN" },
-      { id: "5", name: "Anand", initials: "S" },
-      { id: "7", name: "Eswanth Potnuri", initials: "P" },
-      { id: "8", name: "Deekshitha HC", initials: "DH" },
-      { id: "9", name: "Praveen Kumar C", initials: "PKC" },
-      { id: "10", name: "Ramkumar Annamalai", initials: "RA" },
-      { id: "12", name: "Harsha", initials: "H" },
-      { id: "13", name: "Veeresh M", initials: "VM" },
-      { id: "eng-5", name: "Santhosh N", initials: "SN" },
-      { id: "eng-10", name: "Dhanesh M", initials: "DM" },
-    ];
-
-    const data = {
-      engineers: defaultEngineers,
-      lastUpdated: new Date().toISOString(),
-    };
-
-    const success = await writeEngineerDailyTasksToGitHub(data);
-    return { success };
-  }
-
-  return { success: true };
-}
-
-// ============================================================================
-// 🔐 AUTHENTICATION FUNCTIONS
-// ============================================================================
-
-export async function authenticateEngineer(username: string, password: string): Promise<EngineerCredential | null> {
-  const data = await readEngineerCredentialsFromGitHub();
-  const engineer = data.engineers.find(
-    e => e.username.toLowerCase() === username.toLowerCase() && e.password === password && e.isActive
-  );
-
-  if (engineer) {
-    engineer.lastLogin = new Date().toISOString();
-    if (engineer.username.toLowerCase() === 'admin') {
-      engineer.role = 'admin';
-    }
-    await writeEngineerCredentialsToGitHub(data);
-  }
-
-  return engineer || null;
-}
-
-export async function updateEngineerPassword(username: string, newPassword: string): Promise<boolean> {
-  const data = await readEngineerCredentialsFromGitHub();
-  const engineer = data.engineers.find(e => e.username.toLowerCase() === username.toLowerCase());
-
-  if (!engineer) return false;
-
-  engineer.password = newPassword;
-  data.lastUpdated = new Date().toISOString();
-
-  return await writeEngineerCredentialsToGitHub(data);
-}
-
-export async function initializeEngineerCredentials(): Promise<{ success: boolean; created: number }> {
-  const masterList = await readEngineerMasterListFromGitHub();
-  const existingCreds = await readEngineerCredentialsFromGitHub();
-
-  let created = 0;
-  const existingUsernames = new Set(existingCreds.engineers.map(e => e.username.toLowerCase()));
-
-  for (const eng of masterList.engineers) {
-    const username = eng.name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase().replace(/\s+/g, '.');
-
-    if (!existingUsernames.has(username)) {
-      const companyMatch = eng.name.match(/\(([^)]+)\)/);
-      const company = companyMatch ? companyMatch[1] : undefined;
-
-      existingCreds.engineers.push({
-        id: eng.id,
-        name: eng.name,
-        username,
-        password: 'drb@123',
-        role: 'engineer',
-        company,
-        isActive: true,
-        createdAt: new Date().toISOString(),
-      });
-      created++;
-    }
-  }
-
-  const existingAdmin = existingCreds.engineers.find(e => e.username.toLowerCase() === 'admin');
-  if (!existingAdmin) {
-    existingCreds.engineers.push({
-      id: 'admin-1',
-      name: 'Admin',
-      username: 'admin',
-      password: 'admin@drb',
-      role: 'admin',
-      isActive: true,
-      createdAt: new Date().toISOString(),
-    });
-    created++;
-  } else if (existingAdmin.role !== 'admin') {
-    existingAdmin.role = 'admin';
-  }
-
-  existingCreds.lastUpdated = new Date().toISOString();
-  const success = await writeEngineerCredentialsToGitHub(existingCreds);
-
-  return { success, created };
-}
-
-export async function upsertEngineerCredential(engineer: Partial<EngineerCredential> & { name: string }): Promise<{ success: boolean; engineer?: EngineerCredential }> {
-  const data = await readEngineerCredentialsFromGitHub();
-
-  const existingIndex = data.engineers.findIndex(
-    e => e.id === engineer.id || e.username?.toLowerCase() === engineer.username?.toLowerCase()
-  );
-
-  if (existingIndex >= 0) {
-    data.engineers[existingIndex] = {
-      ...data.engineers[existingIndex],
-      ...engineer,
-    };
-  } else {
-    const username = engineer.username || engineer.name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase().replace(/\s+/g, '.');
-    const newEngineer: EngineerCredential = {
-      id: engineer.id || `eng-${Date.now()}`,
-      name: engineer.name,
-      username,
-      password: engineer.password || 'drb@123',
-      role: engineer.role || 'engineer',
-      company: engineer.company,
-      isActive: engineer.isActive !== false,
-      createdAt: new Date().toISOString(),
-    };
-    data.engineers.push(newEngineer);
-  }
-
-  data.lastUpdated = new Date().toISOString();
-  const success = await writeEngineerCredentialsToGitHub(data);
-
-  return { success, engineer: existingIndex >= 0 ? data.engineers[existingIndex] : data.engineers[data.engineers.length - 1] };
-}
-
-export async function deleteEngineerCredential(id: string): Promise<boolean> {
-  const data = await readEngineerCredentialsFromGitHub();
-  const initialLength = data.engineers.length;
-
-  data.engineers = data.engineers.filter(e => e.id !== id);
-
-  if (data.engineers.length === initialLength) return false;
-
-  data.lastUpdated = new Date().toISOString();
-  return await writeEngineerCredentialsToGitHub(data);
-}
-
-// ============================================================================
-// 🔧 VALIDATION HELPER (NEW)
-// ============================================================================
 
 /**
- * Validates and normalizes an assignment before writing to GitHub
- * Logs warnings for mismatched engineer names
+ * Add or update a project's activity log entry.
+ * Validates that the project number is in project_master_list.json before writing.
  */
-export async function validateAndNormalizeAssignment(
-  assignment: any,
-  masterEngineers: Array<{ name: string }>
-): Promise<{ valid: boolean; normalized: any; warnings: string[] }> {
-  const warnings: string[] = [];
-  
-  // Validate engineer name
-  if (assignment.engineerName || assignment.engineer) {
-    const rawName = assignment.engineerName || assignment.engineer;
-    const canonical = findCanonicalEngineerName(rawName, masterEngineers);
-    
-    if (canonical && canonical !== rawName) {
-      warnings.push(`Engineer name normalized: "${rawName}" → "${canonical}"`);
-      if (assignment.engineerName) assignment.engineerName = canonical;
-      if (assignment.engineer) assignment.engineer = canonical;
-    } else if (!canonical) {
-      warnings.push(`Warning: Engineer "${rawName}" not found in master list`);
-    }
+export async function upsertProjectActivity(
+  projectName: string,
+  date: string,
+  activityText: string,
+  statusOverride?: string
+): Promise<{ success: boolean; message: string }> {
+  // Validate project number exists in master list
+  const masterList = await getProjectMasterList();
+  const projectNumber = extractProjectNumber(projectName);
+  if (projectNumber && !validateProjectNumber(projectNumber, masterList)) {
+    return {
+      success: false,
+      message: `Project number "${projectNumber}" is not registered. Please create the project first.`,
+    };
   }
-  
-  // Normalize project name using extractProjectNumber for consistency
-  if (assignment.projectName) {
-    assignment._projectKey = extractProjectNumber(assignment.projectName);
+
+  const current = (await readJsonFile<ProjectActivitiesJson>("project-activities.json")) ?? {
+    projectActivities: [],
+    lastUpdated: "",
+  };
+
+  let entry = current.projectActivities.find(
+    (p) => p.projectName.trim().toLowerCase() === projectName.trim().toLowerCase()
+  );
+
+  if (!entry) {
+    entry = { projectName, currentStatus: statusOverride ?? "In Progress", activities: {} };
+    current.projectActivities.push(entry);
   }
-  
-  return { valid: true, normalized: assignment, warnings };
+
+  if (statusOverride) entry.currentStatus = statusOverride;
+  entry.activities[date] = activityText;
+  current.lastUpdated = new Date().toISOString();
+
+  await writeJsonFile("project-activities.json", current, `Activity log update: ${projectName} on ${date}`);
+  return { success: true, message: "Activity logged." };
 }
+
+// ─── Analytics helpers ────────────────────────────────────────────────────────
+
+export interface AnalyticsSummary {
+  totalProjects: number;
+  totalEngineers: number;
+  statusBreakdown: Record<string, number>;
+  engineerWorkload: Array<{ name: string; projectCount: number; assignedDays: number }>;
+  recentActivity: Array<{ projectName: string; date: string; activity: string }>;
+  projectList: string[];           // deduplicated project names from data.json
+  engineerList: string[];          // deduplicated engineer names from data.json (validated against master)
+}
+
+export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
+  const [assignments, activities, engineers] = await Promise.all([
+    getProjectData(),
+    getProjectActivities(),
+    getEngineersMasterList(),
+  ]);
+
+  // Deduplicate project names
+  const projectSet = new Set<string>();
+  assignments.forEach((a) => projectSet.add(a.projectName.trim()));
+
+  // Deduplicated & validated engineer names
+  const engineerMasterNames = new Set(engineers.map((e) => e.name.trim().toLowerCase()));
+  const engineerSet = new Set<string>();
+  assignments.forEach((a) => {
+    const normalized = a.engineerName.trim();
+    if (engineerMasterNames.has(normalized.toLowerCase())) {
+      engineerSet.add(normalized);
+    }
+  });
+
+  // Status breakdown
+  const statusBreakdown: Record<string, number> = {};
+  assignments.forEach((a) => {
+    statusBreakdown[a.status] = (statusBreakdown[a.status] ?? 0) + 1;
+  });
+
+  // Engineer workload (deduped)
+  const workloadMap = new Map<string, { projectCount: number; assignedDays: number }>();
+  assignments.forEach((a) => {
+    const eng = a.engineerName.trim();
+    if (!engineerMasterNames.has(eng.toLowerCase())) return;  // skip invalid
+    const prev = workloadMap.get(eng) ?? { projectCount: 0, assignedDays: 0 };
+    workloadMap.set(eng, {
+      projectCount: prev.projectCount + 1,
+      assignedDays: prev.assignedDays + (a.assignedDays ?? 0),
+    });
+  });
+  const engineerWorkload = Array.from(workloadMap.entries()).map(([name, stats]) => ({
+    name,
+    ...stats,
+  }));
+
+  // Recent activity (last 20 entries across all projects, sorted by date desc)
+  const recentActivity: Array<{ projectName: string; date: string; activity: string }> = [];
+  activities.forEach((proj) => {
+    Object.entries(proj.activities).forEach(([date, activity]) => {
+      recentActivity.push({ projectName: proj.projectName, date, activity });
+    });
+  });
+  recentActivity.sort((a, b) => b.date.localeCompare(a.date));
+
+  return {
+    totalProjects: projectSet.size,
+    totalEngineers: engineerSet.size,
+    statusBreakdown,
+    engineerWorkload,
+    recentActivity: recentActivity.slice(0, 20),
+    projectList: Array.from(projectSet),
+    engineerList: Array.from(engineerSet),
+  };
+}
+
+// ─── Utility ──────────────────────────────────────────────────────────────────
+
+/**
+ * Extract a project number prefix like "3A-DK1-25077" from a full project name.
+ * Matches patterns such as 3A-XXX-NNNNN, 3W-XXX-NNNNN, DK1-NNNNN, etc.
+ */
+export function extractProjectNumber(projectName: string): string | null {
+  const match = projectName.match(/^[\s]*(\d[A-Z0-9]+-[A-Z0-9]+-\d{5,}|[A-Z0-9]+-\d{5,})/i);
+  return match ? match[1].trim() : null;
+}
+
+// ─── Re-export other unchanged file accessors ─────────────────────────────────
+
+export { readJsonFile, writeJsonFile };
