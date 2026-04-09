@@ -103,11 +103,23 @@ export default function ProjectStatus() {
     staleTime: 30000,
   });
 
-  // Get assignments to determine which projects belong to the logged-in engineer
-  const { data: assignments = [] } = useQuery<Array<{ engineerName: string; projectName: string }>>({
-    queryKey: ["/api/weekly-assignments"],
+  // Get assignments from data.json to determine which projects belong to the logged-in engineer
+  const { data: dataJsonAssignments = [] } = useQuery<Array<{ engineerName: string; projectName: string; status: string }>>({
+    queryKey: ["/api/projects"],
     enabled: !isAdmin, // Only fetch for non-admins
+    staleTime: 0,
+    refetchOnMount: true,
   });
+
+  // Also get weekly-assignments for additional coverage
+  const { data: weeklyAssignments = [] } = useQuery<Array<{ engineerName: string; projectName: string }>>({
+    queryKey: ["/api/weekly-assignments"],
+    enabled: !isAdmin,
+    staleTime: 0,
+  });
+
+  // Merge both sources
+  const assignments = [...dataJsonAssignments, ...weeklyAssignments];
 
   // Get project names assigned to the current user
   // Supports comma-separated engineer names (e.g., "Veeresh,Ramkumar,Deekshitha")

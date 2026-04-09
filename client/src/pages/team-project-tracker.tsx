@@ -150,14 +150,54 @@ export default function TeamProjectTracker() {
     constraint: "",
   });
 
-  const { data: assignments = [], isLoading } = useQuery<WeeklyAssignment[]>({
+  const { data: weeklyAssignmentsRaw = [], isLoading } = useQuery<WeeklyAssignment[]>({
     queryKey: ["/api/weekly-assignments"],
     queryFn: async () => {
       const response = await fetch("/api/weekly-assignments");
       if (!response.ok) throw new Error("Failed to fetch assignments");
       return response.json();
     },
+    staleTime: 0,
+    refetchOnMount: true,
   });
+
+  // Also fetch from data.json (legacy source) for non-admin engineers
+  const { data: dataJsonProjects = [] } = useQuery<Array<{ engineerName: string; projectName: string; status: string; notes?: string }>>({
+    queryKey: ["/api/projects"],
+    queryFn: async () => {
+      const response = await fetch("/api/projects");
+      if (!response.ok) return [];
+      return response.json();
+    },
+    staleTime: 0,
+    refetchOnMount: true,
+  });
+
+  // Convert data.json entries to WeeklyAssignment shape and merge with weekly assignments
+  const assignments = useMemo((): WeeklyAssignment[] => {
+    // Map data.json entries to WeeklyAssignment shape
+    const dataJsonMapped: WeeklyAssignment[] = dataJsonProjects
+      .filter(p => p.status?.toLowerCase() !== "completed")
+      .map((p, idx) => ({
+        id: `datajson-${idx}-${p.projectName}`,
+        engineerName: p.engineerName || "",
+        weekStart: new Date().toISOString().split("T")[0],
+        projectName: p.projectName,
+        currentStatus: (p.status?.toLowerCase() === "in progress" ? "in_progress" : "not_started") as any,
+        notes: p.notes || "",
+        tasks: [],
+      }));
+
+    // Merge: use weekly-assignments as primary; add data.json entries that aren't already covered
+    const weeklyProjectKeys = new Set(
+      weeklyAssignmentsRaw.map(a => a.projectName.trim().toLowerCase())
+    );
+    const additionalFromDataJson = dataJsonMapped.filter(
+      p => !weeklyProjectKeys.has(p.projectName.trim().toLowerCase())
+    );
+
+    return [...weeklyAssignmentsRaw, ...additionalFromDataJson];
+  }, [weeklyAssignmentsRaw, dataJsonProjects]);
 
   const { data: projectNames = [] } = useQuery<string[]>({
     queryKey: ["/api/project-names"],
