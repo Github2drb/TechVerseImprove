@@ -166,22 +166,59 @@ export function registerRoutes(app: ReturnType<typeof import("express")["default
 
   // ── Project Activities ──────────────────────────────────────────────────
 
-  // GET /api/project-activities — return full activity log
+  // GET /api/project-activities — return full activity log merged with all assignments from data.json
   router.get("/project-activities", async (_req, res) => {
     try {
-      const activities = await getProjectActivities();
-      // Deduplicate by projectName (case-insensitive) — merge activities if duplicates
-      const map = new Map<string, typeof activities[0]>();
+      const [activities, allAssignments] = await Promise.all([
+        getProjectActivities(),
+        getProjectData(),
+      ]);
+
+      // Build map from existing activity log
+      const map = new Map<string, { projectName: string; currentStatus: string; activities: Record<string, string> }>();
       for (const entry of activities) {
         const key = entry.projectName.trim().toLowerCase();
         if (map.has(key)) {
-          // Merge activities, newer entries win
           const existing = map.get(key)!;
           existing.activities = { ...existing.activities, ...entry.activities };
         } else {
-          map.set(key, { ...entry });
+          map.set(key, { ...entry, activities: { ...entry.activities } });
         }
       }
+
+      // Ensure ALL projects from data.json appear (even those with no logged activities)
+      // Deduplicate by project name key
+      const extractKey = (name: string): string => {
+        const m = name.trim().match(/^([A-Z0-9]{1,4}-[A-Z0-9]{1,5}-\d{4,6})/i);
+        return m ? m[1].toUpperCase() : name.trim().toLowerCase();
+      };
+
+      const projectKeyMap = new Map<string, string>(); // projectKey -> map key (lowercase name)
+      for (const [key, _] of map) {
+        const entry = map.get(key)!;
+        const pKey = extractKey(entry.projectName);
+        projectKeyMap.set(pKey, key);
+      }
+
+      for (const assignment of allAssignments) {
+        const name = assignment.projectName.trim();
+        const nameLower = name.toLowerCase();
+        const pKey = extractKey(name);
+
+        // Skip if already in map (by project number or exact name)
+        if (map.has(nameLower) || projectKeyMap.has(pKey)) continue;
+
+        // Skip completed projects from data.json
+        if (assignment.status?.toLowerCase() === "completed") continue;
+
+        map.set(nameLower, {
+          projectName: name,
+          currentStatus: assignment.status || "In Progress",
+          activities: {},
+        });
+        projectKeyMap.set(pKey, nameLower);
+      }
+
       res.json(Array.from(map.values()));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
