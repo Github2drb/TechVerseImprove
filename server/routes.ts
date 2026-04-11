@@ -3,7 +3,7 @@
 // EXISTING routes stay the same. Only the sections marked NEW / MODIFIED change.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { Router } from "express";
+import { Server } from "http";
 import {
   getProjectData,
   saveProjectAssignment,
@@ -20,8 +20,14 @@ import {
   extractProjectNumber,
 } from "./github";
 
-export function registerRoutes(app: ReturnType<typeof import("express")["default"]>) {
+export function registerRoutes(
+  httpServer: Server,
+  app: ReturnType<typeof import("express")["default"]>
+) {
   const router = Router();
+  // ... all your routes stay the same ...
+  app.use("/api", router);
+}
 
   // ── Engineers Master List ────────────────────────────────────────────────
   // GET /api/engineers-master — returns deduplicated engineer list from master JSON
