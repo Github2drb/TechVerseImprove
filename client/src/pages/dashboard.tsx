@@ -122,15 +122,15 @@ export default function Dashboard() {
 
   const filteredMembers = teamMembers.filter(
     (member) =>
-      member.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      member.role.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      member.department.toLowerCase().includes(searchQuery.toLowerCase())
+      member?.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      member?.role?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      member?.department?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const filteredProjects = projects.filter(
     (project) =>
-      project.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      project.description?.toLowerCase().includes(searchQuery.toLowerCase())
+      project?.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      project?.description?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const visibleWidgets = getVisibleWidgets();
@@ -185,7 +185,6 @@ export default function Dashboard() {
         <WeeklyScheduleOverview />
         
         <WeeklyAssignmentsTable teamMembers={teamMembers} />
-
 
         <TodayActivity />
 
