@@ -389,6 +389,9 @@ export function registerRoutes(
       res.status(500).json({ error: err.message });
     }
   });
-
+  router.get("/debug-users", async (_req, res) => {
+  const raw = await (readJsonFile as any)("engineers_master_list.json");
+  res.json({ raw, userCount: raw?.engineers?.length ?? 0 });
+});
   app.use("/api", router);
 }
