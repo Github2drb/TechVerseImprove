@@ -360,6 +360,100 @@ export function registerRoutes(
     }
   });
 
+  // ── Engineer Workload Analytics ─────────────────────────────────────────
+  router.get("/analytics/engineer-workload", async (_req, res) => {
+    try {
+      const [assignments, engineers] = await Promise.all([
+        getProjectData(),
+        getEngineersMasterList(),
+      ]);
+
+      const engineerMasterNames = new Set(
+        engineers.map((e) => e.name.trim().toLowerCase())
+      );
+
+      // Group active assignments by engineer
+      const engineerMap = new Map<string, {
+        name: string;
+        projects: Array<{
+          projectName: string;
+          status: string;
+          scopeOfWork: string;
+          coEngineers: string[];
+        }>;
+      }>();
+
+      // Initialize all master list engineers
+      engineers.forEach((e) => {
+        engineerMap.set(e.name.trim(), {
+          name: e.name.trim(),
+          projects: [],
+        });
+      });
+
+      // Group assignments by project to find co-engineers
+      const projectEngineerMap = new Map<string, string[]>();
+      assignments.forEach((a) => {
+        const key = a.projectName.trim().toLowerCase();
+        if (!projectEngineerMap.has(key)) {
+          projectEngineerMap.set(key, []);
+        }
+        projectEngineerMap.get(key)!.push(a.engineerName.trim());
+      });
+
+      // Build engineer workload
+      assignments.forEach((a) => {
+        if (a.status?.toLowerCase() === "completed") return;
+
+        const engName = a.engineerName.trim();
+        if (!engineerMasterNames.has(engName.toLowerCase())) return;
+
+        // Find co-engineers on same project
+        const projectKey = a.projectName.trim().toLowerCase();
+        const coEngineers = (projectEngineerMap.get(projectKey) || [])
+          .filter((n) => n.toLowerCase() !== engName.toLowerCase());
+
+        if (!engineerMap.has(engName)) {
+          engineerMap.set(engName, { name: engName, projects: [] });
+        }
+
+        engineerMap.get(engName)!.projects.push({
+          projectName: a.projectName.trim(),
+          status: a.status || "In Progress",
+          scopeOfWork: a.notes || "-",
+          coEngineers,
+        });
+      });
+
+      // Filter to only engineers with active assignments
+      const engineersWithProjects = Array.from(engineerMap.values())
+        .filter((e) => e.projects.length > 0)
+        .map((e) => ({
+          name: e.name,
+          projects: e.projects,
+          projectCount: e.projects.length,
+        }))
+        .sort((a, b) => b.projectCount - a.projectCount);
+
+      const now = new Date();
+      const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+      const currentMonth = now.toLocaleString("default", { month: "long", year: "numeric" });
+      const nextMonthStr = nextMonth.toLocaleString("default", { month: "long", year: "numeric" });
+
+      res.json({
+        currentMonth,
+        nextMonth: nextMonthStr,
+        engineers: engineersWithProjects,
+        totalEngineers: engineersWithProjects.length,
+        totalAssignments: assignments.filter(
+          (a) => a.status?.toLowerCase() !== "completed"
+        ).length,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ── Projects Overview ───────────────────────────────────────────────────
   router.get("/projects-overview", async (_req, res) => {
     try {
