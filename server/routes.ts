@@ -46,7 +46,7 @@ export function registerRoutes(
       // Try reading from GitHub first
       let engineers: any[] = [];
       try {
-        const raw = await (readJsonFile as any)("engineers_master_list.json");
+        const raw = await (readJsonFile as any)("engineers_auth.json");
         if (raw?.engineers?.length > 0) {
           engineers = raw.engineers;
         }
