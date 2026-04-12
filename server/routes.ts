@@ -43,9 +43,42 @@ export function registerRoutes(
         return res.status(400).json({ message: "Username and password are required." });
       }
 
-      // Read directly from engineers_master_list.json which has username/password/role
-      const raw = await (readJsonFile as any)("engineers_master_list.json");
-      const engineers: any[] = raw?.engineers ?? [];
+      // Try reading from GitHub first
+      let engineers: any[] = [];
+      try {
+        const raw = await (readJsonFile as any)("engineers_master_list.json");
+        if (raw?.engineers?.length > 0) {
+          engineers = raw.engineers;
+        }
+      } catch (e) {
+        console.error("Failed to read engineers from GitHub:", e);
+      }
+
+      // Fallback: hardcoded users in case GitHub read fails
+      if (engineers.length === 0) {
+        engineers = [
+          { id: "admin-1", username: "admin", password: "admin@drb", name: "Admin", role: "admin", isActive: true },
+          { id: "eng-1775028596527", username: "kavitha", password: "kavitha@123", name: "Kavitha", role: "admin", isActive: true },
+          { id: "eng-5", username: "santhosh.n", password: "drb@123", name: "Santhosh N", role: "engineer", isActive: true },
+          { id: "eng-6", username: "dyumith.nv", password: "drb@123", name: "Dyumith NV", role: "engineer", isActive: true },
+          { id: "eng-7", username: "susanth.k.m", password: "drb@123", name: "Susanth K M", role: "engineer", isActive: true },
+          { id: "eng-3", username: "praveen.kumar.c", password: "drb@123", name: "Praveen Kumar C", role: "engineer", isActive: true },
+          { id: "eng-10", username: "dhanesh.m", password: "drb@123", name: "Dhanesh M", role: "engineer", isActive: true },
+          { id: "eng-11", username: "harsha", password: "drb@123", name: "Harsha", role: "engineer", isActive: true },
+          { id: "eng-12", username: "veeresh.m", password: "drb@123", name: "Veeresh M", role: "engineer", isActive: true },
+          { id: "eng-13", username: "keerthi.bh", password: "drb@123", name: "Keerthi BH", role: "engineer", isActive: true },
+          { id: "eng-14", username: "deekshitha.hc", password: "drb@123", name: "Deekshitha HC", role: "engineer", isActive: true },
+          { id: "eng-16", username: "ramkumar.annamalai", password: "drb@123", name: "Ramkumar Annamalai", role: "engineer", isActive: true },
+          { id: "eng-17", username: "eswanth.potnuri", password: "drb@123", name: "Eswanth Potnuri", role: "engineer", isActive: true },
+          { id: "eng-20", username: "ullaz", password: "drb@123", name: "Ullaz (PAES)", role: "engineer", isActive: true },
+          { id: "eng-21", username: "vishnu", password: "drb@123", name: "Vishnu (PAES)", role: "engineer", isActive: true },
+          { id: "eng-22", username: "sarath", password: "drb@123", name: "Sarath (PAES)", role: "engineer", isActive: true },
+          { id: "eng-23", username: "mallikarjun", password: "drb@123", name: "Mallikarjun (D.I.C.S)", role: "engineer", isActive: true },
+          { id: "eng-24", username: "kiran", password: "drb@123", name: "Kiran (D.I.C.S)", role: "engineer", isActive: true },
+          { id: "eng-1775028569231", username: "anand", password: "anand@123", name: "Anand", role: "engineer", isActive: true },
+        ];
+        console.log("Using hardcoded fallback users for login");
+      }
 
       const user = engineers.find(
         (e: any) =>
@@ -389,9 +422,6 @@ export function registerRoutes(
       res.status(500).json({ error: err.message });
     }
   });
-  router.get("/debug-users", async (_req, res) => {
-  const raw = await (readJsonFile as any)("engineers_master_list.json");
-  res.json({ raw, userCount: raw?.engineers?.length ?? 0 });
-});
+
   app.use("/api", router);
 }
