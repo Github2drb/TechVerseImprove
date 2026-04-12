@@ -14,13 +14,93 @@ import {
   validateEngineerName,
   validateProjectNumber,
   extractProjectNumber,
+  readJsonFile,
 } from "./github";
+
+// Extend express-session with our custom fields
+declare module "express-session" {
+  interface SessionData {
+    userId: string;
+    username: string;
+    name: string;
+    role: string;
+  }
+}
 
 export function registerRoutes(
   httpServer: Server,
   app: ReturnType<typeof import("express")["default"]>
 ) {
   const router = Router();
+
+  // ── Auth ─────────────────────────────────────────────────────────────────
+
+  // POST /api/auth/login
+  router.post("/auth/login", async (req, res) => {
+    try {
+      const { username, password } = req.body;
+      if (!username || !password) {
+        return res.status(400).json({ message: "Username and password are required." });
+      }
+
+      // Read directly from engineers_master_list.json which has username/password/role
+      const raw = await (readJsonFile as any)("engineers_master_list.json");
+      const engineers: any[] = raw?.engineers ?? [];
+
+      const user = engineers.find(
+        (e: any) =>
+          e.username?.toLowerCase() === username.toLowerCase() &&
+          e.password === password &&
+          e.isActive !== false
+      );
+
+      if (!user) {
+        return res.status(401).json({ message: "Invalid username or password. Please try again." });
+      }
+
+      // Store in session
+      req.session.userId = user.id;
+      req.session.username = user.username;
+      req.session.name = user.name;
+      req.session.role = user.role;
+
+      res.json({
+        id: user.id,
+        username: user.username,
+        name: user.name,
+        role: user.role,
+        email: `${user.username}@drbtechverse.in`,
+        status: "active",
+        company: user.company ?? "",
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST /api/auth/logout
+  router.post("/auth/logout", (req, res) => {
+    req.session.destroy((err) => {
+      if (err) {
+        return res.status(500).json({ message: "Logout failed." });
+      }
+      res.clearCookie("connect.sid");
+      res.json({ message: "Logged out successfully." });
+    });
+  });
+
+  // GET /api/auth/me
+  router.get("/auth/me", (req, res) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated." });
+    }
+    res.json({
+      id: req.session.userId,
+      username: req.session.username,
+      name: req.session.name,
+      role: req.session.role,
+    });
+  });
 
   // ── Engineers Master List ────────────────────────────────────────────────
   router.get("/engineers-master", async (_req, res) => {
@@ -162,50 +242,60 @@ export function registerRoutes(
         getProjectData(),
       ]);
 
-      const map = new Map<
+      // Build activity log map keyed by normalized project name
+      const activityMap = new Map<
         string,
         { projectName: string; currentStatus: string; activities: Record<string, string> }
       >();
 
       for (const entry of activities) {
         const key = entry.projectName.trim().toLowerCase();
-        if (map.has(key)) {
-          const existing = map.get(key)!;
+        if (activityMap.has(key)) {
+          const existing = activityMap.get(key)!;
           existing.activities = { ...existing.activities, ...entry.activities };
         } else {
-          map.set(key, { ...entry, activities: { ...entry.activities } });
+          activityMap.set(key, { ...entry, activities: { ...entry.activities } });
         }
       }
 
-      const extractKey = (name: string): string => {
-        const m = name.trim().match(/^([A-Z0-9]{1,4}-[A-Z0-9]{1,5}-\d{4,6})/i);
-        return m ? m[1].toUpperCase() : name.trim().toLowerCase();
-      };
-
-      const projectKeyMap = new Map<string, string>();
-      for (const [key] of map) {
-        const entry = map.get(key)!;
-        const pKey = extractKey(entry.projectName);
-        projectKeyMap.set(pKey, key);
-      }
+      // Build final map starting from ALL active assignments in data.json
+      // This ensures every assigned project appears even if it has no logged activities
+      const resultMap = new Map<
+        string,
+        { projectName: string; currentStatus: string; activities: Record<string, string> }
+      >();
 
       for (const assignment of allAssignments) {
-        const name = assignment.projectName.trim();
-        const nameLower = name.toLowerCase();
-        const pKey = extractKey(name);
-
-        if (map.has(nameLower) || projectKeyMap.has(pKey)) continue;
         if (assignment.status?.toLowerCase() === "completed") continue;
 
-        map.set(nameLower, {
-          projectName: name,
-          currentStatus: assignment.status || "In Progress",
-          activities: {},
-        });
-        projectKeyMap.set(pKey, nameLower);
+        const name = assignment.projectName.trim();
+        const key = name.toLowerCase();
+
+        if (resultMap.has(key)) {
+          // Already added — update status priority (In Progress beats anything)
+          if (assignment.status === "In Progress") {
+            resultMap.get(key)!.currentStatus = "In Progress";
+          }
+        } else {
+          // Merge in any existing activity log entry for this project
+          const logged = activityMap.get(key);
+          resultMap.set(key, {
+            projectName: logged?.projectName ?? name,
+            currentStatus: logged?.currentStatus ?? assignment.status ?? "In Progress",
+            activities: logged?.activities ?? {},
+          });
+        }
       }
 
-      res.json(Array.from(map.values()));
+      // Also include projects that have activity log entries but are no longer
+      // in data.json (e.g. completed projects with logged history)
+      for (const [key, entry] of activityMap) {
+        if (!resultMap.has(key)) {
+          resultMap.set(key, entry);
+        }
+      }
+
+      res.json(Array.from(resultMap.values()));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
