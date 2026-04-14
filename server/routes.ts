@@ -8,33 +8,17 @@ const router = express.Router();
 // ==============================
 // ✅ CREATE PROJECT
 // ==============================
-router.post("/login", async (req, res) => {
-  const { email, password } = req.body;
+router.post("/projects", authMiddleware, async (req, res) => {
+  const { name, assignedTo } = req.body;
 
-  const user = await User.findOne({ email });
-
-  if (!user) return res.status(400).json({ message: "User not found" });
-
-  const isMatch = await bcrypt.compare(password, user.password);
-
-  if (!isMatch) return res.status(400).json({ message: "Wrong password" });
-
-  const token = jwt.sign(
-    {
-      id: user._id.toString(), // ✅ REQUIRED
-      role: user.role,
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: "7d" }
-  );
-
-  res.json({
-    token,
-    user: {
-      id: user._id,
-      role: user.role,
-    },
+  const project = await Project.create({
+    name,
+    assignedTo: Array.isArray(assignedTo)
+      ? assignedTo
+      : [assignedTo], // ✅ FIX
   });
+
+  res.json(project);
 });
 
     return res.status(201).json(project);
