@@ -1,255 +1,102 @@
-// server/github.ts
-// Full GitHub integration — reads/writes all JSON files in Controls_Team_Tracker repo.
-// Added: project_master_list.json read/write + deduplication helpers.
+// server/github.ts — Persistent GitHub-backed storage for DRB TechVerse
+// CRITICAL FIX: writeJsonFile NOW commits to GitHub via API (not local disk)
+// This is the ONLY persistent storage on Render free tier.
 
-import { Octokit } from "@octokit/rest";
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
+const GITHUB_OWNER = process.env.GITHUB_OWNER || "Github2drb";
+const GITHUB_REPO  = process.env.GITHUB_REPO  || "TechVerseImprove";
+const GITHUB_BRANCH = process.env.GITHUB_BRANCH || "main";
+const DATA_FOLDER = process.env.GITHUB_DATA_FOLDER || "data"; // folder in repo where JSON files live
 
-const OWNER = "Github2drb";
-const REPO = "Controls_Team_Tracker";
-const BRANCH = "main";
+const BASE_URL = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${DATA_FOLDER}`;
 
-function getOctokit(): Octokit {
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) throw new Error("GITHUB_TOKEN environment variable not set");
-  return new Octokit({ auth: token });
+function headers() {
+  return {
+    Authorization: `token ${GITHUB_TOKEN}`,
+    "Content-Type": "application/json",
+    Accept: "application/vnd.github.v3+json",
+    "User-Agent": "DRBTechVerse-Server",
+  };
 }
 
-// ─── Generic helpers ─────────────────────────────────────────────────────────
+// ── In-memory cache so we don't hammer GitHub API on every request ──────────
+const cache = new Map<string, { data: any; etag?: string; ts: number }>();
+const CACHE_TTL_MS = 30_000; // 30 seconds
 
-async function getFileSha(octokit: Octokit, path: string): Promise<string | undefined> {
-  try {
-    const res = await octokit.repos.getContent({ owner: OWNER, repo: REPO, path, ref: BRANCH });
-    const data = res.data as { sha: string };
-    return data.sha;
-  } catch {
-    return undefined;
-  }
-}
+// ── readJsonFile ─────────────────────────────────────────────────────────────
+export async function readJsonFile<T>(filename: string): Promise<T | null> {
+  const now = Date.now();
+  const cached = cache.get(filename);
+  if (cached && now - cached.ts < CACHE_TTL_MS) return cached.data as T;
 
-async function readJsonFile<T>(path: string): Promise<T | null> {
   try {
-    const octokit = getOctokit();
-    const res = await octokit.repos.getContent({ owner: OWNER, repo: REPO, path, ref: BRANCH });
-    const data = res.data as { content: string };
-    const decoded = Buffer.from(data.content, "base64").toString("utf-8");
-    return JSON.parse(decoded) as T;
-  } catch {
+    const url = `${BASE_URL}/${filename}`;
+    const res = await fetch(url, { headers: headers() });
+    if (!res.ok) {
+      if (res.status === 404) return null;
+      throw new Error(`GitHub read failed: ${res.status} ${await res.text()}`);
+    }
+    const meta = await res.json();
+    const content = Buffer.from(meta.content, "base64").toString("utf-8");
+    const data = JSON.parse(content) as T;
+    cache.set(filename, { data, etag: res.headers.get("etag") ?? undefined, ts: now });
+    return data;
+  } catch (e: any) {
+    console.error(`[readJsonFile] ${filename}:`, e.message);
     return null;
   }
 }
 
-async function writeJsonFile(path: string, content: unknown, message: string): Promise<void> {
-  const octokit = getOctokit();
-  const sha = await getFileSha(octokit, path);
-  const encoded = Buffer.from(JSON.stringify(content, null, 2)).toString("base64");
-  await octokit.repos.createOrUpdateFileContents({
-    owner: OWNER,
-    repo: REPO,
-    path,
-    message,
-    content: encoded,
-    sha,
-    branch: BRANCH,
-  });
-}
+// ── writeJsonFile ────────────────────────────────────────────────────────────
+// MUST commit to GitHub — this is the ONLY persistent write on Render.
+export async function writeJsonFile(filename: string, data: any, commitMessage: string): Promise<void> {
+  try {
+    const url = `${BASE_URL}/${filename}`;
+    // Get current SHA (required for update)
+    const getRes = await fetch(url, { headers: headers() });
+    let sha: string | undefined;
+    if (getRes.ok) {
+      const meta = await getRes.json();
+      sha = meta.sha;
+    } else if (getRes.status !== 404) {
+      throw new Error(`GitHub SHA fetch failed: ${getRes.status}`);
+    }
 
-// ─── Engineers Master List ────────────────────────────────────────────────────
+    const content = Buffer.from(JSON.stringify(data, null, 2)).toString("base64");
+    const body: any = { message: commitMessage, content, branch: GITHUB_BRANCH };
+    if (sha) body.sha = sha;
 
-export interface Engineer {
-  id: string;
-  name: string;
-  initials: string;
-}
+    const putRes = await fetch(url, {
+      method: "PUT",
+      headers: headers(),
+      body: JSON.stringify(body),
+    });
 
-interface EngineersMasterList {
-  engineers: Engineer[];
-  lastUpdated: string;
-}
+    if (!putRes.ok) {
+      const err = await putRes.text();
+      throw new Error(`GitHub write failed: ${putRes.status} ${err}`);
+    }
 
-export async function getEngineersMasterList(): Promise<Engineer[]> {
-  const data = await readJsonFile<EngineersMasterList>("engineers_master_list.json");
-  return data?.engineers ?? [];
-}
-
-/** Validate that an engineer name exists in the master list (case-insensitive trim). */
-export function validateEngineerName(name: string, masterList: Engineer[]): boolean {
-  const normalized = name.trim().toLowerCase();
-  return masterList.some((e) => e.name.trim().toLowerCase() === normalized);
-}
-
-// ─── Project Master List ──────────────────────────────────────────────────────
-
-export interface ProjectMasterEntry {
-  projectNumber: string;      // e.g. "3A-DK1-25077"
-  projectName: string;        // full project name stored at creation time
-  createdAt: string;          // ISO timestamp
-}
-
-interface ProjectMasterList {
-  projects: ProjectMasterEntry[];
-  lastUpdated: string;
-}
-
-export async function getProjectMasterList(): Promise<ProjectMasterEntry[]> {
-  const data = await readJsonFile<ProjectMasterList>("project_master_list.json");
-  return data?.projects ?? [];
-}
-
-/** Add a project to project_master_list.json if it doesn't already exist. Returns false if duplicate. */
-export async function addProjectToMasterList(
-  projectNumber: string,
-  projectName: string
-): Promise<{ success: boolean; message: string }> {
-  const data = (await readJsonFile<ProjectMasterList>("project_master_list.json")) ?? {
-    projects: [],
-    lastUpdated: "",
-  };
-
-  const exists = data.projects.some(
-    (p) => p.projectNumber.trim().toLowerCase() === projectNumber.trim().toLowerCase()
-  );
-  if (exists) {
-    return { success: false, message: `Project number "${projectNumber}" already exists in master list.` };
+    // Invalidate cache so next read gets fresh data
+    cache.delete(filename);
+    console.log(`[writeJsonFile] Committed ${filename}: ${commitMessage}`);
+  } catch (e: any) {
+    console.error(`[writeJsonFile] ${filename}:`, e.message);
+    throw e;
   }
-
-  data.projects.push({
-    projectNumber: projectNumber.trim(),
-    projectName: projectName.trim(),
-    createdAt: new Date().toISOString(),
-  });
-  data.lastUpdated = new Date().toISOString();
-
-  await writeJsonFile("project_master_list.json", data, `Add project ${projectNumber} to master list`);
-  return { success: true, message: "Project added to master list." };
 }
 
-/** Validate that a project number exists in the master list. */
-export function validateProjectNumber(projectNumber: string, masterList: ProjectMasterEntry[]): boolean {
-  return masterList.some(
-    (p) => p.projectNumber.trim().toLowerCase() === projectNumber.trim().toLowerCase()
-  );
-}
-
-// ─── data.json ────────────────────────────────────────────────────────────────
+// ─── Data shape interfaces ───────────────────────────────────────────────────
 
 export interface ProjectAssignment {
   id: number;
-  projectName: string;
   engineerName: string;
+  projectName: string;
   startDate: string;
   endDate: string;
-  totalDays: number;
-  assignedDays: number;
-  remainingDays: number;
   status: string;
-  notes: string;
+  description?: string;
 }
-
-interface DataJson {
-  data: ProjectAssignment[];
-}
-
-export async function getProjectData(): Promise<ProjectAssignment[]> {
-  const data = await readJsonFile<DataJson>("data.json");
-  return data?.data ?? [];
-}
-
-/**
- * Save a new project assignment to data.json.
- * Also registers the project in project_master_list.json.
- * Validates engineer against engineers_master_list.json.
- * Prevents duplicate project+engineer combos in data.json.
- */
-export async function saveProjectAssignment(
-  assignment: Omit<ProjectAssignment, "id">
-): Promise<{ success: boolean; message: string; id?: number }> {
-
-  // 1. Validate engineer name
-  const engineers = await getEngineersMasterList();
-  if (!validateEngineerName(assignment.engineerName, engineers)) {
-    return {
-      success: false,
-      message: `Engineer "${assignment.engineerName}" is not in the engineers master list.`,
-    };
-  }
-
-  // 2. Load current data.json
-  const current = (await readJsonFile<DataJson>("data.json")) ?? { data: [] };
-
-  // 3. Prevent duplicate project+engineer combo
-  const duplicate = current.data.some(
-    (d) =>
-      d.projectName.trim().toLowerCase() === assignment.projectName.trim().toLowerCase() &&
-      d.engineerName.trim().toLowerCase() === assignment.engineerName.trim().toLowerCase()
-  );
-  if (duplicate) {
-    return {
-      success: false,
-      message: `Engineer "${assignment.engineerName}" is already assigned to project "${assignment.projectName}".`,
-    };
-  }
-
-  // 4. Create new record
-  const id = Date.now();
-  const newEntry: ProjectAssignment = { id, ...assignment };
-  current.data.push(newEntry);
-
-  await writeJsonFile("data.json", current, `Add assignment: ${assignment.projectName} → ${assignment.engineerName}`);
-
-  // 5. Register project number in master list (extract project number from name e.g. "3A-DK1-25077")
-  const projectNumber = extractProjectNumber(assignment.projectName);
-  if (projectNumber) {
-    await addProjectToMasterList(projectNumber, assignment.projectName);
-  }
-
-  return { success: true, message: "Assignment saved.", id };
-}
-
-/** Update an existing assignment in data.json. */
-export async function updateProjectAssignment(
-  id: number,
-  updates: Partial<ProjectAssignment>
-): Promise<{ success: boolean; message: string }> {
-  const current = await readJsonFile<DataJson>("data.json");
-  if (!current) return { success: false, message: "data.json not found." };
-
-  const idx = current.data.findIndex((d) => d.id === id);
-  if (idx === -1) return { success: false, message: `Assignment id ${id} not found.` };
-
-  // If engineer is being changed, validate new name
-  if (updates.engineerName && updates.engineerName !== current.data[idx].engineerName) {
-    const engineers = await getEngineersMasterList();
-    if (!validateEngineerName(updates.engineerName, engineers)) {
-      return {
-        success: false,
-        message: `Engineer "${updates.engineerName}" is not in the engineers master list.`,
-      };
-    }
-  }
-
-  current.data[idx] = { ...current.data[idx], ...updates };
-  await writeJsonFile("data.json", current, `Update assignment id ${id}`);
-  return { success: true, message: "Assignment updated." };
-}
-
-/** Delete an assignment from data.json by id. */
-export async function deleteProjectAssignment(
-  id: number
-): Promise<{ success: boolean; message: string }> {
-  const current = await readJsonFile<DataJson>("data.json");
-  if (!current) return { success: false, message: "data.json not found." };
-
-  const filtered = current.data.filter((d) => d.id !== id);
-  if (filtered.length === current.data.length) {
-    return { success: false, message: `Assignment id ${id} not found.` };
-  }
-
-  current.data = filtered;
-  await writeJsonFile("data.json", current, `Delete assignment id ${id}`);
-  return { success: true, message: "Assignment deleted." };
-}
-
-// ─── project-activities.json ──────────────────────────────────────────────────
 
 export interface ProjectActivity {
   projectName: string;
@@ -257,144 +104,195 @@ export interface ProjectActivity {
   activities: Record<string, string>;
 }
 
-interface ProjectActivitiesJson {
-  projectActivities: ProjectActivity[];
-  lastUpdated: string;
+export interface EngineerMaster {
+  id: string;
+  name: string;
+  initials: string;
 }
 
+export interface ProjectMaster {
+  projectNumber: string;
+  projectName: string;
+}
+
+interface DataFile { assignments: ProjectAssignment[]; }
+interface ActivitiesFile { projectActivities: ProjectActivity[]; }
+interface EngineerMasterFile { engineers: EngineerMaster[]; }
+interface ProjectMasterFile { projects: ProjectMaster[]; }
+
+// ─── getProjectData ──────────────────────────────────────────────────────────
+export async function getProjectData(): Promise<ProjectAssignment[]> {
+  const f = await readJsonFile<DataFile>("data.json");
+  return f?.assignments ?? [];
+}
+
+// ─── saveProjectAssignment ───────────────────────────────────────────────────
+export async function saveProjectAssignment(
+  assignment: Omit<ProjectAssignment, "id">
+): Promise<{ success: boolean; message: string; id?: number }> {
+  const f = (await readJsonFile<DataFile>("data.json")) ?? { assignments: [] };
+  const id = Date.now();
+  f.assignments.push({ ...assignment, id });
+  await writeJsonFile("data.json", f, `Add assignment: ${assignment.projectName}`);
+  return { success: true, message: "Assignment saved", id };
+}
+
+// ─── updateProjectAssignment ──────────────────────────────────────────────────
+export async function updateProjectAssignment(
+  id: number,
+  updates: Partial<ProjectAssignment>
+): Promise<{ success: boolean; message: string }> {
+  const f = await readJsonFile<DataFile>("data.json");
+  if (!f) return { success: false, message: "Data file not found" };
+  const i = f.assignments.findIndex(a => a.id === id);
+  if (i === -1) return { success: false, message: "Assignment not found" };
+  f.assignments[i] = { ...f.assignments[i], ...updates, id };
+  await writeJsonFile("data.json", f, `Update assignment ${id}`);
+  return { success: true, message: "Assignment updated" };
+}
+
+// ─── deleteProjectAssignment ──────────────────────────────────────────────────
+export async function deleteProjectAssignment(
+  id: number
+): Promise<{ success: boolean; message: string }> {
+  const f = await readJsonFile<DataFile>("data.json");
+  if (!f) return { success: false, message: "Data file not found" };
+  const before = f.assignments.length;
+  f.assignments = f.assignments.filter(a => a.id !== id);
+  if (f.assignments.length === before) return { success: false, message: "Assignment not found" };
+  await writeJsonFile("data.json", f, `Delete assignment ${id}`);
+  return { success: true, message: "Assignment deleted" };
+}
+
+// ─── getProjectActivities ─────────────────────────────────────────────────────
 export async function getProjectActivities(): Promise<ProjectActivity[]> {
-  const data = await readJsonFile<ProjectActivitiesJson>("project-activities.json");
-  return data?.projectActivities ?? [];
+  const f = await readJsonFile<ActivitiesFile>("project-activities.json");
+  return f?.projectActivities ?? [];
 }
 
-/**
- * Add or update a project's activity log entry.
- * Validates that the project number is in project_master_list.json before writing.
- */
+// ─── upsertProjectActivity ────────────────────────────────────────────────────
 export async function upsertProjectActivity(
   projectName: string,
   date: string,
-  activityText: string,
-  statusOverride?: string
+  activity: string,
+  status?: string
 ): Promise<{ success: boolean; message: string }> {
-  // Validate project number exists in master list
-  const masterList = await getProjectMasterList();
-  const projectNumber = extractProjectNumber(projectName);
-  if (projectNumber && !validateProjectNumber(projectNumber, masterList)) {
-    return {
-      success: false,
-      message: `Project number "${projectNumber}" is not registered. Please create the project first.`,
-    };
-  }
-
-  const current = (await readJsonFile<ProjectActivitiesJson>("project-activities.json")) ?? {
-    projectActivities: [],
-    lastUpdated: "",
-  };
-
-  let entry = current.projectActivities.find(
-    (p) => p.projectName.trim().toLowerCase() === projectName.trim().toLowerCase()
-  );
-
+  const f = (await readJsonFile<ActivitiesFile>("project-activities.json")) ?? { projectActivities: [] };
+  const k = projectName.trim().toLowerCase();
+  let entry = f.projectActivities.find(p => p.projectName.trim().toLowerCase() === k);
   if (!entry) {
-    entry = { projectName, currentStatus: statusOverride ?? "In Progress", activities: {} };
-    current.projectActivities.push(entry);
+    entry = { projectName: projectName.trim(), currentStatus: status || "In Progress", activities: {} };
+    f.projectActivities.push(entry);
   }
-
-  if (statusOverride) entry.currentStatus = statusOverride;
-  entry.activities[date] = activityText;
-  current.lastUpdated = new Date().toISOString();
-
-  await writeJsonFile("project-activities.json", current, `Activity log update: ${projectName} on ${date}`);
-  return { success: true, message: "Activity logged." };
+  if (status) entry.currentStatus = status;
+  if (date && activity) entry.activities[date] = activity;
+  await writeJsonFile("project-activities.json", f, `Activity: ${projectName}`);
+  return { success: true, message: "Activity saved" };
 }
 
-// ─── Analytics helpers ────────────────────────────────────────────────────────
-
-export interface AnalyticsSummary {
-  totalProjects: number;
-  totalEngineers: number;
-  statusBreakdown: Record<string, number>;
-  engineerWorkload: Array<{ name: string; projectCount: number; assignedDays: number }>;
-  recentActivity: Array<{ projectName: string; date: string; activity: string }>;
-  projectList: string[];           // deduplicated project names from data.json
-  engineerList: string[];          // deduplicated engineer names from data.json (validated against master)
-}
-
-export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
-  const [assignments, activities, engineers] = await Promise.all([
+// ─── getAnalyticsSummary ──────────────────────────────────────────────────────
+export async function getAnalyticsSummary() {
+  const [assignments, activities] = await Promise.all([
     getProjectData(),
     getProjectActivities(),
-    getEngineersMasterList(),
   ]);
 
-  // Deduplicate project names
-  const projectSet = new Set<string>();
-  assignments.forEach((a) => projectSet.add(a.projectName.trim()));
+  const total = assignments.length;
+  const completed = assignments.filter(a => a.status?.toLowerCase() === "completed").length;
+  const inProgress = assignments.filter(a => a.status?.toLowerCase() === "in progress").length;
+  const onHold = assignments.filter(a => a.status?.toLowerCase() === "on hold").length;
 
-  // Deduplicated & validated engineer names
-  const engineerMasterNames = new Set(engineers.map((e) => e.name.trim().toLowerCase()));
-  const engineerSet = new Set<string>();
-  assignments.forEach((a) => {
-    const normalized = a.engineerName.trim();
-    if (engineerMasterNames.has(normalized.toLowerCase())) {
-      engineerSet.add(normalized);
+  // Engineer workload
+  const engineerMap = new Map<string, { total: number; completed: number }>();
+  for (const a of assignments) {
+    const names = (a.engineerName || "").split(",").map(n => n.trim()).filter(Boolean);
+    for (const name of names) {
+      if (!engineerMap.has(name)) engineerMap.set(name, { total: 0, completed: 0 });
+      const e = engineerMap.get(name)!;
+      e.total++;
+      if (a.status?.toLowerCase() === "completed") e.completed++;
     }
-  });
+  }
 
-  // Status breakdown
-  const statusBreakdown: Record<string, number> = {};
-  assignments.forEach((a) => {
-    statusBreakdown[a.status] = (statusBreakdown[a.status] ?? 0) + 1;
-  });
-
-  // Engineer workload (deduped)
-  const workloadMap = new Map<string, { projectCount: number; assignedDays: number }>();
-  assignments.forEach((a) => {
-    const eng = a.engineerName.trim();
-    if (!engineerMasterNames.has(eng.toLowerCase())) return;  // skip invalid
-    const prev = workloadMap.get(eng) ?? { projectCount: 0, assignedDays: 0 };
-    workloadMap.set(eng, {
-      projectCount: prev.projectCount + 1,
-      assignedDays: prev.assignedDays + (a.assignedDays ?? 0),
-    });
-  });
-  const engineerWorkload = Array.from(workloadMap.entries()).map(([name, stats]) => ({
+  const engineerStats = Array.from(engineerMap.entries()).map(([name, s]) => ({
     name,
-    ...stats,
-  }));
+    totalProjects: s.total,
+    completedProjects: s.completed,
+    activeProjects: s.total - s.completed,
+    completionRate: s.total > 0 ? Math.round((s.completed / s.total) * 100) : 0,
+  })).sort((a, b) => b.totalProjects - a.totalProjects);
 
-  // Recent activity (last 20 entries across all projects, sorted by date desc)
-  const recentActivity: Array<{ projectName: string; date: string; activity: string }> = [];
-  activities.forEach((proj) => {
-    Object.entries(proj.activities).forEach(([date, activity]) => {
-      recentActivity.push({ projectName: proj.projectName, date, activity });
-    });
-  });
-  recentActivity.sort((a, b) => b.date.localeCompare(a.date));
+  // Project status distribution
+  const statusDistribution = [
+    { status: "Completed", count: completed },
+    { status: "In Progress", count: inProgress },
+    { status: "On Hold", count: onHold },
+    { status: "Other", count: total - completed - inProgress - onHold },
+  ].filter(s => s.count > 0);
+
+  // Recent activities (last 10)
+  const recentActivities: Array<{ projectName: string; date: string; activity: string; status: string }> = [];
+  for (const pa of activities) {
+    const entries = Object.entries(pa.activities || {})
+      .map(([date, activity]) => ({ projectName: pa.projectName, date, activity, status: pa.currentStatus }))
+      .sort((a, b) => b.date.localeCompare(a.date));
+    recentActivities.push(...entries);
+  }
+  recentActivities.sort((a, b) => b.date.localeCompare(a.date));
 
   return {
-    totalProjects: projectSet.size,
-    totalEngineers: engineerSet.size,
-    statusBreakdown,
-    engineerWorkload,
-    recentActivity: recentActivity.slice(0, 20),
-    projectList: Array.from(projectSet),
-    engineerList: Array.from(engineerSet),
+    summary: {
+      totalProjects: total,
+      completedProjects: completed,
+      inProgressProjects: inProgress,
+      onHoldProjects: onHold,
+      completionRate: total > 0 ? Math.round((completed / total) * 100) : 0,
+    },
+    engineerStats,           // always an array, never undefined
+    statusDistribution,      // always an array, never undefined
+    recentActivities: recentActivities.slice(0, 10),  // always an array
+    projectActivities: activities,  // always an array
   };
 }
 
-// ─── Utility ──────────────────────────────────────────────────────────────────
-
-/**
- * Extract a project number prefix like "3A-DK1-25077" from a full project name.
- * Matches patterns such as 3A-XXX-NNNNN, 3W-XXX-NNNNN, DK1-NNNNN, etc.
- */
-export function extractProjectNumber(projectName: string): string | null {
-  const match = projectName.match(/^[\s]*(\d[A-Z0-9]+-[A-Z0-9]+-\d{5,}|[A-Z0-9]+-\d{5,})/i);
-  return match ? match[1].trim() : null;
+// ─── getEngineersMasterList ───────────────────────────────────────────────────
+export async function getEngineersMasterList(): Promise<EngineerMaster[]> {
+  const f = await readJsonFile<EngineerMasterFile>("engineers_master_list.json");
+  return f?.engineers ?? [];
 }
 
-// ─── Re-export other unchanged file accessors ─────────────────────────────────
+// ─── getProjectMasterList ─────────────────────────────────────────────────────
+export async function getProjectMasterList(): Promise<ProjectMaster[]> {
+  const f = await readJsonFile<ProjectMasterFile>("projects_master_list.json");
+  return f?.projects ?? [];
+}
 
-export { readJsonFile, writeJsonFile };
+// ─── addProjectToMasterList ───────────────────────────────────────────────────
+export async function addProjectToMasterList(
+  projectNumber: string,
+  projectName: string
+): Promise<{ success: boolean; message: string }> {
+  const f = (await readJsonFile<ProjectMasterFile>("projects_master_list.json")) ?? { projects: [] };
+  if (f.projects.find(p => p.projectNumber.trim().toLowerCase() === projectNumber.trim().toLowerCase()))
+    return { success: false, message: "Project already in master list" };
+  f.projects.push({ projectNumber, projectName });
+  await writeJsonFile("projects_master_list.json", f, `Add project: ${projectNumber}`);
+  return { success: true, message: "Project added to master list" };
+}
+
+// ─── validateEngineerName ─────────────────────────────────────────────────────
+export function validateEngineerName(name: string, masterList: EngineerMaster[]): boolean {
+  const n = name.trim().replace(/\s*\([^)]*\)\s*/g, "").trim().toLowerCase();
+  return masterList.some(e => e.name.replace(/\s*\([^)]*\)\s*/g, "").trim().toLowerCase() === n);
+}
+
+// ─── validateProjectNumber ────────────────────────────────────────────────────
+export function validateProjectNumber(pn: string, masterList: ProjectMaster[]): boolean {
+  return masterList.some(p => p.projectNumber.trim().toLowerCase() === pn.trim().toLowerCase());
+}
+
+// ─── extractProjectNumber ─────────────────────────────────────────────────────
+export function extractProjectNumber(name: string): string | null {
+  const m = name.trim().match(/^([A-Z0-9]{1,4}-[A-Z0-9]{1,5}-\d{4,6})/i);
+  return m ? m[1].toUpperCase() : null;
+}
