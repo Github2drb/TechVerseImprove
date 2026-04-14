@@ -43,16 +43,17 @@ interface EngConfigFile { engineers: EngConfig[]; lastUpdated: string; }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function norm(s: string) { return s.trim().replace(/\s*\([^)]*\)\s*/g,"").trim().toLowerCase(); }
+// Helpers
+function norm(s: string): string {
+  return s.trim().replace(/\s*\([^)]*\)\s*/g, "").trim().toLowerCase();
+}
 
 function matchEngineer(field: string, loginName: string): boolean {
   const needle = norm(loginName).replace(/\./g, " ");
-  return field
-    .split(",")
-    .map(n => norm(n))
-    .some(n => n === needle || n.includes(needle) || needle.includes(n));
+  const names = field.split(",").map((n: string) => norm(n));
+  return names.some((n: string) => n === needle || n.includes(needle) || needle.includes(n));
 }
-}
+
 
 function isAdmin(req: Request): boolean {
   try {
@@ -625,8 +626,13 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
   r.get("/projects", async (_q, res) => {
     try {
       const data = await getProjectData();
-      const seen = new Set<number>();
-      res.json(data.filter(d => seen.has(d.id) ? false : (seen.add(d.id), true)));
+      const seen = new Set<string>();
+      res.json(data.filter(d => {
+        const k = assignmentKey(d);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      }));
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
@@ -634,12 +640,14 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
   r.get("/projects/engineer/:name", async (req, res) => {
     try {
       const data = await getProjectData();
-      const needle = norm(req.params.name);
-      const seen = new Set<number>();
+      const needle = norm(req.params.name).replace(/\./g, " ");
+      const seen = new Set<string>();
       res.json(data.filter(d => {
-        if (seen.has(d.id)) return false;
-        seen.add(d.id);
-        return (d.engineerName || "").split(",").map(n => norm(n)).includes(needle);
+       const k = assignmentKey(d);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        const names = (d.engineerName || "").split(",").map(n => norm(n));
+        return names.some(n => n === needle || n.includes(needle) || needle.includes(n));
       }));
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
