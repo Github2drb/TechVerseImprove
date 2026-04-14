@@ -1,6 +1,7 @@
 // server/routes.ts — Complete route definitions for DRB TechVerse
 // FIXED: 1) Engineer-specific project filtering (non-admin users)
 //        2) Data not shown issue root cause documented + safe reads
+//        3) Weekly assignments now auto-sync to daily-activities on save/update
 
 import { Router } from "express";
 import type { Server } from "http";
@@ -21,6 +22,7 @@ import {
   readJsonFile,
   writeJsonFile,
 } from "./github";
+import { syncAssignmentToDailyActivities } from "./syncDailyTasks";
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -510,6 +512,8 @@ export function registerRoutes(
       f.assignments.push(a);
       f.lastUpdated = new Date().toISOString();
       await writeJsonFile("weekly-assignments.json", f, "Add assignment");
+      // ✅ Auto-sync: push project as targetTask into daily-activities for every day this week
+      syncAssignmentToDailyActivities(a).catch(err => console.error("Daily sync error:", err));
       res.json(a);
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
@@ -524,6 +528,8 @@ export function registerRoutes(
       f.assignments[i] = { ...f.assignments[i], ...req.body, id: req.params.id };
       f.lastUpdated = new Date().toISOString();
       await writeJsonFile("weekly-assignments.json", f, `Update ${req.params.id}`);
+      // ✅ Auto-sync: re-sync updated assignment to daily-activities
+      syncAssignmentToDailyActivities(f.assignments[i]).catch(err => console.error("Daily sync error:", err));
       res.json(f.assignments[i]);
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
