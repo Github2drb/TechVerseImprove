@@ -67,7 +67,14 @@ function projKey(name: string): string {
   const m = name.trim().match(/^([A-Z0-9]{1,4}-[A-Z0-9]{1,5}-\d{4,6})/i);
   return m ? m[1].toUpperCase() : name.trim().toUpperCase();
 }
-
+function assignmentKey(a: { id?: number; projectName?: string; engineerName?: string; startDate?: string; weekStart?: string }): string {
+  if (typeof a.id === "number" && Number.isFinite(a.id)) return `id:${a.id}`;
+  return [
+    (a.projectName || "").trim().toLowerCase(),
+    (a.engineerName || "").trim().toLowerCase(),
+    a.startDate || a.weekStart || "",
+  ].join("|");
+}
 const STATUS: Record<string,string> = {
   not_started:"Not Started", in_progress:"In Progress",
   completed:"Completed", on_hold:"On Hold", blocked:"Blocked",
@@ -592,22 +599,21 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
 
   // ── STATS ───────────────────────────────────────────────────────────────────
 
-  r.get("/stats", async (_q, res) => {
+   r.get("/projects", async (_q, res) => {
     try {
-      const [pd, cf] = await Promise.all([getProjectData(), readJsonFile<CredFile>("engineers_auth.json")]);
-      const total = pd.length;
-      const completed = pd.filter(p => p.status?.toLowerCase() === "completed").length;
-      res.json({
-        totalProjects: total,
-        activeMembers: (cf?.engineers ?? []).filter(e => e.isActive && e.role !== "admin").length,
-        completionRate: total > 0 ? Math.round(completed / total * 100) : 0,
-        recentActivities: 0,
-      });
+      const data = await getProjectData();
+      const seen = new Set<string>();
+      res.json(data.filter(d => {
+        const k = assignmentKey(d);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      }));
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
   // ── NOTIFICATIONS (in-memory, ephemeral is fine) ────────────────────────────
-
+  
   const notifs: any[] = [];
   r.get("/notifications", (_q, res) => res.json(notifs));
   r.post("/notifications", (req, res) => { const n = { id: `n-${Date.now()}`, ...req.body }; notifs.push(n); res.status(201).json(n); });
