@@ -46,7 +46,12 @@ interface EngConfigFile { engineers: EngConfig[]; lastUpdated: string; }
 function norm(s: string) { return s.trim().replace(/\s*\([^)]*\)\s*/g,"").trim().toLowerCase(); }
 
 function matchEngineer(field: string, loginName: string): boolean {
-  return field.split(",").map(n => norm(n)).some(n => n === norm(loginName));
+  const needle = norm(loginName).replace(/\./g, " ");
+  return field
+    .split(",")
+    .map(n => norm(n))
+    .some(n => n === needle || n.includes(needle) || needle.includes(n));
+}
 }
 
 function isAdmin(req: Request): boolean {
