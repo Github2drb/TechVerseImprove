@@ -611,24 +611,21 @@ export function registerRoutes(
 
   // ── PROJECT NAMES ─────────────────────────────────────────────────────────
 
-  router.get("/project-names", async (_req, res) => {
-    try {
-      const [wf, pd] = await Promise.all([
-        readJsonFile<WeeklyAssignmentsFile>("weekly-assignments.json"),
-        getProjectData(),
-      ]);
-      const seen = new Map<string, string>();
-      const add = (name: string) => {
-        if (!name.trim()) return;
-        const k = extractProjectKey(name);
-        if (!seen.has(k) || name.trim().length > seen.get(k)!.trim().length)
-          seen.set(k, name.trim());
-      };
-      (wf?.assignments ?? []).forEach(a => add(a.projectName));
-      pd.forEach(a => add(a.projectName));
-      res.json(Array.from(seen.values()).sort());
-    } catch (e: any) { res.status(503).json({ error: e.message }); }
-  });
+  router.get("/projects", authMiddleware, async (req: AuthRequest, res) => {
+  const user = req.user;
+
+  let filteredProjects;
+
+  if (user.role === "admin") {
+    filteredProjects = await Project.find();
+  } else {
+    filteredProjects = await Project.find({
+      assignedTo: { $in: [user.id] },
+    });
+  }
+
+  res.json(filteredProjects);
+});
 
   // ── STATS ─────────────────────────────────────────────────────────────────
 
