@@ -15,7 +15,7 @@ const Dashboard = () => {
       // ✅ DO NOT FILTER HERE
       setProjects(data);
     } catch (err) {
-      console.error(err);
+      console.error("Error:", err);
     }
   };
 
@@ -24,11 +24,12 @@ const Dashboard = () => {
       <h2>Projects</h2>
 
       {projects.length === 0 ? (
-        <p>No projects found</p>
+        <p>No projects available</p>
       ) : (
         projects.map((p) => (
           <div key={p._id}>
             <h3>{p.name}</h3>
+            <p>{p.description}</p>
           </div>
         ))
       )}
