@@ -1,11 +1,34 @@
+import { useState } from "react";
 import { createProject } from "../api";
 
-const handleSubmit = async () => {
-  await createProject({
-    name,
-    description,
-    assignedTo, // can be string → api will fix
-  });
+const CreateProject = () => {
+  const [name, setName] = useState("");
+  const [assignedTo, setAssignedTo] = useState("");
 
-  alert("Project created");
+  const handleSubmit = async () => {
+    await createProject({
+      name,
+      assignedTo, // string → converted to array in API
+    });
+
+    alert("Created");
+  };
+
+  return (
+    <div>
+      <input
+        placeholder="Project Name"
+        onChange={(e) => setName(e.target.value)}
+      />
+
+      <input
+        placeholder="Assign User ID"
+        onChange={(e) => setAssignedTo(e.target.value)}
+      />
+
+      <button onClick={handleSubmit}>Create</button>
+    </div>
+  );
 };
+
+export default CreateProject;
