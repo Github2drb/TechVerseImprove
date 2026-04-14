@@ -48,27 +48,20 @@ router.post("/login", async (req, res) => {
 // ==============================
 // ✅ GET PROJECTS (FIXED FILTER)
 // ==============================
-router.get("/projects", authMiddleware, async (req: AuthRequest, res) => {
-  try {
-    const user = req.user;
+router.get("/projects", authMiddleware, async (req, res) => {
+  const user = req.user;
 
-    let projects;
+  let projects;
 
-    if (user.role === "admin") {
-      // ✅ Admin gets ALL projects
-      projects = await Project.find().sort({ createdAt: -1 });
-    } else {
-      // ✅ Engineer gets ONLY assigned projects
-      projects = await Project.find({
-        assignedTo: { $in: [user.id] }, // 🔥 critical fix
-      }).sort({ createdAt: -1 });
-    }
-
-    return res.json(projects);
-  } catch (err) {
-    console.error("FETCH ERROR:", err);
-    return res.status(500).json({ error: "Failed to fetch projects" });
+  if (user.role === "admin") {
+    projects = await Project.find();
+  } else {
+    projects = await Project.find({
+      assignedTo: { $in: [user.id] }, // ✅ FIX
+    });
   }
+
+  res.json(projects);
 });
 
 
