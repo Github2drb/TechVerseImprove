@@ -46,6 +46,13 @@ export const updateProject = async (id, data) => {
 
   return res.json();
 };
+export const getEngineers = async () => {
+  const res = await fetch(`${API_BASE}/engineers`, {
+    headers: getHeaders(),
+  });
+
+  return res.json();
+};
 
 // 🔥 DELETE
 export const deleteProject = async (id) => {
