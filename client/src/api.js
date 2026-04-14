@@ -1,6 +1,5 @@
 const API_BASE = "https://your-render-url.onrender.com/api";
 
-// ✅ Attach token to every request
 const getHeaders = () => {
   const token = localStorage.getItem("token");
 
@@ -10,18 +9,18 @@ const getHeaders = () => {
   };
 };
 
-// ✅ GET PROJECTS
+// 🔥 GET PROJECTS
 export const getProjects = async () => {
   const res = await fetch(`${API_BASE}/projects`, {
     headers: getHeaders(),
   });
 
-  if (!res.ok) throw new Error("Failed to fetch projects");
+  if (!res.ok) throw new Error("Failed");
 
   return res.json();
 };
 
-// ✅ CREATE PROJECT
+// 🔥 CREATE PROJECT
 export const createProject = async (data) => {
   const res = await fetch(`${API_BASE}/projects`, {
     method: "POST",
@@ -30,14 +29,14 @@ export const createProject = async (data) => {
       ...data,
       assignedTo: Array.isArray(data.assignedTo)
         ? data.assignedTo
-        : [data.assignedTo], // 🔥 FIX
+        : [data.assignedTo], // ✅ FIX
     }),
   });
 
   return res.json();
 };
 
-// ✅ UPDATE PROJECT
+// 🔥 UPDATE
 export const updateProject = async (id, data) => {
   const res = await fetch(`${API_BASE}/projects/${id}`, {
     method: "PUT",
@@ -48,7 +47,7 @@ export const updateProject = async (id, data) => {
   return res.json();
 };
 
-// ✅ DELETE PROJECT
+// 🔥 DELETE
 export const deleteProject = async (id) => {
   await fetch(`${API_BASE}/projects/${id}`, {
     method: "DELETE",
