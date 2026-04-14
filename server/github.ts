@@ -1,92 +1,94 @@
-// server/github.ts — Persistent GitHub-backed storage for DRB TechVerse
-// CRITICAL FIX: writeJsonFile NOW commits to GitHub via API (not local disk)
-// This is the ONLY persistent storage on Render free tier.
+// server/github.ts
+// All data I/O goes through this file.
+// Reads AND writes JSON files from the Controls_Team_Tracker GitHub repository.
+// This is the ONLY storage that persists across Render restarts.
+
+import fetch from "node-fetch";
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
-const GITHUB_OWNER = process.env.GITHUB_OWNER || "Github2drb";
-const GITHUB_REPO  = process.env.GITHUB_REPO  || "TechVerseImprove";
-const GITHUB_BRANCH = process.env.GITHUB_BRANCH || "main";
-const DATA_FOLDER = process.env.GITHUB_DATA_FOLDER || "data"; // folder in repo where JSON files live
+const GITHUB_OWNER = "Github2drb";
+const DATA_REPO    = "Controls_Team_Tracker";
+const BRANCH       = "main";
 
-const BASE_URL = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${DATA_FOLDER}`;
+if (!GITHUB_TOKEN) {
+  console.error("[github.ts] WARNING: GITHUB_TOKEN not set. All data calls will return empty.");
+}
 
-function headers() {
+function ghHeaders(): Record<string, string> {
   return {
     Authorization: `token ${GITHUB_TOKEN}`,
     "Content-Type": "application/json",
     Accept: "application/vnd.github.v3+json",
-    "User-Agent": "DRBTechVerse-Server",
+    "User-Agent": "DRBTechVerse/1.0",
   };
 }
 
-// ── In-memory cache so we don't hammer GitHub API on every request ──────────
-const cache = new Map<string, { data: any; etag?: string; ts: number }>();
-const CACHE_TTL_MS = 30_000; // 30 seconds
+function fileUrl(filename: string): string {
+  return `https://api.github.com/repos/${GITHUB_OWNER}/${DATA_REPO}/contents/${filename}`;
+}
 
-// ── readJsonFile ─────────────────────────────────────────────────────────────
+// 30-second read cache so we don't hammer the GitHub API
+const _cache = new Map<string, { data: any; ts: number; sha: string }>();
+const TTL_MS = 30_000;
+
+// ─── readJsonFile ─────────────────────────────────────────────────────────────
 export async function readJsonFile<T>(filename: string): Promise<T | null> {
-  const now = Date.now();
-  const cached = cache.get(filename);
-  if (cached && now - cached.ts < CACHE_TTL_MS) return cached.data as T;
+  const hit = _cache.get(filename);
+  if (hit && Date.now() - hit.ts < TTL_MS) return hit.data as T;
 
   try {
-    const url = `${BASE_URL}/${filename}`;
-    const res = await fetch(url, { headers: headers() });
+    const res = await fetch(fileUrl(filename), { headers: ghHeaders() });
+    if (res.status === 404) return null;
     if (!res.ok) {
-      if (res.status === 404) return null;
-      throw new Error(`GitHub read failed: ${res.status} ${await res.text()}`);
+      console.error(`[readJsonFile] ${filename} HTTP ${res.status}`);
+      return null;
     }
-    const meta = await res.json();
-    const content = Buffer.from(meta.content, "base64").toString("utf-8");
-    const data = JSON.parse(content) as T;
-    cache.set(filename, { data, etag: res.headers.get("etag") ?? undefined, ts: now });
+    const meta: any = await res.json();
+    const text = Buffer.from(meta.content, "base64").toString("utf-8");
+    const data = JSON.parse(text) as T;
+    _cache.set(filename, { data, ts: Date.now(), sha: meta.sha });
     return data;
-  } catch (e: any) {
-    console.error(`[readJsonFile] ${filename}:`, e.message);
+  } catch (err: any) {
+    console.error(`[readJsonFile] ${filename}:`, err.message);
     return null;
   }
 }
 
-// ── writeJsonFile ────────────────────────────────────────────────────────────
-// MUST commit to GitHub — this is the ONLY persistent write on Render.
-export async function writeJsonFile(filename: string, data: any, commitMessage: string): Promise<void> {
-  try {
-    const url = `${BASE_URL}/${filename}`;
-    // Get current SHA (required for update)
-    const getRes = await fetch(url, { headers: headers() });
-    let sha: string | undefined;
-    if (getRes.ok) {
-      const meta = await getRes.json();
-      sha = meta.sha;
-    } else if (getRes.status !== 404) {
-      throw new Error(`GitHub SHA fetch failed: ${getRes.status}`);
-    }
-
-    const content = Buffer.from(JSON.stringify(data, null, 2)).toString("base64");
-    const body: any = { message: commitMessage, content, branch: GITHUB_BRANCH };
-    if (sha) body.sha = sha;
-
-    const putRes = await fetch(url, {
-      method: "PUT",
-      headers: headers(),
-      body: JSON.stringify(body),
-    });
-
-    if (!putRes.ok) {
-      const err = await putRes.text();
-      throw new Error(`GitHub write failed: ${putRes.status} ${err}`);
-    }
-
-    // Invalidate cache so next read gets fresh data
-    cache.delete(filename);
-    console.log(`[writeJsonFile] Committed ${filename}: ${commitMessage}`);
-  } catch (e: any) {
-    console.error(`[writeJsonFile] ${filename}:`, e.message);
-    throw e;
+// ─── writeJsonFile ────────────────────────────────────────────────────────────
+// Commits directly to Controls_Team_Tracker via GitHub Contents API.
+// This is the ONLY way data persists — Render's filesystem is ephemeral.
+export async function writeJsonFile(filename: string, data: any, message: string): Promise<void> {
+  // Get current SHA (needed to update existing file)
+  let sha: string | undefined = _cache.get(filename)?.sha;
+  if (!sha) {
+    try {
+      const r = await fetch(fileUrl(filename), { headers: ghHeaders() });
+      if (r.ok) { const m: any = await r.json(); sha = m.sha; }
+    } catch {}
   }
+
+  const content = Buffer.from(JSON.stringify(data, null, 2)).toString("base64");
+  const body: any = { message, content, branch: BRANCH };
+  if (sha) body.sha = sha;
+
+  const res = await fetch(fileUrl(filename), {
+    method: "PUT",
+    headers: ghHeaders(),
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const txt = await res.text();
+    console.error(`[writeJsonFile] ${filename} HTTP ${res.status}:`, txt);
+    throw new Error(`GitHub write failed: ${res.status}`);
+  }
+
+  const resp: any = await res.json();
+  // Invalidate + refresh cache with new sha
+  _cache.set(filename, { data, ts: Date.now(), sha: resp.content?.sha ?? sha ?? "" });
 }
 
-// ─── Data shape interfaces ───────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface ProjectAssignment {
   id: number;
@@ -115,128 +117,113 @@ export interface ProjectMaster {
   projectName: string;
 }
 
-interface DataFile { assignments: ProjectAssignment[]; }
-interface ActivitiesFile { projectActivities: ProjectActivity[]; }
-interface EngineerMasterFile { engineers: EngineerMaster[]; }
-interface ProjectMasterFile { projects: ProjectMaster[]; }
+// ─── Project assignments (data.json) ─────────────────────────────────────────
 
-// ─── getProjectData ──────────────────────────────────────────────────────────
 export async function getProjectData(): Promise<ProjectAssignment[]> {
-  const f = await readJsonFile<DataFile>("data.json");
+  const f = await readJsonFile<{ assignments: ProjectAssignment[] }>("data.json");
   return f?.assignments ?? [];
 }
 
-// ─── saveProjectAssignment ───────────────────────────────────────────────────
 export async function saveProjectAssignment(
-  assignment: Omit<ProjectAssignment, "id">
+  body: Omit<ProjectAssignment, "id">
 ): Promise<{ success: boolean; message: string; id?: number }> {
-  const f = (await readJsonFile<DataFile>("data.json")) ?? { assignments: [] };
+  const f = (await readJsonFile<{ assignments: ProjectAssignment[] }>("data.json")) ?? { assignments: [] };
   const id = Date.now();
-  f.assignments.push({ ...assignment, id });
-  await writeJsonFile("data.json", f, `Add assignment: ${assignment.projectName}`);
-  return { success: true, message: "Assignment saved", id };
+  f.assignments.push({ ...body, id });
+  await writeJsonFile("data.json", f, `Add project: ${body.projectName}`);
+  return { success: true, message: "Saved", id };
 }
 
-// ─── updateProjectAssignment ──────────────────────────────────────────────────
 export async function updateProjectAssignment(
-  id: number,
-  updates: Partial<ProjectAssignment>
+  id: number, updates: Partial<ProjectAssignment>
 ): Promise<{ success: boolean; message: string }> {
-  const f = await readJsonFile<DataFile>("data.json");
-  if (!f) return { success: false, message: "Data file not found" };
+  const f = await readJsonFile<{ assignments: ProjectAssignment[] }>("data.json");
+  if (!f) return { success: false, message: "File not found" };
   const i = f.assignments.findIndex(a => a.id === id);
   if (i === -1) return { success: false, message: "Assignment not found" };
   f.assignments[i] = { ...f.assignments[i], ...updates, id };
-  await writeJsonFile("data.json", f, `Update assignment ${id}`);
-  return { success: true, message: "Assignment updated" };
+  await writeJsonFile("data.json", f, `Update project ${id}`);
+  return { success: true, message: "Updated" };
 }
 
-// ─── deleteProjectAssignment ──────────────────────────────────────────────────
 export async function deleteProjectAssignment(
   id: number
 ): Promise<{ success: boolean; message: string }> {
-  const f = await readJsonFile<DataFile>("data.json");
-  if (!f) return { success: false, message: "Data file not found" };
-  const before = f.assignments.length;
+  const f = await readJsonFile<{ assignments: ProjectAssignment[] }>("data.json");
+  if (!f) return { success: false, message: "File not found" };
+  const prev = f.assignments.length;
   f.assignments = f.assignments.filter(a => a.id !== id);
-  if (f.assignments.length === before) return { success: false, message: "Assignment not found" };
-  await writeJsonFile("data.json", f, `Delete assignment ${id}`);
-  return { success: true, message: "Assignment deleted" };
+  if (f.assignments.length === prev) return { success: false, message: "Not found" };
+  await writeJsonFile("data.json", f, `Delete project ${id}`);
+  return { success: true, message: "Deleted" };
 }
 
-// ─── getProjectActivities ─────────────────────────────────────────────────────
+// ─── Project activities (project-activities.json) ────────────────────────────
+
 export async function getProjectActivities(): Promise<ProjectActivity[]> {
-  const f = await readJsonFile<ActivitiesFile>("project-activities.json");
+  const f = await readJsonFile<{ projectActivities: ProjectActivity[] }>("project-activities.json");
   return f?.projectActivities ?? [];
 }
 
-// ─── upsertProjectActivity ────────────────────────────────────────────────────
 export async function upsertProjectActivity(
-  projectName: string,
-  date: string,
-  activity: string,
-  status?: string
+  projectName: string, date: string, activity: string, status?: string
 ): Promise<{ success: boolean; message: string }> {
-  const f = (await readJsonFile<ActivitiesFile>("project-activities.json")) ?? { projectActivities: [] };
-  const k = projectName.trim().toLowerCase();
-  let entry = f.projectActivities.find(p => p.projectName.trim().toLowerCase() === k);
+  const f = (await readJsonFile<{ projectActivities: ProjectActivity[] }>("project-activities.json"))
+    ?? { projectActivities: [] };
+  const key = projectName.trim().toLowerCase();
+  let entry = f.projectActivities.find(p => p.projectName.trim().toLowerCase() === key);
   if (!entry) {
-    entry = { projectName: projectName.trim(), currentStatus: status || "In Progress", activities: {} };
+    entry = { projectName: projectName.trim(), currentStatus: status ?? "In Progress", activities: {} };
     f.projectActivities.push(entry);
   }
   if (status) entry.currentStatus = status;
   if (date && activity) entry.activities[date] = activity;
   await writeJsonFile("project-activities.json", f, `Activity: ${projectName}`);
-  return { success: true, message: "Activity saved" };
+  return { success: true, message: "Saved" };
 }
 
-// ─── getAnalyticsSummary ──────────────────────────────────────────────────────
+// ─── Analytics summary ────────────────────────────────────────────────────────
+
 export async function getAnalyticsSummary() {
-  const [assignments, activities] = await Promise.all([
-    getProjectData(),
-    getProjectActivities(),
-  ]);
+  const [assignments, activities] = await Promise.all([getProjectData(), getProjectActivities()]);
 
-  const total = assignments.length;
+  const total     = assignments.length;
   const completed = assignments.filter(a => a.status?.toLowerCase() === "completed").length;
-  const inProgress = assignments.filter(a => a.status?.toLowerCase() === "in progress").length;
-  const onHold = assignments.filter(a => a.status?.toLowerCase() === "on hold").length;
+  const active    = assignments.filter(a => a.status?.toLowerCase() === "in progress").length;
+  const onHold    = assignments.filter(a => a.status?.toLowerCase() === "on hold").length;
 
-  // Engineer workload
-  const engineerMap = new Map<string, { total: number; completed: number }>();
+  const engMap = new Map<string, { total: number; done: number }>();
   for (const a of assignments) {
-    const names = (a.engineerName || "").split(",").map(n => n.trim()).filter(Boolean);
-    for (const name of names) {
-      if (!engineerMap.has(name)) engineerMap.set(name, { total: 0, completed: 0 });
-      const e = engineerMap.get(name)!;
+    for (const name of (a.engineerName || "").split(",").map(n => n.trim()).filter(Boolean)) {
+      if (!engMap.has(name)) engMap.set(name, { total: 0, done: 0 });
+      const e = engMap.get(name)!;
       e.total++;
-      if (a.status?.toLowerCase() === "completed") e.completed++;
+      if (a.status?.toLowerCase() === "completed") e.done++;
     }
   }
 
-  const engineerStats = Array.from(engineerMap.entries()).map(([name, s]) => ({
-    name,
-    totalProjects: s.total,
-    completedProjects: s.completed,
-    activeProjects: s.total - s.completed,
-    completionRate: s.total > 0 ? Math.round((s.completed / s.total) * 100) : 0,
-  })).sort((a, b) => b.totalProjects - a.totalProjects);
+  const engineerStats = Array.from(engMap.entries())
+    .map(([name, s]) => ({
+      name,
+      totalProjects: s.total,
+      completedProjects: s.done,
+      activeProjects: s.total - s.done,
+      completionRate: s.total > 0 ? Math.round(s.done / s.total * 100) : 0,
+    }))
+    .sort((a, b) => b.totalProjects - a.totalProjects);
 
-  // Project status distribution
   const statusDistribution = [
-    { status: "Completed", count: completed },
-    { status: "In Progress", count: inProgress },
-    { status: "On Hold", count: onHold },
-    { status: "Other", count: total - completed - inProgress - onHold },
+    { status: "Completed",   count: completed },
+    { status: "In Progress", count: active },
+    { status: "On Hold",     count: onHold },
+    { status: "Other",       count: Math.max(0, total - completed - active - onHold) },
   ].filter(s => s.count > 0);
 
-  // Recent activities (last 10)
-  const recentActivities: Array<{ projectName: string; date: string; activity: string; status: string }> = [];
+  const recentActivities: any[] = [];
   for (const pa of activities) {
-    const entries = Object.entries(pa.activities || {})
-      .map(([date, activity]) => ({ projectName: pa.projectName, date, activity, status: pa.currentStatus }))
-      .sort((a, b) => b.date.localeCompare(a.date));
-    recentActivities.push(...entries);
+    for (const [date, act] of Object.entries(pa.activities ?? {})) {
+      recentActivities.push({ projectName: pa.projectName, date, activity: act, status: pa.currentStatus });
+    }
   }
   recentActivities.sort((a, b) => b.date.localeCompare(a.date));
 
@@ -244,55 +231,54 @@ export async function getAnalyticsSummary() {
     summary: {
       totalProjects: total,
       completedProjects: completed,
-      inProgressProjects: inProgress,
+      inProgressProjects: active,
       onHoldProjects: onHold,
-      completionRate: total > 0 ? Math.round((completed / total) * 100) : 0,
+      completionRate: total > 0 ? Math.round(completed / total * 100) : 0,
     },
-    engineerStats,           // always an array, never undefined
-    statusDistribution,      // always an array, never undefined
-    recentActivities: recentActivities.slice(0, 10),  // always an array
-    projectActivities: activities,  // always an array
+    engineerStats,       // always []
+    statusDistribution,  // always []
+    recentActivities: recentActivities.slice(0, 20),
+    projectActivities: activities,
   };
 }
 
-// ─── getEngineersMasterList ───────────────────────────────────────────────────
+// ─── Engineers master list (engineers_master_list.json) ───────────────────────
+
 export async function getEngineersMasterList(): Promise<EngineerMaster[]> {
-  const f = await readJsonFile<EngineerMasterFile>("engineers_master_list.json");
+  const f = await readJsonFile<{ engineers: EngineerMaster[] }>("engineers_master_list.json");
   return f?.engineers ?? [];
 }
 
-// ─── getProjectMasterList ─────────────────────────────────────────────────────
+// ─── Projects master list (projects_master_list.json) ────────────────────────
+
 export async function getProjectMasterList(): Promise<ProjectMaster[]> {
-  const f = await readJsonFile<ProjectMasterFile>("projects_master_list.json");
+  const f = await readJsonFile<{ projects: ProjectMaster[] }>("projects_master_list.json");
   return f?.projects ?? [];
 }
 
-// ─── addProjectToMasterList ───────────────────────────────────────────────────
 export async function addProjectToMasterList(
-  projectNumber: string,
-  projectName: string
+  projectNumber: string, projectName: string
 ): Promise<{ success: boolean; message: string }> {
-  const f = (await readJsonFile<ProjectMasterFile>("projects_master_list.json")) ?? { projects: [] };
-  if (f.projects.find(p => p.projectNumber.trim().toLowerCase() === projectNumber.trim().toLowerCase()))
-    return { success: false, message: "Project already in master list" };
+  const f = (await readJsonFile<{ projects: ProjectMaster[] }>("projects_master_list.json")) ?? { projects: [] };
+  if (f.projects.find(p => p.projectNumber.toLowerCase() === projectNumber.toLowerCase()))
+    return { success: false, message: "Already exists" };
   f.projects.push({ projectNumber, projectName });
   await writeJsonFile("projects_master_list.json", f, `Add project: ${projectNumber}`);
-  return { success: true, message: "Project added to master list" };
+  return { success: true, message: "Added" };
 }
 
-// ─── validateEngineerName ─────────────────────────────────────────────────────
-export function validateEngineerName(name: string, masterList: EngineerMaster[]): boolean {
-  const n = name.trim().replace(/\s*\([^)]*\)\s*/g, "").trim().toLowerCase();
-  return masterList.some(e => e.name.replace(/\s*\([^)]*\)\s*/g, "").trim().toLowerCase() === n);
-}
+// ─── Validation helpers ───────────────────────────────────────────────────────
 
-// ─── validateProjectNumber ────────────────────────────────────────────────────
-export function validateProjectNumber(pn: string, masterList: ProjectMaster[]): boolean {
-  return masterList.some(p => p.projectNumber.trim().toLowerCase() === pn.trim().toLowerCase());
-}
-
-// ─── extractProjectNumber ─────────────────────────────────────────────────────
 export function extractProjectNumber(name: string): string | null {
   const m = name.trim().match(/^([A-Z0-9]{1,4}-[A-Z0-9]{1,5}-\d{4,6})/i);
   return m ? m[1].toUpperCase() : null;
+}
+
+export function validateEngineerName(name: string, list: EngineerMaster[]): boolean {
+  const clean = (s: string) => s.trim().replace(/\s*\([^)]*\)\s*/g, "").trim().toLowerCase();
+  return list.some(e => clean(e.name) === clean(name));
+}
+
+export function validateProjectNumber(pn: string, list: ProjectMaster[]): boolean {
+  return list.some(p => p.projectNumber.toLowerCase() === pn.toLowerCase());
 }
