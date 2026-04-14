@@ -11,16 +11,17 @@ const DATA_REPO    = "Controls_Team_Tracker";
 const BRANCH       = "main";
 
 if (!GITHUB_TOKEN) {
-  console.error("[github.ts] WARNING: GITHUB_TOKEN not set. All data calls will return empty.");
+  console.error("[github.ts] WARNING: GITHUB_TOKEN not set. Read calls will attempt public access; write calls will fail.");
 }
 
-function ghHeaders(): Record<string, string> {
-  return {
-    Authorization: `token ${GITHUB_TOKEN}`,
+function ghHeaders(withAuth = true): Record<string, string> {
+  const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/vnd.github.v3+json",
     "User-Agent": "DRBTechVerse/1.0",
   };
+  if (withAuth && GITHUB_TOKEN) headers.Authorization = `token ${GITHUB_TOKEN}`;
+  return headers;
 }
 
 function fileUrl(filename: string): string {
@@ -37,7 +38,12 @@ export async function readJsonFile<T>(filename: string): Promise<T | null> {
   if (hit && Date.now() - hit.ts < TTL_MS) return hit.data as T;
 
   try {
-    const res = await fetch(fileUrl(filename), { headers: ghHeaders() });
+    let res = await fetch(fileUrl(filename), { headers: ghHeaders(true) });
+    // If token is invalid/expired, retry once without auth for public-read repos.
+    if ((res.status === 401 || res.status === 403) && GITHUB_TOKEN) {
+      console.warn(`[readJsonFile] ${filename} auth failed (${res.status}), retrying without token`);
+      res = await fetch(fileUrl(filename), { headers: ghHeaders(false) });
+    }
     if (res.status === 404) return null;
     if (!res.ok) {
       console.error(`[readJsonFile] ${filename} HTTP ${res.status}`);
@@ -58,6 +64,9 @@ export async function readJsonFile<T>(filename: string): Promise<T | null> {
 // Commits directly to Controls_Team_Tracker via GitHub Contents API.
 // This is the ONLY way data persists — Render's filesystem is ephemeral.
 export async function writeJsonFile(filename: string, data: any, message: string): Promise<void> {
+  if (!GITHUB_TOKEN) {
+    throw new Error("GITHUB_TOKEN is required for write operations");
+  }
   // Get current SHA (needed to update existing file)
   let sha: string | undefined = _cache.get(filename)?.sha;
   if (!sha) {
