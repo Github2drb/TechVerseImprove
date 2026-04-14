@@ -1,6 +1,7 @@
 import express from "express";
 import Project from "../models/Project";
-import { authMiddleware, AuthRequest } from "../middleware/auth";
+import User from "../models/User";
+import { authMiddleware } from "../middleware/auth";
 
 const router = express.Router();
 
@@ -115,6 +116,18 @@ router.delete("/projects/:id", authMiddleware, async (req, res) => {
   } catch (err) {
     console.error("DELETE ERROR:", err);
     return res.status(500).json({ error: "Delete failed" });
+  }
+});
+// ✅ GET ALL ENGINEERS
+router.get("/engineers", authMiddleware, async (req, res) => {
+  try {
+    const engineers = await User.find({ role: "engineer" }).select(
+      "_id name email"
+    );
+
+    res.json(engineers);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch engineers" });
   }
 });
 
