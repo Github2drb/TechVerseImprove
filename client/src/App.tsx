@@ -52,7 +52,11 @@ function AuthenticatedApp() {
   
   return <Router />;
 }
+const token = localStorage.getItem("token");
 
+if (!token) {
+  window.location.href = "/login";
+}
 function App() {
   return (
     <ErrorBoundary>
