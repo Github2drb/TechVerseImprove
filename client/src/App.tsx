@@ -1,23 +1,51 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import Login from "./pages/Login";
-import Dashboard from "./pages/Dashboard";
+import { Switch, Route } from "wouter";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { queryClient } from "@/lib/queryClient";
+import { Toaster } from "@/components/ui/toaster";
+import { AuthProvider, useAuth } from "@/components/auth-provider";
+import { ThemeProvider } from "@/components/theme-provider";
+import Login from "@/pages/login";
+import Dashboard from "@/pages/dashboard";
+import TeamProjectTracker from "@/pages/team-project-tracker";
+import ProjectStatus from "@/pages/project-status";
+import SkillMatrix from "@/pages/skill-matrix";
+import Analytics from "@/pages/analytics";
+import EngineerReports from "@/pages/engineer-reports";
+import EngineerManagement from "@/pages/engineer-management";
+import ProjectDetail from "@/pages/project-detail";
+import TeamSheet from "@/pages/team-sheet";
+import NotFound from "@/pages/not-found";
 
-const App = () => {
-  const token = localStorage.getItem("token");
-
+function AppRoutes() {
+  const { isAuthenticated, isLoading } = useAuth();
+  if (isLoading) return <div className="min-h-screen flex items-center justify-center bg-background"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" /></div>;
+  if (!isAuthenticated) return <Login />;
   return (
-    <BrowserRouter>
-      <Routes>
-        {!token ? (
-          <Route path="*" element={<Login />} />
-        ) : (
-          <>
-            <Route path="/dashboard" element={<Dashboard />} />
-          </>
-        )}
-      </Routes>
-    </BrowserRouter>
+    <Switch>
+      <Route path="/" component={Dashboard} />
+      <Route path="/dashboard" component={Dashboard} />
+      <Route path="/project-tracker" component={TeamProjectTracker} />
+      <Route path="/project-status" component={ProjectStatus} />
+      <Route path="/skill-matrix" component={SkillMatrix} />
+      <Route path="/analytics" component={Analytics} />
+      <Route path="/engineer-reports" component={EngineerReports} />
+      <Route path="/engineer-management" component={EngineerManagement} />
+      <Route path="/project/:id" component={ProjectDetail} />
+      <Route path="/teamsheet" component={TeamSheet} />
+      <Route component={NotFound} />
+    </Switch>
   );
-};
+}
 
-export default App;
+export default function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider defaultTheme="light" storageKey="drb-theme">
+        <AuthProvider>
+          <AppRoutes />
+          <Toaster />
+        </AuthProvider>
+      </ThemeProvider>
+    </QueryClientProvider>
+  );
+}
