@@ -79,11 +79,16 @@ export function EngineerDailyTasks({ teamMembers, isLoading }: EngineerDailyTask
     },
   });
 
-  useEffect(() => {
-    if (!configLoading && engineerConfig.length === 0) {
-      initializeConfigMutation.mutate();
-    }
-  }, [configLoading, engineerConfig.length]);
+ const hasInitialized = useRef(false);
+ useEffect(() => {
+  if (!configLoading && engineerConfig.length === 0 && !hasInitialized.current) {
+    hasInitialized.current = true;
+    initializeConfigMutation.mutate();
+  }
+  if (!configLoading && engineerConfig.length > 0) {
+    hasInitialized.current = true;
+  }
+}, [configLoading, engineerConfig.length]);
 
   const getEngineerData = (name: string) => {
     const taskData = engineerTasks.find(
