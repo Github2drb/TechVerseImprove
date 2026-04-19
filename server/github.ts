@@ -129,14 +129,18 @@ export interface ProjectMaster {
 // ─── Project assignments (data.json) ─────────────────────────────────────────
 
 export async function getProjectData(): Promise<ProjectAssignment[]> {
-  const f = await readJsonFile<{ assignments: ProjectAssignment[] }>("data.json");
-  return f?.assignments ?? [];
+  const f = await readJsonFile<any>("data.json");
+  if (!f) return [];
+  // Handle both { data: [] } (old format) and { assignments: [] } (new format)
+  return f.data ?? f.assignments ?? [];
 }
 
 export async function saveProjectAssignment(
   body: Omit<ProjectAssignment, "id">
 ): Promise<{ success: boolean; message: string; id?: number }> {
-  const f = (await readJsonFile<{ assignments: ProjectAssignment[] }>("data.json")) ?? { assignments: [] };
+  const raw = await readJsonFile<any>("data.json");
+  // Normalise to { assignments: [] } regardless of legacy { data: [] } format
+  const f = raw ? { assignments: raw.data ?? raw.assignments ?? [] } : { assignments: [] };
   const id = Date.now();
   f.assignments.push({ ...body, id });
   await writeJsonFile("data.json", f, `Add project: ${body.projectName}`);

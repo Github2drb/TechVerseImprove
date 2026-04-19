@@ -453,7 +453,48 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
   r.get("/weekly-assignments", async (req, res) => {
     try {
       const f = await readJsonFile<WAFile>("weekly-assignments.json");
-      const all = f?.assignments ?? [];
+      let all = f?.assignments ?? [];
+
+      // Bootstrap: if weekly-assignments.json is empty, auto-populate from data.json
+      if (all.length === 0) {
+        try {
+          const raw = await readJsonFile<any>("data.json");
+          const projects = raw?.data ?? raw?.assignments ?? [];
+          if (projects.length > 0) {
+            const today = new Date().toISOString().split("T")[0];
+            // Get the Monday of current week
+            const d = new Date();
+            d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+            const weekStart = d.toISOString().split("T")[0];
+
+            const bootstrapped: WAFile = {
+              assignments: projects
+                .filter((p: any) => p.status?.toLowerCase() !== "completed")
+                .map((p: any, idx: number) => ({
+                  id: `bootstrap-${idx}-${Date.now()}`,
+                  engineerName: p.engineerName || "",
+                  weekStart,
+                  projectName: p.projectName || "",
+                  resourceLockedFrom: p.startDate || "",
+                  resourceLockedTill: p.endDate || "",
+                  tasks: [],
+                  currentStatus: p.status?.toLowerCase() === "in progress" ? "in_progress" : "not_started",
+                  notes: p.description || "",
+                })),
+              lastUpdated: new Date().toISOString(),
+            };
+
+            // Save bootstrapped data so it persists
+            if (bootstrapped.assignments.length > 0) {
+              writeJsonFile("weekly-assignments.json", bootstrapped, "Bootstrap from data.json").catch(() => {});
+              all = bootstrapped.assignments;
+            }
+          }
+        } catch (bootErr: any) {
+          console.warn("[bootstrap weekly-assignments]", bootErr.message);
+        }
+      }
+
       const ws = req.query.weekStart as string | undefined;
       res.json(ws ? all.filter(a => a.weekStart === ws) : all);
     } catch (e: any) { res.status(500).json({ error: e.message }); }
@@ -495,6 +536,17 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
+  r.post("/weekly-assignments/save-all", async (req, res) => {
+    try {
+      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+      const f = await readJsonFile<WAFile>("weekly-assignments.json");
+      const { weekStart } = req.body;
+      const assignments = weekStart ? (f?.assignments ?? []).filter(a => a.weekStart === weekStart) : (f?.assignments ?? []);
+      res.json({ success: true, count: assignments.length, assignments });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+
   r.patch("/weekly-assignments/:id", async (req, res) => {
     try {
       if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
@@ -522,16 +574,6 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
       f.lastUpdated = new Date().toISOString();
       await writeJsonFile("weekly-assignments.json", f, `Delete ${req.params.id}`);
       res.json({ message: "Deleted" });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.post("/weekly-assignments/save-all", async (req, res) => {
-    try {
-      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const f = await readJsonFile<WAFile>("weekly-assignments.json");
-      const { weekStart } = req.body;
-      const assignments = weekStart ? (f?.assignments ?? []).filter(a => a.weekStart === weekStart) : (f?.assignments ?? []);
-      res.json({ success: true, count: assignments.length, assignments });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
@@ -842,6 +884,32 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
     const token = !!process.env.GITHUB_TOKEN;
     const data = await readJsonFile("data.json").catch(() => null);
     res.json({ ok: true, githubToken: token, dataReadable: data !== null, ts: new Date().toISOString() });
+  });
+
+  // ── DEBUG — quick health check accessible from browser ─────────────────────
+  r.get("/debug/status", async (_req, res) => {
+    try {
+      const [wa, da, creds, master] = await Promise.all([
+        readJsonFile<any>("weekly-assignments.json"),
+        readJsonFile<any>("daily-activities.json"),
+        readJsonFile<any>("engineers_auth.json"),
+        readJsonFile<any>("engineers_master_list.json"),
+      ]);
+      const dataJson = await readJsonFile<any>("data.json");
+      res.json({
+        ok: true,
+        "weekly-assignments": wa ? `${(wa.assignments ?? []).length} records` : "FILE MISSING",
+        "daily-activities": da ? `${(da.engineerDailyData ?? []).length} records` : "FILE MISSING",
+        "engineers_auth": creds ? `${(creds.engineers ?? []).length} engineers` : "FILE MISSING",
+        "engineers_master_list": master ? `${(master.engineers ?? []).length} engineers` : "FILE MISSING",
+        "data.json": dataJson
+          ? `${(dataJson.data ?? dataJson.assignments ?? []).length} assignments (key: ${dataJson.data ? "data" : "assignments"})`
+          : "FILE MISSING",
+        GITHUB_TOKEN: process.env.GITHUB_TOKEN ? "SET" : "NOT SET — all reads will fail!",
+      });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
   });
 
   app.use("/api", r);
