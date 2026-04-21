@@ -240,42 +240,77 @@ export async function getAnalyticsSummary() {
   }
   recentActivities.sort((a, b) => b.date.localeCompare(a.date));
 
+  // Build projectsByStatus with colors to match AnalyticsData schema
   const STATUS_COLORS: Record<string, string> = {
     "Completed":   "#22c55e",
     "In Progress": "#3b82f6",
     "On Hold":     "#f59e0b",
     "Other":       "#94a3b8",
   };
+  const projectsByStatus = statusDistribution.map(s => ({
+    status: s.status,
+    count: s.count,
+    color: STATUS_COLORS[s.status] ?? "#94a3b8",
+  }));
 
-  return {
-    summary: {
-      totalProjects: total,
-      completedProjects: completed,
-      inProgressProjects: active,
-      onHoldProjects: onHold,
-      completionRate: total > 0 ? Math.round(completed / total * 100) : 0,
-    },
-    engineerStats,
-    statusDistribution,
-    recentActivities: recentActivities.slice(0, 20),
-    projectActivities: activities,
-    projectsByStatus: statusDistribution.map(s => ({
-      status: s.status,
-      count: s.count,
-      color: STATUS_COLORS[s.status] ?? "#94a3b8",
-    })),
-    projectsByPriority: [] as { priority: string; count: number; color: string }[],
-    teamPerformance: engineerStats.map(e => ({
-      name: e.name,
-      tasksCompleted: e.completedProjects,
-      department: "Controls",
-    })),
-    monthlyProgress: [] as { month: string; completed: number; inProgress: number; pending: number }[],
-    completionTrend: [] as { week: string; rate: number }[],
+  // projectsByPriority: derive from assignments if priority field exists, else empty
+  const priorityMap = new Map<string, number>();
+  for (const a of assignments) {
+    const p = (a as any).priority || "Normal";
+    priorityMap.set(p, (priorityMap.get(p) ?? 0) + 1);
+  }
+  const PRIORITY_COLORS: Record<string, string> = {
+    High: "#ef4444", Medium: "#f59e0b", Normal: "#3b82f6", Low: "#94a3b8",
   };
-}
+  const projectsByPriority = Array.from(priorityMap.entries()).map(([priority, count]) => ({
+    priority,
+    count,
+    color: PRIORITY_COLORS[priority] ?? "#94a3b8",
+  }));
+
+  // teamPerformance from engineerStats
+  const teamPerformance = engineerStats.map(e => ({
+    name: e.name,
+    tasksCompleted: e.completedProjects,
+    department: "Controls",
+  }));
+
+  // monthlyProgress: last 6 months from recentActivities
+  const monthMap = new Map<string, { completed: number; inProgress: number; pending: number }>();
+  const now = new Date();
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const key = d.toLocaleString("default", { month: "short", year: "2-digit" });
+    monthMap.set(key, { completed: 0, inProgress: 0, pending: 0 });
+  }
+  for (const a of assignments) {
+    const end = (a as any).endDate ? new Date((a as any).endDate) : null;
+    if (!end) continue;
+    const key = end.toLocaleString("default", { month: "short", year: "2-digit" });
+    if (!monthMap.has(key)) continue;
+    const m = monthMap.get(key)!;
+    const s = a.status?.toLowerCase() ?? "";
+    if (s === "completed") m.completed++;
+    else if (s === "in progress") m.inProgress++;
+    else m.pending++;
+  }
+  const monthlyProgress = Array.from(monthMap.entries()).map(([month, v]) => ({ month, ...v }));
+
+  // completionTrend: last 8 weeks
+  const weekMap = new Map<string, { done: number; total: number }>();
+  for (let i = 7; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i * 7);
+    const key = `W${Math.ceil(d.getDate() / 7)} ${d.toLocaleString("default", { month: "short" })}`;
+    weekMap.set(key, { done: 0, total: 0 });
+  }
+  const completionTrend = Array.from(weekMap.entries()).map(([week, v]) => ({
+    week,
+    rate: v.total > 0 ? Math.round(v.done / v.total * 100) : 0,
+  }));
 
   return {
+    // Legacy fields (kept for any other consumers)
     summary: {
       totalProjects: total,
       completedProjects: completed,
@@ -287,19 +322,12 @@ export async function getAnalyticsSummary() {
     statusDistribution,
     recentActivities: recentActivities.slice(0, 20),
     projectActivities: activities,
-    projectsByStatus: statusDistribution.map(s => ({
-      status: s.status,
-      count: s.count,
-      color: STATUS_COLORS[s.status] ?? "#94a3b8",
-    })),
-    projectsByPriority: [] as { priority: string; count: number; color: string }[],
-    teamPerformance: engineerStats.map(e => ({
-      name: e.name,
-      tasksCompleted: e.completedProjects,
-      department: "Controls",
-    })),
-    monthlyProgress: [] as { month: string; completed: number; inProgress: number; pending: number }[],
-    completionTrend: [] as { week: string; rate: number }[],
+    // Fields required by AnalyticsData schema (frontend analytics.tsx)
+    projectsByStatus,
+    projectsByPriority,
+    teamPerformance,
+    monthlyProgress,
+    completionTrend,
   };
 }
 
