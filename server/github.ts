@@ -240,21 +240,40 @@ export async function getAnalyticsSummary() {
   }
   recentActivities.sort((a, b) => b.date.localeCompare(a.date));
 
-  return {
-  // existing fields
-  summary: { totalProjects: total, completedProjects: completed, inProgressProjects: active, onHoldProjects: onHold, completionRate: total > 0 ? Math.round(completed / total * 100) : 0 },
-  engineerStats,
-  statusDistribution,
-  recentActivities: recentActivities.slice(0, 20),
-  projectActivities: activities,
-
-  // NEW — fields expected by analytics.tsx
   const STATUS_COLORS: Record<string, string> = {
     "Completed":   "#22c55e",
     "In Progress": "#3b82f6",
     "On Hold":     "#f59e0b",
     "Other":       "#94a3b8",
   };
+
+  return {
+    summary: {
+      totalProjects: total,
+      completedProjects: completed,
+      inProgressProjects: active,
+      onHoldProjects: onHold,
+      completionRate: total > 0 ? Math.round(completed / total * 100) : 0,
+    },
+    engineerStats,
+    statusDistribution,
+    recentActivities: recentActivities.slice(0, 20),
+    projectActivities: activities,
+    projectsByStatus: statusDistribution.map(s => ({
+      status: s.status,
+      count: s.count,
+      color: STATUS_COLORS[s.status] ?? "#94a3b8",
+    })),
+    projectsByPriority: [] as { priority: string; count: number; color: string }[],
+    teamPerformance: engineerStats.map(e => ({
+      name: e.name,
+      tasksCompleted: e.completedProjects,
+      department: "Controls",
+    })),
+    monthlyProgress: [] as { month: string; completed: number; inProgress: number; pending: number }[],
+    completionTrend: [] as { week: string; rate: number }[],
+  };
+}
 
   return {
     summary: {
