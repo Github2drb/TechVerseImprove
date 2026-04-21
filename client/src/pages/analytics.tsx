@@ -258,7 +258,7 @@ export default function Analytics() {
                           dataKey="count"
                           nameKey="status"
                           label={({ status, count }) => `${status}: ${count}`}
-                        
+                        >
                           {(analytics?.projectsByStatus ?? []).map((entry, index) => (
                             <Cell key={`cell-${index}`} fill={entry.color} />
                           ))}
