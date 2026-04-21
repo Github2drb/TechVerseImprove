@@ -241,12 +241,24 @@ export async function getAnalyticsSummary() {
   recentActivities.sort((a, b) => b.date.localeCompare(a.date));
 
   return {
-    summary: { ... },
-    engineerStats,
-    statusDistribution,
-    recentActivities: recentActivities.slice(0, 20),
-    projectActivities: activities,
-  };
+  // existing fields
+  summary: { totalProjects: total, completedProjects: completed, inProgressProjects: active, onHoldProjects: onHold, completionRate: total > 0 ? Math.round(completed / total * 100) : 0 },
+  engineerStats,
+  statusDistribution,
+  recentActivities: recentActivities.slice(0, 20),
+  projectActivities: activities,
+
+  // NEW — fields expected by analytics.tsx
+  projectsByStatus: statusDistribution.map(s => ({
+    status: s.status,
+    count: s.count,
+    color: ({ Completed: "#22c55e", "In Progress": "#3b82f6", "On Hold": "#f59e0b", Other: "#94a3b8" } as any)[s.status] ?? "#94a3b8",
+  })),
+  projectsByPriority: [],   // no priority field in current data model
+  teamPerformance: engineerStats.map(e => ({ name: e.name, tasksCompleted: e.completedProjects, department: "Controls" })),
+  monthlyProgress: [],
+  completionTrend: [],
+};
 
 // ─── Engineers master list (engineers_master_list.json) ───────────────────────
 
