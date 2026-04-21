@@ -128,20 +128,20 @@ export default function ProjectStatus() {
     if (!user?.name) return [];
     
     const userName = user.name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase();
-    return assignments
-      .filter(a => {
-        // Split the engineer name by comma to support multiple engineers per project
-        const engineerNames = a.engineerName.split(',').map(name => 
-          name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase()
-        );
-        
-        // Check if any of the comma-separated names matches the logged-in user
-        return engineerNames.some(engName => 
-          engName === userName || 
-          engName.includes(userName) || 
-          userName.includes(engName)
-        );
-      })
+    const userFirstName = userName.split(' ')[0];
+
+    .filter(a => {
+      const engineerNames = a.engineerName.split(',').map(name =>
+        name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase()
+      );
+      return engineerNames.some(engName =>
+        engName === userName ||
+        engName.includes(userName) ||
+        userName.includes(engName) ||
+        engName.startsWith(userFirstName) ||
+        userFirstName.length > 3 && engName.includes(userFirstName)
+      );
+    })
       .map(a => a.projectName.toLowerCase());
   }, [assignments, user?.name, isAdmin]);
 
