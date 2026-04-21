@@ -381,21 +381,21 @@ export default function TeamProjectTracker() {
     
     // Match engineer name (case-insensitive, ignoring company suffix in parentheses)
     const userName = user.name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase();
-// Also try first name only for partial matching
-const userFirstName = userName.split(' ')[0];
+    // Also try first name only for partial matching
+    const userFirstName = userName.split(' ')[0];
 
-return activeAssignments.filter(a => {
-  const engineerNames = a.engineerName.split(',').map(name =>
-    name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase()
-  );
-  return engineerNames.some(engName =>
-    engName === userName ||
-    engName.includes(userName) ||
-    userName.includes(engName) ||
-    engName.startsWith(userFirstName) ||
-    userFirstName.length > 3 && engName.includes(userFirstName)
-  );
-});
+    return activeAssignments.filter(a => {
+      const engineerNames = a.engineerName.split(',').map(name =>
+        name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase()
+      );
+      return engineerNames.some(engName =>
+      engName === userName ||
+      engName.includes(userName) ||
+      userName.includes(engName) ||
+      engName.startsWith(userFirstName) ||
+      userFirstName.length > 3 && engName.includes(userFirstName)
+      );
+  });
       
       // Check if any of the comma-separated names matches the logged-in user
       return engineerNames.some(engName => 
