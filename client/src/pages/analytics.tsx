@@ -258,8 +258,8 @@ export default function Analytics() {
                           dataKey="count"
                           nameKey="status"
                           label={({ status, count }) => `${status}: ${count}`}
-                        >
-                          {analytics?.projectsByStatus.map(      →   {(analytics?.projectsByStatus ?? []).map(
+                        
+                          {(analytics?.projectsByStatus ?? []).map((entry, index) => (
                             <Cell key={`cell-${index}`} fill={entry.color} />
                           ))}
                         </Pie>
@@ -268,7 +268,7 @@ export default function Analytics() {
                     </ResponsiveContainer>
                   </div>
                   <div className="flex flex-wrap justify-center gap-3 mt-4">
-                    {analytics?.projectsByStatus.map(      →   {(analytics?.projectsByStatus ?? []).map(
+                    {(analytics?.projectsByStatus ?? []).map((item) => (
                       <Badge 
                         key={item.status} 
                         variant="secondary" 
@@ -307,7 +307,7 @@ export default function Analytics() {
                           }}
                         />
                         <Bar dataKey="count" radius={[4, 4, 0, 0]}>
-                          {analytics?.projectsByPriority.map(    →   {(analytics?.projectsByPriority ?? []).map(
+                          {(analytics?.projectsByPriority ?? []).map((entry, index) => (
                             <Cell key={`cell-${index}`} fill={entry.color} />
                           ))}
                         </Bar>
