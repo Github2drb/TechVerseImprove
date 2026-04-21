@@ -15,6 +15,7 @@ import EngineerManagement from "@/pages/engineer-management";
 import ProjectDetail from "@/pages/project-detail";
 import TeamSheet from "@/pages/team-sheet";
 import NotFound from "@/pages/not-found";
+import { ErrorBoundary } from "@/components/error-boundary";
 
 function AppRoutes() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -36,6 +37,14 @@ function AppRoutes() {
     </Switch>
   );
 }
+<ThemeProvider>
+  <ErrorBoundary>        {/* ← ADD THIS */}
+    <AuthProvider>
+      <AppRoutes />
+      <Toaster />
+    </AuthProvider>
+  </ErrorBoundary>
+</ThemeProvider>
 
 export default function App() {
   return (
@@ -48,4 +57,5 @@ export default function App() {
       </ThemeProvider>
     </QueryClientProvider>
   );
+
 }
