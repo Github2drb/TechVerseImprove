@@ -49,13 +49,14 @@ function AppRoutes() {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider defaultTheme="light" storageKey="drb-theme">
-        <AuthProvider>
-          <AppRoutes />
-          <Toaster />
-        </AuthProvider>
+      <ThemeProvider>
+        <ErrorBoundary>
+          <AuthProvider>
+            <AppRoutes />
+            <Toaster />
+          </AuthProvider>
+        </ErrorBoundary>
       </ThemeProvider>
     </QueryClientProvider>
   );
-
 }
