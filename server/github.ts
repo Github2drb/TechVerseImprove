@@ -241,19 +241,12 @@ export async function getAnalyticsSummary() {
   recentActivities.sort((a, b) => b.date.localeCompare(a.date));
 
   return {
-    summary: {
-      totalProjects: total,
-      completedProjects: completed,
-      inProgressProjects: active,
-      onHoldProjects: onHold,
-      completionRate: total > 0 ? Math.round(completed / total * 100) : 0,
-    },
-    engineerStats,       // always []
-    statusDistribution,  // always []
+    summary: { ... },
+    engineerStats,
+    statusDistribution,
     recentActivities: recentActivities.slice(0, 20),
     projectActivities: activities,
   };
-}
 
 // ─── Engineers master list (engineers_master_list.json) ───────────────────────
 
