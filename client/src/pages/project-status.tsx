@@ -130,7 +130,7 @@ export default function ProjectStatus() {
     const userName = user.name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase();
     const userFirstName = userName.split(' ')[0];
 
-    .filter(a => {
+    return assignments.filter(a => {
       const engineerNames = a.engineerName.split(',').map(name =>
         name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase()
       );
@@ -139,7 +139,7 @@ export default function ProjectStatus() {
         engName.includes(userName) ||
         userName.includes(engName) ||
         engName.startsWith(userFirstName) ||
-        userFirstName.length > 3 && engName.includes(userFirstName)
+        (userFirstName.length > 3 && engName.includes(userFirstName))
       );
     })
       .map(a => a.projectName.toLowerCase());
