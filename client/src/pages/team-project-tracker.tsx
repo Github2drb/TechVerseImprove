@@ -371,32 +371,10 @@ export default function TeamProjectTracker() {
     });
   };
 
-  // Filter assignments based on logged-in engineer (non-admins only see their projects)
-  // Supports comma-separated engineer names (e.g., "Veeresh,Ramkumar,Deekshitha")
+  // All users (admin and non-admin) see all active assignments — non-admins just can't edit
   const userFilteredAssignments = useMemo(() => {
-    // Always exclude completed assignments from tracker view
-    const activeAssignments = assignments.filter(a => a.currentStatus !== "completed");
-    if (isAdmin) return activeAssignments;
-    if (!user?.name) return [];
-
-    // Match engineer name (case-insensitive, ignoring company suffix in parentheses)
-    const userName = user.name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase();
-    // Also try first name only for partial matching
-    const userFirstName = userName.split(' ')[0];
-
-    return activeAssignments.filter(a => {
-      const engineerNames = a.engineerName.split(',').map(name =>
-        name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase()
-      );
-      return engineerNames.some(engName =>
-        engName === userName ||
-        engName.includes(userName) ||
-        userName.includes(engName) ||
-        engName.startsWith(userFirstName) ||
-        (userFirstName.length > 3 && engName.includes(userFirstName))
-      );
-    });
-  }, [assignments, user?.name, isAdmin]);
+    return assignments.filter(a => a.currentStatus !== "completed");
+  }, [assignments]);
 
   const projectRows = useMemo(() => groupByProject(userFilteredAssignments), [userFilteredAssignments]);
 
@@ -449,12 +427,10 @@ export default function TeamProjectTracker() {
           </Link>
           <div className="flex-1">
             <h1 className="text-2xl font-bold" data-testid="text-page-title">
-              {isAdmin ? "All Engineers - Week-wise Project Overview" : `My Projects - ${user?.name || 'Engineer'}`}
+              All Engineers - Week-wise Project Overview
             </h1>
             <p className="text-muted-foreground text-sm">
-              {isAdmin 
-                ? "View all projects with resource allocation details" 
-                : "View projects assigned to you with resource allocation details"}
+              View all projects with resource allocation details
             </p>
           </div>
           {isAdmin && (

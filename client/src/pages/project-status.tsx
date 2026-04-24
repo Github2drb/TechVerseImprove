@@ -103,47 +103,24 @@ export default function ProjectStatus() {
     staleTime: 30000,
   });
 
-  // Get assignments from data.json to determine which projects belong to the logged-in engineer
+  // Get assignments from data.json
   const { data: dataJsonAssignments = [] } = useQuery<Array<{ engineerName: string; projectName: string; status: string }>>({
     queryKey: ["/api/projects"],
-    enabled: !isAdmin, // Only fetch for non-admins
     staleTime: 0,
     refetchOnMount: true,
   });
 
-  // Also get weekly-assignments for additional coverage
+  // Also get weekly-assignments
   const { data: weeklyAssignments = [] } = useQuery<Array<{ engineerName: string; projectName: string }>>({
     queryKey: ["/api/weekly-assignments"],
-    enabled: !isAdmin,
     staleTime: 0,
   });
 
   // Merge both sources
   const assignments = [...dataJsonAssignments, ...weeklyAssignments];
 
-  // Get project names assigned to the current user
-  // Supports comma-separated engineer names (e.g., "Veeresh,Ramkumar,Deekshitha")
-  const userProjectNames = useMemo(() => {
-    if (isAdmin) return null; // null means show all
-    if (!user?.name) return [];
-    
-    const userName = user.name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase();
-    const userFirstName = userName.split(' ')[0];
-
-    return assignments.filter(a => {
-      const engineerNames = a.engineerName.split(',').map(name =>
-        name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase()
-      );
-      return engineerNames.some(engName =>
-        engName === userName ||
-        engName.includes(userName) ||
-        userName.includes(engName) ||
-        engName.startsWith(userFirstName) ||
-        (userFirstName.length > 3 && engName.includes(userFirstName))
-      );
-    })
-      .map(a => a.projectName.toLowerCase());
-  }, [assignments, user?.name, isAdmin]);
+  // All users see all non-completed projects — non-admins just cannot edit
+  const userProjectNames = null; // null = show all
 
   // Filter out completed projects and optionally filter by user's projects
   const projects = useMemo(() => {
@@ -388,15 +365,7 @@ export default function ProjectStatus() {
           </div>
         </div>
 
-        {!isAdmin && (
-          <Card className="bg-blue-500/10 border-blue-500/20">
-            <CardContent className="p-4">
-              <p className="text-sm text-blue-700 dark:text-blue-300">
-                You can edit activities for your assigned projects. Only admins can change project status.
-              </p>
-            </CardContent>
-          </Card>
-        )}
+
 
         <Card>
           <CardHeader className="pb-2">
