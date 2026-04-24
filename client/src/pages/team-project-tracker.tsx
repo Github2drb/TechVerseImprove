@@ -378,7 +378,7 @@ export default function TeamProjectTracker() {
     const activeAssignments = assignments.filter(a => a.currentStatus !== "completed");
     if (isAdmin) return activeAssignments;
     if (!user?.name) return [];
-    
+
     // Match engineer name (case-insensitive, ignoring company suffix in parentheses)
     const userName = user.name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase();
     // Also try first name only for partial matching
@@ -389,19 +389,11 @@ export default function TeamProjectTracker() {
         name.replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase()
       );
       return engineerNames.some(engName =>
-      engName === userName ||
-      engName.includes(userName) ||
-      userName.includes(engName) ||
-      engName.startsWith(userFirstName) ||
-      userFirstName.length > 3 && engName.includes(userFirstName)
-      );
-  });
-      
-      // Check if any of the comma-separated names matches the logged-in user
-      return engineerNames.some(engName => 
-        engName === userName || 
-        engName.includes(userName) || 
-        userName.includes(engName)
+        engName === userName ||
+        engName.includes(userName) ||
+        userName.includes(engName) ||
+        engName.startsWith(userFirstName) ||
+        (userFirstName.length > 3 && engName.includes(userFirstName))
       );
     });
   }, [assignments, user?.name, isAdmin]);
