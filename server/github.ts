@@ -89,6 +89,7 @@ export async function writeJsonFile(filename: string, data: any, message: string
   if (!res.ok) {
     const txt = await res.text();
     console.error(`[writeJsonFile] ${filename} HTTP ${res.status}:`, txt);
+    _cache.delete(filename); // Clear stale SHA so next attempt fetches fresh
     throw new Error(`GitHub write failed: ${res.status}`);
   }
 
