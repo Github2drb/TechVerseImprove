@@ -17,6 +17,7 @@ import TeamSheet from "@/pages/team-sheet";
 import NotFound from "@/pages/not-found";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import DailyReport from "@/pages/daily-report";
 
 function AppRoutes() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -34,6 +35,9 @@ function AppRoutes() {
       <Route path="/engineer-management" component={EngineerManagement} />
       <Route path="/project/:id" component={ProjectDetail} />
       <Route path="/teamsheet" component={TeamSheet} />
+      <Route path="/teamsheet" component={TeamSheet} />
+      <Route path="/daily-report" component={DailyReport} />  {/* ← ADD */}
+
       <Route component={NotFound} />
     </Switch>
   );
