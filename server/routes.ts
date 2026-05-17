@@ -126,6 +126,90 @@ async function syncToDailyActivities(a: WeeklyAssignment): Promise<void> {
 
 export function registerRoutes(httpServer: Server, app: ReturnType<typeof import("express")["default"]>) {
   const r = Router();
+  app.get("/api/knowledge/isa-101", async (_req, res) => {
+  try {
+    const metadata = {
+      id: "isa-101-hmi-standards",
+      title: "ISA-101 HMI Standards",
+      category: "Controls Engineering",
+      tags: ["ISA-101", "HMI", "SCADA", "Alarm Management", "Process Control"],
+      description:
+        "Complete guide to ISA-101 HMI standards covering color schemes, screen hierarchies, faceplate behaviors, and alarm lifecycle management.",
+      publishedAt: "2025-05-16",
+      readTimeMinutes: 15,
+      sections: [
+        "Screen Hierarchy (L1–L4)",
+        "Color Scheme (Gray-background philosophy)",
+        "Faceplate Design (§6.4 zone rules)",
+        "Alarm Lifecycle (ISA-18.2 integration)",
+      ],
+    };
+    res.json({ success: true, data: metadata });
+  } catch (err) {
+    res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+// Track when an engineer reads the article (POST /api/knowledge/isa-101/read)
+app.post("/api/knowledge/isa-101/read", async (req, res) => {
+  try {
+    const { engineerName } = req.body as { engineerName?: string };
+    if (!engineerName) {
+      return res.status(400).json({ success: false, error: "engineerName required" });
+    }
+
+    // Load existing read-log from GitHub storage
+    const FILE = "knowledge-articles.json";
+    let articles: Record<string, { readers: Array<{ name: string; readAt: string }> }> = {};
+
+    try {
+      const raw = await storage.getFile(FILE); // uses your existing GitHubStorage helper
+      articles = JSON.parse(raw);
+    } catch {
+      // File doesn't exist yet — start fresh
+    }
+
+    if (!articles["isa-101-hmi-standards"]) {
+      articles["isa-101-hmi-standards"] = { readers: [] };
+    }
+
+    const already = articles["isa-101-hmi-standards"].readers.find(
+      (r) => r.name === engineerName
+    );
+    if (!already) {
+      articles["isa-101-hmi-standards"].readers.push({
+        name: engineerName,
+        readAt: new Date().toISOString(),
+      });
+      await storage.saveFile(FILE, JSON.stringify(articles, null, 2));
+    }
+
+    res.json({
+      success: true,
+      readersCount: articles["isa-101-hmi-standards"].readers.length,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+// GET readers list (admin only)
+app.get("/api/knowledge/isa-101/readers", async (_req, res) => {
+  try {
+    const FILE = "knowledge-articles.json";
+    let articles: Record<string, { readers: Array<{ name: string; readAt: string }> }> = {};
+    try {
+      const raw = await storage.getFile(FILE);
+      articles = JSON.parse(raw);
+    } catch {
+      // no reads yet
+    }
+    const readers = articles["isa-101-hmi-standards"]?.readers ?? [];
+    res.json({ success: true, data: readers });
+  } catch (err) {
+    res.status(500).json({ success: false, error: String(err) });
+  }
+});
 
   r.use((_q, res, next) => {
     res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
