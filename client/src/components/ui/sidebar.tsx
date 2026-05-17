@@ -42,6 +42,12 @@ type SidebarContextProps = {
   toggleSidebar: () => void
 }
 
+{
+  label: "ISA-101 HMI Standards",
+  href: "/knowledge/isa-101-hmi-standards",
+  icon: <BookOpen className="w-4 h-4" />,
+  category: "Knowledge Base",  // or whatever grouping you use
+}
 const SidebarContext = React.createContext<SidebarContextProps | null>(null)
 
 function useSidebar() {
