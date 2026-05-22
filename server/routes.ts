@@ -607,17 +607,71 @@ app.get("/api/knowledge/isa-101/readers", async (_req, res) => {
   r.patch("/weekly-assignments/:id", async (req, res) => {
     try {
       if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const f = await readJsonFile<WAFile>("weekly-assignments.json");
-      if (!f) return res.status(404).json({ message: "Not found" });
-      const i = f.assignments.findIndex(a => a.id === req.params.id);
-      if (i === -1) return res.status(404).json({ message: "Assignment not found" });
-      f.assignments[i] = { ...f.assignments[i], ...req.body, id: req.params.id };
+
+      // Read current file. readJsonFile returns null ONLY on a true 404.
+      // Any transient read failure throws -> caught below -> 503 (data is NOT touched).
+      const f = (await readJsonFile<WAFile>("weekly-assignments.json"))
+        ?? { assignments: [], lastUpdated: "" };
+
+      const reqId = req.params.id;
+      let i = f.assignments.findIndex(a => a.id === reqId);
+
+      // ── UPSERT LOGIC — this is the permanent fix for "Failed to update" ──────
+      // The tracker table merges weekly-assignments.json with synthetic rows
+      // built from data.json (ids like "datajson-3-<project>"). Editing such a
+      // row used to PATCH an id that does not exist in weekly-assignments.json
+      // -> 404 -> "Failed to update assignment".
+      // Now: if the id is not found, we try to match by projectName, and if
+      // still not found we CREATE a real assignment. The edit always succeeds.
+      if (i === -1) {
+        const incomingProject = (req.body?.projectName || "").trim().toLowerCase();
+        if (incomingProject) {
+          i = f.assignments.findIndex(
+            a => a.projectName.trim().toLowerCase() === incomingProject
+          );
+        }
+      }
+
+      if (i === -1) {
+        // No matching record anywhere — create a brand-new real assignment.
+        const newId = (reqId && !reqId.startsWith("datajson-") && !reqId.startsWith("bootstrap-"))
+          ? reqId
+          : `wa-${Date.now()}`;
+        const created: WeeklyAssignment = {
+          id: newId,
+          engineerName: req.body?.engineerName || "",
+          weekStart: req.body?.weekStart || new Date().toISOString().split("T")[0],
+          projectName: req.body?.projectName || "",
+          projectTargetDate: req.body?.projectTargetDate,
+          resourceLockedFrom: req.body?.resourceLockedFrom,
+          resourceLockedTill: req.body?.resourceLockedTill,
+          internalTarget: req.body?.internalTarget,
+          customerTarget: req.body?.customerTarget,
+          tasks: Array.isArray(req.body?.tasks) ? req.body.tasks : [],
+          currentStatus: req.body?.currentStatus || "not_started",
+          notes: req.body?.notes || "",
+          constraint: req.body?.constraint || "",
+        };
+        f.assignments.push(created);
+        f.lastUpdated = new Date().toISOString();
+        await writeJsonFile("weekly-assignments.json", f,
+          `Create assignment via edit: ${created.projectName}`);
+        syncToDailyActivities(created).catch(err => console.error("syncToDailyActivities:", err));
+        return res.json(created);
+      }
+
+      // Normal update of an existing real assignment.
+      f.assignments[i] = { ...f.assignments[i], ...req.body, id: f.assignments[i].id };
       f.lastUpdated = new Date().toISOString();
-      await writeJsonFile("weekly-assignments.json", f, `Update assignment ${req.params.id}`);
-      // Re-sync updated assignment
+      await writeJsonFile("weekly-assignments.json", f, `Update assignment ${f.assignments[i].id}`);
       syncToDailyActivities(f.assignments[i]).catch(err => console.error("syncToDailyActivities:", err));
       res.json(f.assignments[i]);
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
+    } catch (e: any) {
+      // Read/write against GitHub failed — return 503 so the client shows a
+      // retryable error and KEEPS the data on screen (never goes empty).
+      console.error("[PATCH /weekly-assignments]", e.message);
+      res.status(503).json({ error: e.message || "Update temporarily unavailable — please retry" });
+    }
   });
 
   r.delete("/weekly-assignments/:id", async (req, res) => {
@@ -626,12 +680,35 @@ app.get("/api/knowledge/isa-101/readers", async (_req, res) => {
       const f = await readJsonFile<WAFile>("weekly-assignments.json");
       if (!f) return res.status(404).json({ message: "Not found" });
       const prev = f.assignments.length;
+
+      // Synthetic rows (datajson-* / bootstrap-*) carry the project name after
+      // the prefix. If the literal id is not present, fall back to deleting by
+      // project name so a deletion request never silently 404s.
       f.assignments = f.assignments.filter(a => a.id !== req.params.id);
-      if (f.assignments.length === prev) return res.status(404).json({ message: "Not found" });
+      if (f.assignments.length === prev) {
+        const projFromSynthetic = req.params.id
+          .replace(/^datajson-\d+-/, "")
+          .replace(/^bootstrap-\d+-/, "")
+          .trim()
+          .toLowerCase();
+        if (projFromSynthetic) {
+          f.assignments = f.assignments.filter(
+            a => a.projectName.trim().toLowerCase() !== projFromSynthetic
+          );
+        }
+      }
+      if (f.assignments.length === prev) {
+        // Nothing matched — it was a synthetic-only row not present in
+        // weekly-assignments.json. Treat as success (idempotent delete).
+        return res.json({ message: "Nothing to delete (synthetic row)" });
+      }
       f.lastUpdated = new Date().toISOString();
       await writeJsonFile("weekly-assignments.json", f, `Delete ${req.params.id}`);
       res.json({ message: "Deleted" });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
+    } catch (e: any) {
+      console.error("[DELETE /weekly-assignments]", e.message);
+      res.status(503).json({ error: e.message || "Delete temporarily unavailable — please retry" });
+    }
   });
 
   r.post("/weekly-assignments/:id/tasks", async (req, res) => {
