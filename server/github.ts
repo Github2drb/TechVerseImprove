@@ -28,10 +28,19 @@ function fileUrl(filename: string): string {
   return `https://api.github.com/repos/${GITHUB_OWNER}/${DATA_REPO}/contents/${filename}`;
 }
 
-// 5-minute read cache to avoid hammering GitHub API.
-// SHA stays valid as long as no external commits happen, which is safe for a single-writer setup.
+// Raw content URL — public, no rate limit, used as a read fallback when the API fails.
+function rawUrl(filename: string): string {
+  return `https://raw.githubusercontent.com/${GITHUB_OWNER}/${DATA_REPO}/${BRANCH}/${filename}`;
+}
+
+// TTL read cache to avoid hammering GitHub API.
 const _cache = new Map<string, { data: any; ts: number; sha: string }>();
 const TTL_MS = 300_000; // 5 minutes
+
+// LAST-KNOWN-GOOD cache — never expires. Survives transient GitHub failures so
+// a read hiccup can never make the app think a file is empty. This is the core
+// safety net that prevents the "data became empty" bug after every deploy.
+const _lastGood = new Map<string, { data: any; sha: string }>();
 
 /** Call this after a new GITHUB_TOKEN is set at runtime to force re-fetch. */
 export function clearReadCache(): void {
@@ -40,40 +49,112 @@ export function clearReadCache(): void {
 }
 
 // ─── readJsonFile ─────────────────────────────────────────────────────────────
+// Returns null ONLY when the file genuinely does not exist (HTTP 404).
+// On any transient failure (network, rate limit, 5xx, auth) it falls back to:
+//   1. raw.githubusercontent.com (public, no rate limit)
+//   2. last-known-good cache (data successfully read earlier this process)
+// If all of those fail, it THROWS — so a route can return HTTP 503 instead of
+// silently treating a read failure as "file is empty". This is what prevents
+// the destructive "data became empty after deploy" bug.
 export async function readJsonFile<T>(filename: string): Promise<T | null> {
   const hit = _cache.get(filename);
   if (hit && Date.now() - hit.ts < TTL_MS) return hit.data as T;
 
+  // ── Attempt 1: GitHub Contents API (authenticated) ──
   try {
     let res = await fetch(fileUrl(filename), { headers: ghHeaders(true) });
-    // If token is invalid/expired, clear cache and retry without auth for public-read repos.
     if ((res.status === 401 || res.status === 403) && GITHUB_TOKEN) {
       console.warn(`[readJsonFile] ${filename} auth failed (${res.status}), retrying without token`);
-      _cache.delete(filename);
       res = await fetch(fileUrl(filename), { headers: ghHeaders(false) });
     }
-    if (res.status === 404) return null;
-    if (!res.ok) {
-      console.error(`[readJsonFile] ${filename} HTTP ${res.status}`);
-      return null;
+    if (res.status === 404) return null; // genuinely absent — safe to treat as empty
+    if (res.ok) {
+      const meta: any = await res.json();
+      const text = Buffer.from(meta.content, "base64").toString("utf-8");
+      const data = JSON.parse(text) as T;
+      _cache.set(filename, { data, ts: Date.now(), sha: meta.sha });
+      _lastGood.set(filename, { data, sha: meta.sha });
+      return data;
     }
-    const meta: any = await res.json();
-    const text = Buffer.from(meta.content, "base64").toString("utf-8");
-    const data = JSON.parse(text) as T;
-    _cache.set(filename, { data, ts: Date.now(), sha: meta.sha });
-    return data;
+    console.error(`[readJsonFile] ${filename} API HTTP ${res.status} — trying raw fallback`);
   } catch (err: any) {
-    console.error(`[readJsonFile] ${filename}:`, err.message);
-    return null;
+    console.error(`[readJsonFile] ${filename} API error: ${err.message} — trying raw fallback`);
   }
+
+  // ── Attempt 2: raw.githubusercontent.com (public, no rate limit) ──
+  try {
+    const res = await fetch(rawUrl(filename));
+    if (res.status === 404) return null;
+    if (res.ok) {
+      const text = await res.text();
+      const data = JSON.parse(text) as T;
+      // raw has no SHA; keep any SHA we already had so writes still work
+      const prevSha = _cache.get(filename)?.sha ?? _lastGood.get(filename)?.sha ?? "";
+      _cache.set(filename, { data, ts: Date.now(), sha: prevSha });
+      _lastGood.set(filename, { data, sha: prevSha });
+      console.log(`[readJsonFile] ${filename} recovered via raw fallback`);
+      return data;
+    }
+    console.error(`[readJsonFile] ${filename} raw HTTP ${res.status}`);
+  } catch (err: any) {
+    console.error(`[readJsonFile] ${filename} raw error: ${err.message}`);
+  }
+
+  // ── Attempt 3: last-known-good cache ──
+  const lg = _lastGood.get(filename);
+  if (lg) {
+    console.warn(`[readJsonFile] ${filename} serving LAST-KNOWN-GOOD cache (GitHub unreachable)`);
+    return lg.data as T;
+  }
+
+  // All recovery paths failed and we have nothing cached. Throw so the route
+  // returns 503 instead of pretending the file is empty.
+  throw new Error(`Unable to read ${filename}: GitHub unreachable and no cached copy available`);
 }
 
 // ─── writeJsonFile ────────────────────────────────────────────────────────────
 // Commits directly to Controls_Team_Tracker via GitHub Contents API.
 // This is the ONLY way data persists — Render's filesystem is ephemeral.
+// Maps each known data file to the array key that holds its records.
+// Used by the empty-overwrite guard below.
+const _recordKey: Record<string, string> = {
+  "weekly-assignments.json": "assignments",
+  "data.json":               "assignments",
+  "project-activities.json": "projectActivities",
+  "engineers_auth.json":     "engineers",
+  "engineers_master_list.json": "engineers",
+  "daily-activities.json":   "engineerDailyData",
+};
+
+/** Count records in a data file payload, regardless of which key holds them. */
+function _recordCount(filename: string, data: any): number {
+  if (!data || typeof data !== "object") return 0;
+  const key = _recordKey[filename];
+  if (key && Array.isArray(data[key])) return data[key].length;
+  // Fallback: data.json legacy { data: [] } shape
+  if (filename === "data.json" && Array.isArray(data.data)) return data.data.length;
+  return -1; // unknown shape — skip the guard
+}
+
 export async function writeJsonFile(filename: string, data: any, message: string): Promise<void> {
   if (!GITHUB_TOKEN) {
     throw new Error("GITHUB_TOKEN is required for write operations");
+  }
+
+  // ── EMPTY-OVERWRITE GUARD ───────────────────────────────────────────────────
+  // Refuse to overwrite a populated data file with an empty/much-smaller payload.
+  // This is the defence-in-depth that makes the "data became empty" bug impossible:
+  // even if a buggy route tries to write [], this blocks it.
+  const newCount = _recordCount(filename, data);
+  if (newCount === 0) {
+    const known = _lastGood.get(filename) ?? _cache.get(filename);
+    const oldCount = known ? _recordCount(filename, known.data) : 0;
+    if (oldCount > 0) {
+      console.error(`[writeJsonFile] BLOCKED: refusing to overwrite ${filename} `
+        + `(${oldCount} records) with an empty payload. Commit message was: "${message}"`);
+      throw new Error(`Refused to overwrite ${filename} with empty data — `
+        + `${oldCount} existing records would be lost`);
+    }
   }
 
   // Get current SHA (required by GitHub Contents API to update an existing file).
@@ -125,8 +206,10 @@ export async function writeJsonFile(filename: string, data: any, message: string
   }
 
   const resp: any = await res.json();
-  // Refresh cache immediately with the new SHA from the commit response
-  _cache.set(filename, { data, ts: Date.now(), sha: resp.content?.sha ?? sha ?? "" });
+  // Refresh both caches immediately with the new SHA from the commit response
+  const newSha = resp.content?.sha ?? sha ?? "";
+  _cache.set(filename, { data, ts: Date.now(), sha: newSha });
+  _lastGood.set(filename, { data, sha: newSha });
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────

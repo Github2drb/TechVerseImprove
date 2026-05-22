@@ -540,52 +540,21 @@ app.get("/api/knowledge/isa-101/readers", async (_req, res) => {
 
   r.get("/weekly-assignments", async (req, res) => {
     try {
+      // readJsonFile THROWS on a genuine read failure (caught below -> 503).
+      // It returns null only when the file truly does not exist (404).
+      // The destructive auto-bootstrap that used to overwrite this file on a
+      // transient read failure has been REMOVED — it was the root cause of the
+      // "all data became empty after deploy" bug.
       const f = await readJsonFile<WAFile>("weekly-assignments.json");
-      let all = f?.assignments ?? [];
-
-      // Bootstrap: if weekly-assignments.json is empty, auto-populate from data.json
-      if (all.length === 0) {
-        try {
-          const raw = await readJsonFile<any>("data.json");
-          const projects = raw?.data ?? raw?.assignments ?? [];
-          if (projects.length > 0) {
-            const today = new Date().toISOString().split("T")[0];
-            // Get the Monday of current week
-            const d = new Date();
-            d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-            const weekStart = d.toISOString().split("T")[0];
-
-            const bootstrapped: WAFile = {
-              assignments: projects
-                .filter((p: any) => p.status?.toLowerCase() !== "completed")
-                .map((p: any, idx: number) => ({
-                  id: `bootstrap-${idx}-${Date.now()}`,
-                  engineerName: p.engineerName || "",
-                  weekStart,
-                  projectName: p.projectName || "",
-                  resourceLockedFrom: p.startDate || "",
-                  resourceLockedTill: p.endDate || "",
-                  tasks: [],
-                  currentStatus: p.status?.toLowerCase() === "in progress" ? "in_progress" : "not_started",
-                  notes: p.description || "",
-                })),
-              lastUpdated: new Date().toISOString(),
-            };
-
-            // Save bootstrapped data so it persists
-            if (bootstrapped.assignments.length > 0) {
-              writeJsonFile("weekly-assignments.json", bootstrapped, "Bootstrap from data.json").catch(() => {});
-              all = bootstrapped.assignments;
-            }
-          }
-        } catch (bootErr: any) {
-          console.warn("[bootstrap weekly-assignments]", bootErr.message);
-        }
-      }
-
+      const all = f?.assignments ?? [];
       const ws = req.query.weekStart as string | undefined;
       res.json(ws ? all.filter(a => a.weekStart === ws) : all);
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
+    } catch (e: any) {
+      // 503 (not 200 with []) so the client shows an error and KEEPS old data,
+      // instead of rendering an empty screen.
+      console.error("[GET /weekly-assignments]", e.message);
+      res.status(503).json({ error: "Data source temporarily unavailable. Please retry." });
+    }
   });
 
   // Engineer-specific weekly assignments (non-admin users)
