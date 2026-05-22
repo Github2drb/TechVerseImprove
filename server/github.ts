@@ -28,9 +28,10 @@ function fileUrl(filename: string): string {
   return `https://api.github.com/repos/${GITHUB_OWNER}/${DATA_REPO}/contents/${filename}`;
 }
 
-// 60-second read cache so we don't hammer the GitHub API
+// 5-minute read cache to avoid hammering GitHub API.
+// SHA stays valid as long as no external commits happen, which is safe for a single-writer setup.
 const _cache = new Map<string, { data: any; ts: number; sha: string }>();
-const TTL_MS = 60_000;
+const TTL_MS = 300_000; // 5 minutes
 
 /** Call this after a new GITHUB_TOKEN is set at runtime to force re-fetch. */
 export function clearReadCache(): void {
@@ -74,13 +75,29 @@ export async function writeJsonFile(filename: string, data: any, message: string
   if (!GITHUB_TOKEN) {
     throw new Error("GITHUB_TOKEN is required for write operations");
   }
-  // Get current SHA (needed to update existing file)
+
+  // Get current SHA (required by GitHub Contents API to update an existing file).
+  // Priority: in-memory cache → fresh authenticated fetch → fallback unauthenticated fetch.
   let sha: string | undefined = _cache.get(filename)?.sha;
   if (!sha) {
     try {
-      const r = await fetch(fileUrl(filename), { headers: ghHeaders() });
-      if (r.ok) { const m: any = await r.json(); sha = m.sha; }
-    } catch {}
+      let shaRes = await fetch(fileUrl(filename), { headers: ghHeaders(true) });
+      // If auth fails (expired/invalid token), retry without token (public repo read)
+      if ((shaRes.status === 401 || shaRes.status === 403) && GITHUB_TOKEN) {
+        console.warn(`[writeJsonFile] SHA fetch auth failed (${shaRes.status}) for ${filename}, retrying without token`);
+        shaRes = await fetch(fileUrl(filename), { headers: ghHeaders(false) });
+      }
+      if (shaRes.ok) {
+        const m: any = await shaRes.json();
+        sha = m.sha;
+      } else if (shaRes.status === 404) {
+        sha = undefined; // New file — no SHA needed
+      } else {
+        console.warn(`[writeJsonFile] Could not get SHA for ${filename}: HTTP ${shaRes.status}. Will attempt without.`);
+      }
+    } catch (e: any) {
+      console.warn(`[writeJsonFile] SHA fetch error for ${filename}:`, e.message);
+    }
   }
 
   const content = Buffer.from(JSON.stringify(data, null, 2)).toString("base64");
@@ -96,12 +113,19 @@ export async function writeJsonFile(filename: string, data: any, message: string
   if (!res.ok) {
     const txt = await res.text();
     console.error(`[writeJsonFile] ${filename} HTTP ${res.status}:`, txt);
-    _cache.delete(filename); // Clear stale SHA so next attempt fetches fresh
+    _cache.delete(filename); // Always clear stale SHA on failure
+
+    if (res.status === 422) {
+      throw new Error(`GitHub write conflict for ${filename} — SHA mismatch, please retry`);
+    }
+    if (res.status === 401 || res.status === 403) {
+      throw new Error("GitHub token invalid or expired — update GITHUB_TOKEN in Render env vars");
+    }
     throw new Error(`GitHub write failed: ${res.status}`);
   }
 
   const resp: any = await res.json();
-  // Invalidate + refresh cache with new sha
+  // Refresh cache immediately with the new SHA from the commit response
   _cache.set(filename, { data, ts: Date.now(), sha: resp.content?.sha ?? sha ?? "" });
 }
 
