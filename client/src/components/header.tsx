@@ -3,6 +3,7 @@ import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "./theme-toggle";
 import { NotificationBell } from "./notification-bell";
 import { UserMenu } from "./user-menu";
+import { Link } from "wouter";
 
 interface HeaderProps {
   searchQuery: string;

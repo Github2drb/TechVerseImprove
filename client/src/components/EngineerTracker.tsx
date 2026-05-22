@@ -1,5 +1,11 @@
 import { useState, useEffect, useRef } from "react";
 
+// ── Types ─────────────────────────────────────────────────────────────────────
+interface Engineer { id: string; name: string; initials?: string; }
+interface LeaveCode { code: string; label: string; color: string; bg: string; }
+interface PopupState { engId: string; day: number; x: number; y: number; }
+type AttendanceMap = Record<string, Record<number, string>>;
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const ENGINEERS_URL =
@@ -30,24 +36,24 @@ function today() {
   return { year: d.getFullYear(), month: d.getMonth(), day: d.getDate() };
 }
 
-function daysInMonth(year, month) {
+function daysInMonth(year: number, month: number): number {
   return new Date(year, month + 1, 0).getDate();
 }
 
-function dayLabel(year, month, d) {
+function dayLabel(year: number, month: number, d: number): string {
   return ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"][new Date(year, month, d).getDay()];
 }
 
-function isWeekend(year, month, d) {
+function isWeekend(year: number, month: number, d: number): boolean {
   const day = new Date(year, month, d).getDay();
   return day === 0 || day === 6;
 }
 
-function monthName(month) {
+function monthName(month: number): string {
   return new Date(2000, month).toLocaleString("default", { month: "long" });
 }
 
-function leaveInfo(code) {
+function leaveInfo(code: string): LeaveCode | null {
   return LEAVE_CODES.find((l) => l.code === code) || null;
 }
 
@@ -57,26 +63,26 @@ export default function EngineerTracker() {
   const { year, month, day: todayDay } = today();
   const totalDays = daysInMonth(year, month);
 
-  const [engineers, setEngineers] = useState([]);
-  const [siteList, setSiteList]   = useState(FALLBACK_SITES);
-  const [loading, setLoading]     = useState(true);
-  const [error, setError]         = useState(null);
+  const [engineers, setEngineers] = useState<Engineer[]>([]);
+  const [siteList, setSiteList]   = useState<string[]>(FALLBACK_SITES);
+  const [loading, setLoading]     = useState<boolean>(true);
+  const [error, setError]         = useState<string | null>(null);
 
   // attendance[engId][day] = site name or leave code
-  const [attendance, setAttendance] = useState({});
+  const [attendance, setAttendance] = useState<AttendanceMap>({});
 
   // Admin mode toggle
-  const [adminMode, setAdminMode]   = useState(false);
-  const [adminPass, setAdminPass]   = useState("");
-  const [showPassDlg, setShowPassDlg] = useState(false);
+  const [adminMode, setAdminMode]   = useState<boolean>(false);
+  const [adminPass, setAdminPass]   = useState<string>("");
+  const [showPassDlg, setShowPassDlg] = useState<boolean>(false);
   const ADMIN_PASSWORD = "drb2024"; // change as needed
 
   // Popup state for site selection
-  const [popup, setPopup]           = useState(null); // { engId, day, x, y }
-  const popupRef                    = useRef(null);
+  const [popup, setPopup]           = useState<PopupState | null>(null);
+  const popupRef                    = useRef<HTMLDivElement>(null);
 
   // Admin: add new site
-  const [newSiteName, setNewSiteName] = useState("");
+  const [newSiteName, setNewSiteName] = useState<string>("");
 
   // ── Data fetch ──────────────────────────────────────────────────────────────
 
@@ -107,8 +113,8 @@ export default function EngineerTracker() {
         setSiteList(sites);
 
         // Init attendance: weekends blank, weekdays → DEFAULT_SITE
-        const init = {};
-        engs.forEach((eng) => {
+        const init: AttendanceMap = {};
+        engs.forEach((eng: Engineer) => {
           init[eng.id] = {};
           for (let d = 1; d <= totalDays; d++) {
             init[eng.id][d] = isWeekend(year, month, d) ? "" : DEFAULT_SITE;
@@ -117,7 +123,7 @@ export default function EngineerTracker() {
         setAttendance(init);
         setLoading(false);
       } catch (e) {
-        setError(e.message);
+        setError((e as Error).message);
         setLoading(false);
       }
     })();
@@ -125,8 +131,8 @@ export default function EngineerTracker() {
 
   // Close popup on outside click
   useEffect(() => {
-    const handler = (e) => {
-      if (popupRef.current && !popupRef.current.contains(e.target)) {
+    const handler = (e: MouseEvent) => {
+      if (popupRef.current && !popupRef.current.contains(e.target as Node)) {
         setPopup(null);
       }
     };
@@ -136,13 +142,13 @@ export default function EngineerTracker() {
 
   // ── Actions ─────────────────────────────────────────────────────────────────
 
-  const openPopup = (engId, day, e) => {
+  const openPopup = (engId: string, day: number, e: React.MouseEvent<HTMLElement>) => {
     if (!adminMode) return;
     const rect = e.currentTarget.getBoundingClientRect();
     setPopup({ engId, day, x: rect.left, y: rect.bottom + window.scrollY + 4 });
   };
 
-  const assignSite = (engId, day, value) => {
+  const assignSite = (engId: string, day: number, value: string) => {
     setAttendance((prev) => ({
       ...prev,
       [engId]: { ...prev[engId], [day]: value },
@@ -157,7 +163,7 @@ export default function EngineerTracker() {
     setNewSiteName("");
   };
 
-  const removeSite = (site) => {
+  const removeSite = (site: string) => {
     if (site === DEFAULT_SITE) return; // can't remove default
     setSiteList((prev) => prev.filter((s) => s !== site));
   };
@@ -174,9 +180,9 @@ export default function EngineerTracker() {
 
   // ── Cell value display ───────────────────────────────────────────────────────
 
-  const cellValue = (engId, day) => attendance[engId]?.[day] ?? "";
+  const cellValue = (engId: string, day: number) => attendance[engId]?.[day] ?? "";
 
-  const cellStyle = (engId, day) => {
+  const cellStyle = (engId: string, day: number) => {
     const val = cellValue(engId, day);
     const isToday_ = day === todayDay;
     const weekend  = isWeekend(year, month, day);
@@ -299,13 +305,13 @@ export default function EngineerTracker() {
 
       {/* ── Legend ── */}
       <div style={styles.legend}>
-        <span style={styles.legendItem("rgba(99,102,241,0.18)", "#a5b4fc")}>🏢 Site</span>
+        <span style={styleFn.legendItem("rgba(99,102,241,0.18)", "#a5b4fc")}>🏢 Site</span>
         {LEAVE_CODES.map((lv) => (
-          <span key={lv.code} style={styles.legendItem(lv.bg, lv.color)}>
+          <span key={lv.code} style={styleFn.legendItem(lv.bg, lv.color)}>
             {lv.code} – {lv.label.split("–")[1]?.trim() || lv.label}
           </span>
         ))}
-        <span style={styles.legendItem("rgba(239,68,68,0.13)", "#fca5a5")}>📅 Today</span>
+        <span style={styleFn.legendItem("rgba(239,68,68,0.13)", "#fca5a5")}>📅 Today</span>
       </div>
 
       {/* ── Table ── */}
@@ -314,7 +320,7 @@ export default function EngineerTracker() {
           <thead>
             {/* Day-name row */}
             <tr>
-              <th style={{ ...styles.th, ...styles.stickyCol(0), minWidth: 160 }}>Engineer</th>
+              <th style={{ ...styles.th, ...styleFn.stickyCol(0), minWidth: 160 }}>Engineer</th>
               {days.map((d) => (
                 <th key={d} style={{
                   ...styles.th,
@@ -331,7 +337,7 @@ export default function EngineerTracker() {
             </tr>
             {/* Day-number row */}
             <tr>
-              <th style={{ ...styles.th, ...styles.stickyCol(0), background: "#0f172a", borderTop: "none" }} />
+              <th style={{ ...styles.th, ...styleFn.stickyCol(0), background: "#0f172a", borderTop: "none" }} />
               {days.map((d) => (
                 <th key={d} style={{
                   ...styles.th,
@@ -355,7 +361,7 @@ export default function EngineerTracker() {
                 onMouseLeave={(e) => (e.currentTarget.style.background = ei % 2 === 0 ? "#0f172a" : "#0a1120")}
               >
                 {/* Name */}
-                <td style={{ ...styles.td, ...styles.stickyCol(0), background: ei % 2 === 0 ? "#0f172a" : "#0a1120" }}>
+                <td style={{ ...styles.td, ...styleFn.stickyCol(0), background: ei % 2 === 0 ? "#0f172a" : "#0a1120" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <span style={styles.avatar}>{eng.initials}</span>
                     <span style={{ color: "#e2e8f0", fontWeight: 600, fontSize: 12, whiteSpace: "nowrap" }}>
@@ -427,7 +433,7 @@ export default function EngineerTracker() {
           <div style={{ color: "#475569", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", padding: "4px 4px 2px" }}>Sites</div>
           {siteList.map((site) => (
             <div key={site}
-              style={styles.popupOption(cellValue(popup.engId, popup.day) === site)}
+              style={styleFn.popupOption(cellValue(popup.engId, popup.day) === site)}
               onClick={() => assignSite(popup.engId, popup.day, site)}
             >
               🏢 {site}
@@ -441,7 +447,7 @@ export default function EngineerTracker() {
           {LEAVE_CODES.map((lv) => (
             <div key={lv.code}
               style={{
-                ...styles.popupOption(cellValue(popup.engId, popup.day) === lv.code),
+                ...styleFn.popupOption(cellValue(popup.engId, popup.day) === lv.code),
                 color: lv.color,
               }}
               onClick={() => assignSite(popup.engId, popup.day, lv.code)}
@@ -452,7 +458,7 @@ export default function EngineerTracker() {
 
           {/* Clear */}
           <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", margin: "6px 0" }} />
-          <div style={{ ...styles.popupOption(false), color: "#64748b" }}
+          <div style={{ ...styleFn.popupOption(false), color: "#64748b" }}
             onClick={() => assignSite(popup.engId, popup.day, DEFAULT_SITE)}>
             ↩ Reset to default ({DEFAULT_SITE})
           </div>
@@ -470,7 +476,40 @@ export default function EngineerTracker() {
 
 // ── Style definitions ─────────────────────────────────────────────────────────
 
-const styles = {
+import type { CSSProperties } from "react";
+
+// Function-based styles (need args)
+const styleFn = {
+  legendItem: (bg: string, color: string): CSSProperties => ({
+    background: bg, color,
+    border: `1px solid ${color}40`,
+    borderRadius: 20, padding: "3px 10px",
+    fontSize: 10, fontWeight: 600,
+    whiteSpace: "nowrap",
+  }),
+  stickyCol: (left: number | string): CSSProperties => ({
+    position: "sticky",
+    left: left as any,
+    zIndex: 3,
+    background: "#0f172a",
+  }),
+  popupOption: (active: boolean): CSSProperties => ({
+    padding: "7px 10px",
+    borderRadius: 8,
+    cursor: "pointer",
+    fontSize: 12,
+    fontWeight: active ? 700 : 500,
+    color: active ? "#fff" : "#cbd5e1",
+    background: active ? "rgba(99,102,241,0.3)" : "transparent",
+    marginBottom: 2,
+    transition: "background 0.1s",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  }),
+};
+
+const styles: Record<string, CSSProperties> = {
   root: {
     fontFamily: "'DM Sans', 'Segoe UI', sans-serif",
     background: "linear-gradient(160deg, #060d1a 0%, #0f172a 60%, #0a1629 100%)",
@@ -574,13 +613,6 @@ const styles = {
   legend: {
     display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14,
   },
-  legendItem: (bg, color) => ({
-    background: bg, color,
-    border: `1px solid ${color}40`,
-    borderRadius: 20, padding: "3px 10px",
-    fontSize: 10, fontWeight: 600,
-    whiteSpace: "nowrap",
-  }),
   tableWrap: {
     overflowX: "auto",
     borderRadius: 12,
@@ -613,12 +645,6 @@ const styles = {
     verticalAlign: "middle",
     position: "relative",
   },
-  stickyCol: (left) => ({
-    position: "sticky",
-    left,
-    zIndex: 3,
-    background: "#0f172a",
-  }),
   chip: {
     display: "inline-flex",
     alignItems: "center",
@@ -648,20 +674,6 @@ const styles = {
     flexShrink: 0,
     letterSpacing: "-0.02em",
   },
-  popupOption: (active) => ({
-    padding: "7px 10px",
-    borderRadius: 8,
-    cursor: "pointer",
-    fontSize: 12,
-    fontWeight: active ? 700 : 500,
-    color: active ? "#fff" : "#cbd5e1",
-    background: active ? "rgba(99,102,241,0.3)" : "transparent",
-    marginBottom: 2,
-    transition: "background 0.1s",
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-  }),
   footer: {
     textAlign: "center",
     marginTop: 20,

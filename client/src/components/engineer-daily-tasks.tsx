@@ -155,7 +155,7 @@ export function EngineerDailyTasks({ teamMembers, isLoading }: EngineerDailyTask
     onSuccess: (data, variables) => {
       // Optimistically update the cache immediately so UI shows the task right away
       const date = new Date().toISOString().split('T')[0];
-      queryClient.setQueryData<EngineerTask[]>("/api/engineer-daily-tasks", (old = []) => {
+      queryClient.setQueryData<EngineerTask[]>(["/api/engineer-daily-tasks"], (old = []) => {
         return old.map(eng => {
           if (eng.engineerName.trim().toLowerCase() === variables.engineerName.trim().toLowerCase()) {
             const newTask = { id: data.id || Date.now().toString(), text: variables.task, date };
