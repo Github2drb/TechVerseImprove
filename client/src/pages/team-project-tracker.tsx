@@ -256,7 +256,15 @@ export default function TeamProjectTracker() {
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, ...data }: Partial<WeeklyAssignment> & { id: string }) => {
-      const res = await apiRequest("PATCH", `/api/weekly-assignments/${id}`, data, true);
+      // encodeURIComponent is REQUIRED: synthetic ids (and even real ones) can
+      // contain spaces / & / # from the project name. An un-encoded id produces
+      // a malformed URL -> the server receives a wrong id -> 404 "Failed to update".
+      const res = await apiRequest(
+        "PATCH",
+        `/api/weekly-assignments/${encodeURIComponent(id)}`,
+        data,
+        true
+      );
       return res;
     },
     onSuccess: () => {
@@ -288,7 +296,7 @@ export default function TeamProjectTracker() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      return apiRequest("DELETE", `/api/weekly-assignments/${id}`, undefined, true);
+      return apiRequest("DELETE", `/api/weekly-assignments/${encodeURIComponent(id)}`, undefined, true);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/weekly-assignments"] });
