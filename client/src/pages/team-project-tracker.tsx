@@ -256,7 +256,8 @@ export default function TeamProjectTracker() {
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, ...data }: Partial<WeeklyAssignment> & { id: string }) => {
-      return apiRequest("PATCH", `/api/weekly-assignments/${id}`, data, true);
+      const res = await apiRequest("PATCH", `/api/weekly-assignments/${id}`, data, true);
+      return res;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/weekly-assignments"] });
@@ -264,8 +265,9 @@ export default function TeamProjectTracker() {
       setEditDialogOpen(false);
       setEditingAssignment(null);
     },
-    onError: () => {
-      toast({ title: "Failed to update assignment", variant: "destructive" });
+    onError: (err: any) => {
+      const msg = err?.message || "Failed to update assignment";
+      toast({ title: msg, variant: "destructive" });
     },
   });
 
@@ -279,8 +281,8 @@ export default function TeamProjectTracker() {
       setAddDialogOpen(false);
       resetFormData();
     },
-    onError: () => {
-      toast({ title: "Failed to add assignment", variant: "destructive" });
+    onError: (err: any) => {
+      toast({ title: err?.message || "Failed to add assignment", variant: "destructive" });
     },
   });
 
@@ -294,8 +296,8 @@ export default function TeamProjectTracker() {
       setDeleteDialogOpen(false);
       setDeletingAssignment(null);
     },
-    onError: () => {
-      toast({ title: "Failed to delete assignment", variant: "destructive" });
+    onError: (err: any) => {
+      toast({ title: err?.message || "Failed to delete assignment", variant: "destructive" });
     },
   });
 
