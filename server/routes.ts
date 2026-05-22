@@ -48,10 +48,25 @@ function norm(s: string): string {
   return s.trim().replace(/\s*\([^)]*\)\s*/g, "").trim().toLowerCase();
 }
 
+// Fuzzy match: handles "Susanth" matching "Susanth K M", "Santosh N" matching "Santhosh N", etc.
+function fuzzyMatchEngineer(a: string, b: string): boolean {
+  const na = norm(a);
+  const nb = norm(b);
+  if (na === nb) return true;
+  // One is a prefix of the other (e.g. "susanth" starts "susanth k m")
+  if (nb.startsWith(na + " ") || na.startsWith(nb + " ")) return true;
+  if (nb.startsWith(na) || na.startsWith(nb)) return true;
+  // Handle single-letter surname omissions: "veeresh" vs "veeresh m"
+  const partsA = na.split(/\s+/);
+  const partsB = nb.split(/\s+/);
+  if (partsA[0] === partsB[0]) return true; // same first name
+  return false;
+}
+
 function matchEngineer(field: string, loginName: string): boolean {
   const needle = norm(loginName).replace(/\./g, " ");
   const names = field.split(",").map((n: string) => norm(n));
-  return names.some((n: string) => n === needle || n.includes(needle) || needle.includes(n));
+  return names.some((n: string) => n === needle || n.includes(needle) || needle.includes(n) || fuzzyMatchEngineer(n, needle));
 }
 
 
@@ -417,7 +432,8 @@ app.get("/api/knowledge/isa-101/readers", async (_req, res) => {
       const entries = (daily?.engineerDailyData ?? []).filter(e => e.date === date);
       const engineers = (master?.engineers ?? []).filter(e => !e.name.match(/\([^)]+\)/));
       res.json(engineers.map(eng => {
-        const e = entries.find(x => norm(x.engineerName) === norm(eng.name));
+        // Use fuzzy matching to handle "Susanth" vs "Susanth K M", "Veeresh" vs "Veeresh M", etc.
+        const e = entries.find(x => fuzzyMatchEngineer(x.engineerName, eng.name));
         return {
           engineerName: eng.name,
           planned: e?.targetTasks?.length ?? 0,
@@ -515,723 +531,7 @@ app.get("/api/knowledge/isa-101/readers", async (_req, res) => {
       const today = new Date().toISOString().split("T")[0];
       const f = await readJsonFile<DailyFile>("daily-activities.json");
       res.json((f?.engineerDailyData ?? [])
-        .filter(e => norm(e.engineerName) === norm(req.params.engineer) && e.date < today)
-        .flatMap(e => (e.targetTasks ?? []).map(t => ({ ...t, date: e.date }))));
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  // ── WEEKLY ASSIGNMENTS ──────────────────────────────────────────────────────
-
-  r.get("/weekly-assignments", async (req, res) => {
-    try {
-      const f = await readJsonFile<WAFile>("weekly-assignments.json");
-      let all = f?.assignments ?? [];
-
-      // Bootstrap: if weekly-assignments.json is empty, auto-populate from data.json
-      if (all.length === 0) {
-        try {
-          const raw = await readJsonFile<any>("data.json");
-          const projects = raw?.data ?? raw?.assignments ?? [];
-          if (projects.length > 0) {
-            const today = new Date().toISOString().split("T")[0];
-            // Get the Monday of current week
-            const d = new Date();
-            d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-            const weekStart = d.toISOString().split("T")[0];
-
-            const bootstrapped: WAFile = {
-              assignments: projects
-                .filter((p: any) => p.status?.toLowerCase() !== "completed")
-                .map((p: any, idx: number) => ({
-                  id: `bootstrap-${idx}-${Date.now()}`,
-                  engineerName: p.engineerName || "",
-                  weekStart,
-                  projectName: p.projectName || "",
-                  resourceLockedFrom: p.startDate || "",
-                  resourceLockedTill: p.endDate || "",
-                  tasks: [],
-                  currentStatus: p.status?.toLowerCase() === "in progress" ? "in_progress" : "not_started",
-                  notes: p.description || "",
-                })),
-              lastUpdated: new Date().toISOString(),
-            };
-
-            // Save bootstrapped data so it persists
-            if (bootstrapped.assignments.length > 0) {
-              writeJsonFile("weekly-assignments.json", bootstrapped, "Bootstrap from data.json").catch(() => {});
-              all = bootstrapped.assignments;
-            }
-          }
-        } catch (bootErr: any) {
-          console.warn("[bootstrap weekly-assignments]", bootErr.message);
-        }
-      }
-
-      const ws = req.query.weekStart as string | undefined;
-      res.json(ws ? all.filter(a => a.weekStart === ws) : all);
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  // Engineer-specific weekly assignments (non-admin users)
-  r.get("/weekly-assignments/engineer/:name", async (req, res) => {
-    try {
-      const f = await readJsonFile<WAFile>("weekly-assignments.json");
-      const all = f?.assignments ?? [];
-      const ws = req.query.weekStart as string | undefined;
-      res.json(all.filter(a => matchEngineer(a.engineerName, req.params.name) && (!ws || a.weekStart === ws)));
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.post("/weekly-assignments", async (req, res) => {
-    try {
-      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const { engineerName, weekStart, projectName } = req.body;
-      if (!engineerName || !weekStart || !projectName) return res.status(400).json({ message: "Missing required fields" });
-      const f = (await readJsonFile<WAFile>("weekly-assignments.json")) ?? { assignments: [], lastUpdated: "" };
-      const a: WeeklyAssignment = {
-        id: req.body.id || `wa-${Date.now()}`,
-        engineerName, weekStart, projectName,
-        projectTargetDate: req.body.projectTargetDate,
-        resourceLockedFrom: req.body.resourceLockedFrom,
-        resourceLockedTill: req.body.resourceLockedTill,
-        internalTarget: req.body.internalTarget,
-        customerTarget: req.body.customerTarget,
-        tasks: req.body.tasks || [],
-        currentStatus: req.body.currentStatus || "not_started",
-        notes: req.body.notes, constraint: req.body.constraint,
-      };
-      f.assignments.push(a); f.lastUpdated = new Date().toISOString();
-      await writeJsonFile("weekly-assignments.json", f, `Add assignment: ${engineerName} – ${projectName}`);
-      // Auto-sync to daily activities (non-blocking)
-      syncToDailyActivities(a).catch(err => console.error("syncToDailyActivities:", err));
-      res.json(a);
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.post("/weekly-assignments/save-all", async (req, res) => {
-    try {
-      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const f = await readJsonFile<WAFile>("weekly-assignments.json");
-      const { weekStart } = req.body;
-      const assignments = weekStart ? (f?.assignments ?? []).filter(a => a.weekStart === weekStart) : (f?.assignments ?? []);
-      res.json({ success: true, count: assignments.length, assignments });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-
-  r.patch("/weekly-assignments/:id", async (req, res) => {
-    try {
-      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const f = await readJsonFile<WAFile>("weekly-assignments.json");
-      if (!f) return res.status(404).json({ message: "Not found" });
-      const i = f.assignments.findIndex(a => a.id === req.params.id);
-      if (i === -1) return res.status(404).json({ message: "Assignment not found" });
-      f.assignments[i] = { ...f.assignments[i], ...req.body, id: req.params.id };
-      f.lastUpdated = new Date().toISOString();
-      await writeJsonFile("weekly-assignments.json", f, `Update assignment ${req.params.id}`);
-      // Re-sync updated assignment
-      syncToDailyActivities(f.assignments[i]).catch(err => console.error("syncToDailyActivities:", err));
-      res.json(f.assignments[i]);
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.delete("/weekly-assignments/:id", async (req, res) => {
-    try {
-      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const f = await readJsonFile<WAFile>("weekly-assignments.json");
-      if (!f) return res.status(404).json({ message: "Not found" });
-      const prev = f.assignments.length;
-      f.assignments = f.assignments.filter(a => a.id !== req.params.id);
-      if (f.assignments.length === prev) return res.status(404).json({ message: "Not found" });
-      f.lastUpdated = new Date().toISOString();
-      await writeJsonFile("weekly-assignments.json", f, `Delete ${req.params.id}`);
-      res.json({ message: "Deleted" });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.post("/weekly-assignments/:id/tasks", async (req, res) => {
-    try {
-      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const { taskName, targetDate, completionDate, status } = req.body;
-      if (!taskName) return res.status(400).json({ message: "taskName required" });
-      const f = await readJsonFile<WAFile>("weekly-assignments.json");
-      if (!f) return res.status(404).json({ message: "Not found" });
-      const a = f.assignments.find(x => x.id === req.params.id);
-      if (!a) return res.status(404).json({ message: "Assignment not found" });
-      const task: WATask = { id: `task-${Date.now()}`, taskName, targetDate, completionDate, status: status || "not_started" };
-      a.tasks.push(task); f.lastUpdated = new Date().toISOString();
-      await writeJsonFile("weekly-assignments.json", f, `Add task to ${req.params.id}`);
-      res.json(task);
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.patch("/weekly-assignments/:id/tasks/:taskId", async (req, res) => {
-    try {
-      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const f = await readJsonFile<WAFile>("weekly-assignments.json");
-      if (!f) return res.status(404).json({ message: "Not found" });
-      const a = f.assignments.find(x => x.id === req.params.id);
-      if (!a) return res.status(404).json({ message: "Assignment not found" });
-      const ti = a.tasks.findIndex(t => t.id === req.params.taskId);
-      if (ti === -1) return res.status(404).json({ message: "Task not found" });
-      a.tasks[ti] = { ...a.tasks[ti], ...req.body, id: req.params.taskId };
-      f.lastUpdated = new Date().toISOString();
-      await writeJsonFile("weekly-assignments.json", f, `Update task ${req.params.taskId}`);
-      res.json(a.tasks[ti]);
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.delete("/weekly-assignments/:id/tasks/:taskId", async (req, res) => {
-    try {
-      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const f = await readJsonFile<WAFile>("weekly-assignments.json");
-      if (!f) return res.status(404).json({ message: "Not found" });
-      const a = f.assignments.find(x => x.id === req.params.id);
-      if (!a) return res.status(404).json({ message: "Assignment not found" });
-      a.tasks = a.tasks.filter(t => t.id !== req.params.taskId);
-      f.lastUpdated = new Date().toISOString();
-      await writeJsonFile("weekly-assignments.json", f, `Delete task ${req.params.taskId}`);
-      res.json({ message: "Deleted" });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  // ── PROJECT NAMES (for autocomplete) ───────────────────────────────────────
-
-  r.get("/project-names", async (_q, res) => {
-    try {
-      const [wf, pd] = await Promise.all([readJsonFile<WAFile>("weekly-assignments.json"), getProjectData()]);
-      const seen = new Map<string, string>();
-      const add = (name: string) => {
-        if (!name?.trim()) return;
-        const k = projKey(name);
-        if (!seen.has(k) || name.trim().length > seen.get(k)!.length) seen.set(k, name.trim());
-      };
-      (wf?.assignments ?? []).forEach(a => add(a.projectName));
-      pd.forEach(a => add(a.projectName));
-      res.json(Array.from(seen.values()).sort());
-    } catch (e: any) { res.status(503).json({ error: e.message }); }
-  });
-
-  // ── STATS ───────────────────────────────────────────────────────────────────
-
-   rver/routes.ts  — DRB TechVerse — COMPLETE REWRITE
-// Every route returns safe arrays. No handler can crash from undefined.map().
-// Weekly assignments auto-sync to daily-activities on save/update.
-
-import { Router, Request, Response } from "express";
-import type { Server } from "http";
-import {
-  getProjectData, saveProjectAssignment, updateProjectAssignment, deleteProjectAssignment,
-  getProjectActivities, upsertProjectActivity, getAnalyticsSummary,
-  getEngineersMasterList, getProjectMasterList, addProjectToMasterList,
-  validateEngineerName, validateProjectNumber, extractProjectNumber,
-  readJsonFile, writeJsonFile,
-} from "./github";
-
-// ─── Shared types ─────────────────────────────────────────────────────────────
-
-interface EngineerCredential {
-  id: string; username: string; name: string; password: string;
-  role: "admin" | "engineer"; company?: string;
-  isActive: boolean; createdAt: string; lastLogin?: string;
-}
-interface CredFile { engineers: EngineerCredential[]; lastUpdated: string; }
-
-interface WATask {
-  id: string; taskName: string; targetDate?: string;
-  completionDate?: string; status: "not_started"|"in_progress"|"completed"|"blocked";
-}
-interface WeeklyAssignment {
-  id: string; engineerName: string; weekStart: string; projectName: string;
-  projectTargetDate?: string; resourceLockedFrom?: string; resourceLockedTill?: string;
-  internalTarget?: string; customerTarget?: string; tasks: WATask[];
-  currentStatus: "not_started"|"in_progress"|"completed"|"on_hold"|"blocked";
-  notes?: string; constraint?: string;
-}
-interface WAFile { assignments: WeeklyAssignment[]; lastUpdated: string; }
-
-interface DailyTask   { id: string; text: string; }
-interface DailyEntry  { engineerName: string; date: string; targetTasks: DailyTask[]; completedActivities: DailyTask[]; }
-interface DailyFile   { engineerDailyData: DailyEntry[]; }
-
-interface EngConfig   { id: string; name: string; initials: string; }
-interface EngConfigFile { engineers: EngConfig[]; lastUpdated: string; }
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-// Helpers
-function norm(s: string): string {
-  return s.trim().replace(/\s*\([^)]*\)\s*/g, "").trim().toLowerCase();
-}
-
-function matchEngineer(field: string, loginName: string): boolean {
-  const needle = norm(loginName).replace(/\./g, " ");
-  const names = field.split(",").map((n: string) => norm(n));
-  return names.some((n: string) => n === needle || n.includes(needle) || needle.includes(n));
-}
-
-
-function isAdmin(req: Request): boolean {
-  try {
-    const h = req.headers["x-admin-auth"];
-    if (!h) return false;
-    const d = JSON.parse(Buffer.from(h as string, "base64").toString("utf-8"));
-    return d?.role === "admin" || d?.username?.toLowerCase() === "admin";
-  } catch { return false; }
-}
-
-function projKey(name: string): string {
-  const m = name.trim().match(/^([A-Z0-9]{1,4}-[A-Z0-9]{1,5}-\d{4,6})/i);
-  return m ? m[1].toUpperCase() : name.trim().toUpperCase();
-}
-function assignmentKey(a: { id?: number; projectName?: string; engineerName?: string; startDate?: string; weekStart?: string }): string {
-  if (typeof a.id === "number" && Number.isFinite(a.id)) return `id:${a.id}`;
-  return [
-    (a.projectName || "").trim().toLowerCase(),
-    (a.engineerName || "").trim().toLowerCase(),
-    a.startDate || a.weekStart || "",
-  ].join("|");
-}
-const STATUS: Record<string,string> = {
-  not_started:"Not Started", in_progress:"In Progress",
-  completed:"Completed", on_hold:"On Hold", blocked:"Blocked",
-};
-
-function weekDates(weekStart: string): string[] {
-  const out: string[] = [];
-  const d = new Date(weekStart + "T00:00:00");
-  for (let i = 0; i < 6; i++) {
-    const x = new Date(d); x.setDate(d.getDate() + i);
-    out.push(x.toISOString().split("T")[0]);
-  }
-  return out;
-}
-
-// ─── Auto-sync weekly assignment → daily activities ───────────────────────────
-async function syncToDailyActivities(a: WeeklyAssignment): Promise<void> {
-  if (!a.engineerName || !a.projectName || !a.weekStart) return;
-  try {
-    const f = (await readJsonFile<DailyFile>("daily-activities.json")) ?? { engineerDailyData: [] };
-    const text = `[${a.projectName}] ${a.notes || a.constraint || "Weekly project task"}`;
-    const engineers = a.engineerName.split(",").map(n => n.trim()).filter(Boolean);
-    let changed = false;
-
-    for (const eng of engineers) {
-      for (const date of weekDates(a.weekStart)) {
-        const idx = f.engineerDailyData.findIndex(
-          e => norm(e.engineerName) === norm(eng) && e.date === date
-        );
-        if (idx > -1) {
-          if (!f.engineerDailyData[idx].targetTasks.some(t => t.text.includes(a.projectName))) {
-            f.engineerDailyData[idx].targetTasks.push({ id: `wa-${Date.now()}-${Math.random().toString(36).substr(2,4)}`, text });
-            changed = true;
-          }
-        } else {
-          f.engineerDailyData.push({ engineerName: eng, date,
-            targetTasks: [{ id: `wa-${Date.now()}-${Math.random().toString(36).substr(2,4)}`, text }],
-            completedActivities: [] });
-          changed = true;
-        }
-      }
-    }
-    if (changed) await writeJsonFile("daily-activities.json", f, `Sync weekly: ${a.engineerName} – ${a.projectName}`);
-  } catch (e: any) { console.error("[syncToDailyActivities]", e.message); }
-}
-
-// ─── Register all routes ──────────────────────────────────────────────────────
-
-export function registerRoutes(httpServer: Server, app: ReturnType<typeof import("express")["default"]>) {
-  const r = Router();
-  app.get("/api/knowledge/isa-101", async (_req, res) => {
-  try {
-    const metadata = {
-      id: "isa-101-hmi-standards",
-      title: "ISA-101 HMI Standards",
-      category: "Controls Engineering",
-      tags: ["ISA-101", "HMI", "SCADA", "Alarm Management", "Process Control"],
-      description:
-        "Complete guide to ISA-101 HMI standards covering color schemes, screen hierarchies, faceplate behaviors, and alarm lifecycle management.",
-      publishedAt: "2025-05-16",
-      readTimeMinutes: 15,
-      sections: [
-        "Screen Hierarchy (L1–L4)",
-        "Color Scheme (Gray-background philosophy)",
-        "Faceplate Design (§6.4 zone rules)",
-        "Alarm Lifecycle (ISA-18.2 integration)",
-      ],
-    };
-    res.json({ success: true, data: metadata });
-  } catch (err) {
-    res.status(500).json({ success: false, error: String(err) });
-  }
-});
-
-// Track when an engineer reads the article (POST /api/knowledge/isa-101/read)
-app.post("/api/knowledge/isa-101/read", async (req, res) => {
-  try {
-    const { engineerName } = req.body as { engineerName?: string };
-    if (!engineerName) {
-      return res.status(400).json({ success: false, error: "engineerName required" });
-    }
-
-    const FILE = "knowledge-articles.json";
-    type KnowledgeFile = Record<string, { readers: Array<{ name: string; readAt: string }> }>;
-    let articles: KnowledgeFile = (await readJsonFile<KnowledgeFile>(FILE)) ?? {};
-
-    if (!articles["isa-101-hmi-standards"]) {
-      articles["isa-101-hmi-standards"] = { readers: [] };
-    }
-
-    const already = articles["isa-101-hmi-standards"].readers.find(
-      (r) => r.name === engineerName
-    );
-    if (!already) {
-      articles["isa-101-hmi-standards"].readers.push({
-        name: engineerName,
-        readAt: new Date().toISOString(),
-      });
-      await writeJsonFile(FILE, articles, `Knowledge article update`);
-    }
-
-    res.json({
-      success: true,
-      readersCount: articles["isa-101-hmi-standards"].readers.length,
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, error: String(err) });
-  }
-});
-
-// GET readers list (admin only)
-app.get("/api/knowledge/isa-101/readers", async (_req, res) => {
-  try {
-    const FILE = "knowledge-articles.json";
-    type KnowledgeFile = Record<string, { readers: Array<{ name: string; readAt: string }> }>;
-    const articles: KnowledgeFile = (await readJsonFile<KnowledgeFile>(FILE)) ?? {};
-    const readers = articles["isa-101-hmi-standards"]?.readers ?? [];
-    res.json({ success: true, data: readers });
-  } catch (err) {
-    res.status(500).json({ success: false, error: String(err) });
-  }
-});
-
-  r.use((_q, res, next) => {
-    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-    res.setHeader("Pragma", "no-cache");
-    res.setHeader("Expires", "0");
-    next();
-  });
-
-  // ── AUTH ────────────────────────────────────────────────────────────────────
-
-  r.post("/auth/login", async (req, res) => {
-    try {
-      const { username, password } = req.body;
-      if (!username || !password) return res.status(400).json({ message: "Username and password required" });
-
-      const f = await readJsonFile<CredFile>("engineers_auth.json");
-      const list: EngineerCredential[] = f?.engineers ?? [];
-
-      // Always ensure admin exists in memory even if file is empty
-      if (!list.find(e => e.username === "admin")) {
-        list.push({ id: "admin-1", username: "admin", name: "Admin", password: "admin@drb",
-          role: "admin", isActive: true, createdAt: new Date().toISOString() });
-      }
-
-      const found = list.find(e =>
-        e.username.toLowerCase() === username.toLowerCase() &&
-        e.password === password && e.isActive !== false
-      );
-      if (!found) return res.status(401).json({ message: "Invalid credentials" });
-
-      found.lastLogin = new Date().toISOString();
-      if (f) { f.lastUpdated = new Date().toISOString(); writeJsonFile("engineers_auth.json", f, "Update lastLogin").catch(() => {}); }
-
-      return res.json({
-        id: found.id, username: found.username, name: found.name,
-        role: found.username.toLowerCase() === "admin" ? "admin" : found.role,
-        company: found.company, email: `${found.username}@drbtechverse.com`, status: "active",
-      });
-    } catch (e: any) { res.status(500).json({ message: e.message }); }
-  });
-
-  r.post("/auth/logout", (_q, res) => res.json({ success: true }));
-  r.get("/auth/me", (_q, res) => res.status(401).json({ message: "Not authenticated" }));
-
-  // ── ENGINEER CREDENTIALS ────────────────────────────────────────────────────
-
-  r.get("/engineer-credentials", async (req, res) => {
-    try {
-      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const f = await readJsonFile<CredFile>("engineers_auth.json");
-      const safe = (f?.engineers ?? []).map(({ password: _p, ...rest }) => rest);
-      res.json({ engineers: safe, lastUpdated: f?.lastUpdated ?? "" });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.post("/engineer-credentials", async (req, res) => {
-    try {
-      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const f = (await readJsonFile<CredFile>("engineers_auth.json")) ?? { engineers: [], lastUpdated: "" };
-      const eng: EngineerCredential = {
-        id: req.body.id || `eng-${Date.now()}`, username: req.body.username,
-        name: req.body.name, password: req.body.password || "drb@123",
-        role: req.body.role || "engineer", company: req.body.company,
-        isActive: req.body.isActive !== false, createdAt: new Date().toISOString(),
-      };
-      f.engineers.push(eng); f.lastUpdated = new Date().toISOString();
-      await writeJsonFile("engineers_auth.json", f, `Add engineer: ${eng.username}`);
-      const { password: _p, ...safe } = eng;
-      res.json({ success: true, engineer: safe });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.put("/engineer-credentials/:id", async (req, res) => {
-    try {
-      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const f = await readJsonFile<CredFile>("engineers_auth.json");
-      if (!f) return res.status(404).json({ message: "Not found" });
-      const i = f.engineers.findIndex(e => e.id === req.params.id);
-      if (i === -1) return res.status(404).json({ message: "Not found" });
-      f.engineers[i] = { ...f.engineers[i], ...req.body, id: req.params.id };
-      f.lastUpdated = new Date().toISOString();
-      await writeJsonFile("engineers_auth.json", f, `Update engineer ${req.params.id}`);
-      const { password: _p, ...safe } = f.engineers[i];
-      res.json({ success: true, engineer: safe });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.delete("/engineer-credentials/:id", async (req, res) => {
-    try {
-      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const f = await readJsonFile<CredFile>("engineers_auth.json");
-      if (!f) return res.status(404).json({ message: "Not found" });
-      const prev = f.engineers.length;
-      f.engineers = f.engineers.filter(e => e.id !== req.params.id);
-      if (f.engineers.length === prev) return res.status(404).json({ message: "Not found" });
-      f.lastUpdated = new Date().toISOString();
-      await writeJsonFile("engineers_auth.json", f, `Delete engineer ${req.params.id}`);
-      res.json({ success: true });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.post("/engineer-credentials/initialize", async (req, res) => {
-    try {
-      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const [ml, ex] = await Promise.all([
-        readJsonFile<EngConfigFile>("engineers_master_list.json"),
-        readJsonFile<CredFile>("engineers_auth.json"),
-      ]);
-      const f = ex ?? { engineers: [], lastUpdated: "" };
-      const existing = new Set(f.engineers.map(e => e.username.toLowerCase()));
-      let created = 0;
-      for (const eng of (ml?.engineers ?? [])) {
-        const u = norm(eng.name).replace(/\s+/g, ".");
-        if (!existing.has(u)) {
-          f.engineers.push({ id: eng.id, name: eng.name, username: u, password: "drb@123",
-            role: "engineer", company: eng.name.match(/\(([^)]+)\)/)?.[1],
-            isActive: true, createdAt: new Date().toISOString() });
-          created++;
-        }
-      }
-      if (!existing.has("admin")) {
-        f.engineers.push({ id: "admin-1", name: "Admin", username: "admin", password: "admin@drb",
-          role: "admin", isActive: true, createdAt: new Date().toISOString() });
-        created++;
-      }
-      f.lastUpdated = new Date().toISOString();
-      await writeJsonFile("engineers_auth.json", f, "Initialize credentials");
-      res.json({ success: true, created });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.post("/engineer-credentials/reset-password", async (req, res) => {
-    try {
-      const { username, newPassword } = req.body;
-      if (!username || !newPassword) return res.status(400).json({ message: "Missing fields" });
-      const f = await readJsonFile<CredFile>("engineers_auth.json");
-      if (!f) return res.status(404).json({ message: "Not found" });
-      const eng = f.engineers.find(e => e.username.toLowerCase() === username.toLowerCase());
-      if (!eng) return res.status(404).json({ message: "Engineer not found" });
-      eng.password = newPassword; f.lastUpdated = new Date().toISOString();
-      await writeJsonFile("engineers_auth.json", f, `Reset password: ${username}`);
-      res.json({ success: true });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  // ── TEAM MEMBERS ────────────────────────────────────────────────────────────
-
-  r.get("/team-members", async (_q, res) => {
-    try {
-      const f = await readJsonFile<CredFile>("engineers_auth.json");
-      res.json((f?.engineers ?? [])
-        .filter(e => e.isActive && e.role !== "admin")
-        .map(e => ({ id: e.id, name: e.name, role: "Engineer",
-          email: `${e.username}@drbtechverse.in`, department: "Engineering", status: "active", avatar: null })));
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  // ── ENGINEERS MASTER LIST ───────────────────────────────────────────────────
-  // Returns [{id, name, initials}] — used by dropdown in Weekly Assignments modal
-
-  r.get("/engineers-master", async (_q, res) => {
-    try {
-      const list = await getEngineersMasterList();
-      const seen = new Set<string>();
-      res.json(list.filter(e => { const k = norm(e.name); return seen.has(k) ? false : (seen.add(k), true); }));
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.get("/engineers-master-list", async (_q, res) => {
-    try {
-      const f = await readJsonFile<EngConfigFile>("engineers_master_list.json");
-      res.json(f?.engineers ?? []);
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.put("/engineers-master-list", async (req, res) => {
-    try {
-      const { engineers } = req.body;
-      if (!Array.isArray(engineers)) return res.status(400).json({ message: "engineers must be array" });
-      await writeJsonFile("engineers_master_list.json", { engineers, lastUpdated: new Date().toISOString() }, "Update engineers master list");
-      res.json({ success: true, engineers });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.post("/engineers-master-list/initialize", async (_q, res) => {
-    try {
-      const f = await readJsonFile<EngConfigFile>("engineers_master_list.json");
-      res.json({ success: true, count: f?.engineers?.length ?? 0 });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  // ── ENGINEER DAILY TASKS CONFIG ─────────────────────────────────────────────
-
-  r.get("/engineer-daily-tasks-config", async (_q, res) => {
-    try {
-      const f = await readJsonFile<EngConfigFile>("engineers_master_list.json");
-      res.json(f?.engineers ?? []);
-    } catch (e: any) { res.status(503).json({ error: e.message }); }
-  });
-
-  r.post("/engineer-daily-tasks-config/initialize", async (_q, res) => {
-    try {
-      const f = await readJsonFile<EngConfigFile>("engineers_master_list.json");
-      res.json({ success: true, created: 0, engineers: f?.engineers ?? [] });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  // ── ENGINEER DAILY TASKS (dashboard summary) ────────────────────────────────
-
-  r.get("/engineer-daily-tasks", async (req, res) => {
-    try {
-      const date = (req.query.date as string) || new Date().toISOString().split("T")[0];
-      const [daily, master] = await Promise.all([
-        readJsonFile<DailyFile>("daily-activities.json"),
-        readJsonFile<EngConfigFile>("engineers_master_list.json"),
-      ]);
-      const entries = (daily?.engineerDailyData ?? []).filter(e => e.date === date);
-      const engineers = (master?.engineers ?? []).filter(e => !e.name.match(/\([^)]+\)/));
-      res.json(engineers.map(eng => {
-        const e = entries.find(x => norm(x.engineerName) === norm(eng.name));
-        return {
-          engineerName: eng.name,
-          planned: e?.targetTasks?.length ?? 0,
-          completed: e?.completedActivities?.length ?? 0,
-          inProgress: Math.max(0, (e?.targetTasks?.length ?? 0) - (e?.completedActivities?.length ?? 0)),
-          tasks: [], customActivities: e?.completedActivities ?? [], targetTasks: e?.targetTasks ?? [],
-        };
-      }));
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  // ── DAILY ACTIVITIES ────────────────────────────────────────────────────────
-
-  r.get("/daily-activities", async (req, res) => {
-    try {
-      const date = (req.query.date as string) || new Date().toISOString().split("T")[0];
-      const f = await readJsonFile<DailyFile>("daily-activities.json");
-      const map = new Map<string, DailyEntry>();
-      for (const entry of (f?.engineerDailyData ?? []).filter(e => e.date === date)) {
-        const k = norm(entry.engineerName);
-        if (!map.has(k)) {
-          map.set(k, { ...entry, targetTasks: [...(entry.targetTasks ?? [])], completedActivities: [...(entry.completedActivities ?? [])] });
-        } else {
-          const ex = map.get(k)!;
-          const tIds = new Set(ex.targetTasks.map(t => t.id));
-          const aIds = new Set(ex.completedActivities.map(a => a.id));
-          for (const t of (entry.targetTasks ?? [])) if (!tIds.has(t.id)) ex.targetTasks.push(t);
-          for (const a of (entry.completedActivities ?? [])) if (!aIds.has(a.id)) ex.completedActivities.push(a);
-        }
-      }
-      res.json(Array.from(map.values()));
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  // ── TARGET TASKS ────────────────────────────────────────────────────────────
-
-  r.post("/engineer-target-tasks/:engineer", async (req, res) => {
-    try {
-      const { engineer } = req.params; const { task, date } = req.body;
-      const f = (await readJsonFile<DailyFile>("daily-activities.json")) ?? { engineerDailyData: [] };
-      const id = `t-${Date.now()}-${Math.random().toString(36).substr(2,5)}`;
-      const i = f.engineerDailyData.findIndex(e => e.engineerName === engineer && e.date === date);
-      if (i > -1) f.engineerDailyData[i].targetTasks.push({ id, text: task });
-      else f.engineerDailyData.push({ engineerName: engineer, date, targetTasks: [{ id, text: task }], completedActivities: [] });
-      await writeJsonFile("daily-activities.json", f, `Target task: ${engineer}`);
-      res.json({ id, success: true });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.delete("/engineer-target-tasks/:engineer/:taskId", async (req, res) => {
-    try {
-      const { engineer, taskId } = req.params; const { date } = req.body;
-      const f = await readJsonFile<DailyFile>("daily-activities.json");
-      if (f) {
-        const i = f.engineerDailyData.findIndex(e => e.engineerName === engineer && e.date === date);
-        if (i > -1) { f.engineerDailyData[i].targetTasks = f.engineerDailyData[i].targetTasks.filter(t => t.id !== taskId);
-          await writeJsonFile("daily-activities.json", f, `Delete task ${taskId}`); }
-      }
-      res.json({ success: true });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  // ── DAILY COMPLETED ACTIVITIES ──────────────────────────────────────────────
-
-  r.post("/engineer-daily-activities/:engineer", async (req, res) => {
-    try {
-      const { engineer } = req.params; const { activity, date } = req.body;
-      const f = (await readJsonFile<DailyFile>("daily-activities.json")) ?? { engineerDailyData: [] };
-      const id = `a-${Date.now()}-${Math.random().toString(36).substr(2,5)}`;
-      const i = f.engineerDailyData.findIndex(e => e.engineerName === engineer && e.date === date);
-      if (i > -1) f.engineerDailyData[i].completedActivities.push({ id, text: activity });
-      else f.engineerDailyData.push({ engineerName: engineer, date, targetTasks: [], completedActivities: [{ id, text: activity }] });
-      await writeJsonFile("daily-activities.json", f, `Activity: ${engineer}`);
-      res.json({ id, success: true });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.delete("/engineer-daily-activities/:engineer/:activityId", async (req, res) => {
-    try {
-      const { engineer, activityId } = req.params; const { date } = req.body;
-      const f = await readJsonFile<DailyFile>("daily-activities.json");
-      if (f) {
-        const i = f.engineerDailyData.findIndex(e => e.engineerName === engineer && e.date === date);
-        if (i > -1) { f.engineerDailyData[i].completedActivities = f.engineerDailyData[i].completedActivities.filter(a => a.id !== activityId);
-          await writeJsonFile("daily-activities.json", f, `Delete activity ${activityId}`); }
-      }
-      res.json({ success: true });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  // ── PENDING TASKS ───────────────────────────────────────────────────────────
-
-  r.get("/pending-tasks/:engineer", async (req, res) => {
-    try {
-      const today = new Date().toISOString().split("T")[0];
-      const f = await readJsonFile<DailyFile>("daily-activities.json");
-      res.json((f?.engineerDailyData ?? [])
-        .filter(e => norm(e.engineerName) === norm(req.params.engineer) && e.date < today)
+        .filter(e => fuzzyMatchEngineer(e.engineerName, req.params.engineer) && e.date < today)
         .flatMap(e => (e.targetTasks ?? []).map(t => ({ ...t, date: e.date }))));
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
@@ -1495,15 +795,39 @@ app.get("/api/knowledge/isa-101/readers", async (_req, res) => {
 
   r.get("/project-activities", async (_q, res) => {
     try {
-      const [activities, assignments] = await Promise.all([getProjectActivities(), getProjectData()]);
+      const [activities, dataAssignments, waFile] = await Promise.all([
+        getProjectActivities(),
+        getProjectData(),
+        readJsonFile<WAFile>("weekly-assignments.json"),
+      ]);
       const map = new Map<string, { projectName: string; currentStatus: string; activities: Record<string,string> }>();
+
+      // 1. Seed map from project-activities.json (has actual activity log entries)
       for (const e of activities) {
         const k = e.projectName.trim().toLowerCase();
         if (map.has(k)) Object.assign(map.get(k)!.activities, e.activities);
         else map.set(k, { ...e, activities: { ...e.activities } });
       }
+
+      // 2. Add active projects from weekly-assignments.json not yet in map
+      const STATUS_DISPLAY: Record<string,string> = {
+        in_progress: "In Progress", not_started: "Not Started",
+        completed: "Completed", on_hold: "On Hold", blocked: "Blocked",
+      };
       const pKeys = new Set([...map.keys()].map(projKey));
-      for (const a of assignments) {
+      for (const a of (waFile?.assignments ?? [])) {
+        if (!a.projectName?.trim()) continue;
+        const k = a.projectName.trim().toLowerCase();
+        const pk = projKey(a.projectName);
+        if (!map.has(k) && !pKeys.has(pk)) {
+          const displayStatus = STATUS_DISPLAY[a.currentStatus ?? ""] ?? a.currentStatus ?? "In Progress";
+          map.set(k, { projectName: a.projectName.trim(), currentStatus: displayStatus, activities: {} });
+          pKeys.add(pk);
+        }
+      }
+
+      // 3. Add any data.json active assignments not already in map
+      for (const a of dataAssignments) {
         if (a.status?.toLowerCase() === "completed") continue;
         const k = a.projectName.trim().toLowerCase();
         const pk = projKey(a.projectName);
@@ -1512,6 +836,7 @@ app.get("/api/knowledge/isa-101/readers", async (_req, res) => {
           pKeys.add(pk);
         }
       }
+
       res.json(Array.from(map.values()));
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
@@ -1556,7 +881,7 @@ app.get("/api/knowledge/isa-101/readers", async (_req, res) => {
 
       const em = new Map<string, Map<string, { projectName:string; status:string; scopeOfWork:string; coEngineers:string[] }>>();
       for (const a of (wf?.assignments ?? [])) {
-        if (a.currentStatus === "completed") continue;
+        if ((a.currentStatus ?? "").toLowerCase() === "completed") continue;
         const engs = a.engineerName.split(",").map(n => resolve(n.trim())).filter(Boolean);
         const pk = projKey(a.projectName);
         for (const eng of engs) {

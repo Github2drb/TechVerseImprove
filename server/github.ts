@@ -28,9 +28,15 @@ function fileUrl(filename: string): string {
   return `https://api.github.com/repos/${GITHUB_OWNER}/${DATA_REPO}/contents/${filename}`;
 }
 
-// 30-second read cache so we don't hammer the GitHub API
+// 60-second read cache so we don't hammer the GitHub API
 const _cache = new Map<string, { data: any; ts: number; sha: string }>();
-const TTL_MS = 30_000;
+const TTL_MS = 60_000;
+
+/** Call this after a new GITHUB_TOKEN is set at runtime to force re-fetch. */
+export function clearReadCache(): void {
+  _cache.clear();
+  console.log("[github.ts] Read cache cleared");
+}
 
 // ─── readJsonFile ─────────────────────────────────────────────────────────────
 export async function readJsonFile<T>(filename: string): Promise<T | null> {
@@ -39,9 +45,10 @@ export async function readJsonFile<T>(filename: string): Promise<T | null> {
 
   try {
     let res = await fetch(fileUrl(filename), { headers: ghHeaders(true) });
-    // If token is invalid/expired, retry once without auth for public-read repos.
+    // If token is invalid/expired, clear cache and retry without auth for public-read repos.
     if ((res.status === 401 || res.status === 403) && GITHUB_TOKEN) {
       console.warn(`[readJsonFile] ${filename} auth failed (${res.status}), retrying without token`);
+      _cache.delete(filename);
       res = await fetch(fileUrl(filename), { headers: ghHeaders(false) });
     }
     if (res.status === 404) return null;
@@ -198,8 +205,50 @@ export async function upsertProjectActivity(
 
 // ─── Analytics summary ────────────────────────────────────────────────────────
 
+interface WATask { id: string; taskName: string; status: string; }
+interface WeeklyAssignmentRaw {
+  id: string; engineerName: string; projectName: string; weekStart?: string;
+  currentStatus?: string; tasks?: WATask[];
+}
+interface WAFileRaw { assignments: WeeklyAssignmentRaw[]; }
+
 export async function getAnalyticsSummary() {
-  const [assignments, activities] = await Promise.all([getProjectData(), getProjectActivities()]);
+  const [dataJsonRaw, waRaw, activities] = await Promise.all([
+    getProjectData(),
+    readJsonFile<WAFileRaw>("weekly-assignments.json"),
+    getProjectActivities(),
+  ]);
+
+  // ── Merge data.json + weekly-assignments into a unified assignment list ──────
+  // weekly-assignments.json is the source of truth for current work;
+  // data.json may have older / completed entries not in weekly-assignments.
+  const statusMap: Record<string,string> = {
+    in_progress: "In Progress", not_started: "Not Started",
+    completed: "Completed", on_hold: "On Hold", blocked: "Blocked",
+  };
+
+  // Normalise weekly assignments
+  interface NormAssignment { engineerName: string; projectName: string; status: string; endDate?: string; }
+  const waAssignments: NormAssignment[] = (waRaw?.assignments ?? []).map(a => ({
+    engineerName: a.engineerName ?? "",
+    projectName: a.projectName ?? "",
+    status: statusMap[a.currentStatus ?? ""] ?? a.currentStatus ?? "Not Started",
+    endDate: undefined,
+  }));
+
+  // Add data.json entries that are NOT already covered in weekly-assignments
+  const waProjKeys = new Set(waAssignments.map(a => a.projectName.trim().toLowerCase()));
+  const legacyOnly = dataJsonRaw.filter(a => !waProjKeys.has(a.projectName.trim().toLowerCase()));
+
+  const assignments: NormAssignment[] = [
+    ...waAssignments,
+    ...legacyOnly.map(a => ({
+      engineerName: (a as any).engineerName ?? "",
+      projectName: a.projectName ?? "",
+      status: a.status ?? "Not Started",
+      endDate: (a as any).endDate,
+    })),
+  ];
 
   const total     = assignments.length;
   const completed = assignments.filter(a => a.status?.toLowerCase() === "completed").length;
