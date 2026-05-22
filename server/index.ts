@@ -91,8 +91,21 @@ app.use((req, res, next) => {
     app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
       const status = err.status || err.statusCode || 500;
       const message = err.message || "Internal Server Error";
-      res.status(status).json({ message });
-      throw err;
+      // Log the error but DO NOT re-throw — re-throwing from an Express error
+      // handler becomes an uncaught exception that crashes the whole process,
+      // which on Render triggers a restart (and an empty in-memory cache).
+      console.error("[express error handler]", status, message, err?.stack || "");
+      if (!res.headersSent) {
+        res.status(status).json({ message });
+      }
+    });
+
+    // Last-resort guards: a single unhandled error must never kill the server.
+    process.on("unhandledRejection", (reason) => {
+      console.error("[unhandledRejection]", reason);
+    });
+    process.on("uncaughtException", (err) => {
+      console.error("[uncaughtException]", err);
     });
 
     if (process.env.NODE_ENV === "production") {
