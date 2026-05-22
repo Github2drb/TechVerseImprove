@@ -33,7 +33,6 @@ export async function apiRequest(
 ): Promise<Response> {
   const headers: Record<string, string> = data ? { "Content-Type": "application/json" } : {};
   
-  // Add admin auth header for protected routes
   if (includeAdminAuth) {
     Object.assign(headers, getAdminAuthHeader());
   }
@@ -58,12 +57,11 @@ export const getQueryFn: <T>(options: {
   async ({ queryKey }) => {
     const headers: Record<string, string> = {};
     
-    // Add admin auth header for protected routes
     if (includeAdminAuth) {
       Object.assign(headers, getAdminAuthHeader());
     }
     
-    const res = await fetch(queryKey.join("/") as string, {
+    const res = await fetch(queryKey[0] as string, {
       credentials: "include",
       headers,
     });
@@ -95,8 +93,11 @@ export const queryClient = new QueryClient({
       queryFn: getQueryFn({ on401: "returnNull" }),
       refetchInterval: false,
       refetchOnWindowFocus: false,
-      staleTime: Infinity,
-      retry: false,
+      // FIX: was Infinity — caused empty screens because cached data was never refreshed.
+      // Now 0 so every query always fetches fresh data on mount.
+      staleTime: 0,
+      refetchOnMount: true,
+      retry: 1,
     },
     mutations: {
       retry: false,
