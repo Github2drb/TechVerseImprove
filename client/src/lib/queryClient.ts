@@ -93,11 +93,15 @@ export const queryClient = new QueryClient({
       queryFn: getQueryFn({ on401: "returnNull" }),
       refetchInterval: false,
       refetchOnWindowFocus: false,
-      // FIX: was Infinity — caused empty screens because cached data was never refreshed.
-      // Now 0 so every query always fetches fresh data on mount.
+      // staleTime 0 so each mount fetches fresh data.
       staleTime: 0,
       refetchOnMount: true,
-      retry: 1,
+      // Retry transient failures (503 from a GitHub hiccup) with backoff.
+      retry: 3,
+      retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
+      // Keep previously-fetched data in the cache for 1h. If a refetch fails,
+      // React Query keeps serving the last good data instead of going empty.
+      gcTime: 60 * 60 * 1000,
     },
     mutations: {
       retry: false,
