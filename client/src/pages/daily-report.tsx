@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Header } from "@/components/header";
-import { ArrowLeft, Lock, Unlock, Plus, X } from "lucide-react";
+import { ArrowLeft, Lock, Unlock, Plus, X, Save, Download } from "lucide-react";
 
 // ── GitHub Data Sources ────────────────────────────────────────────────────────
 const ENGINEERS_URL =
@@ -91,6 +91,10 @@ export default function DailyReport() {
 
   // Admin: new site input
   const [newSite, setNewSite] = useState("");
+  // Save status
+  const [saveStatus, setSaveStatus] = useState<"idle"|"saved">("idle");
+
+  const STORAGE_KEY = `drb_attendance_${year}_${month}`;
 
   // ── Fetch engineers & sites ──────────────────────────────────────────────────
   useEffect(() => {
@@ -125,6 +129,18 @@ export default function DailyReport() {
             init[eng.id][d] = isWeekend(year, month, d) ? "" : DEFAULT_SITE;
           }
         });
+
+        // Load previously saved attendance over the defaults
+        try {
+          const saved = localStorage.getItem(`drb_attendance_${year}_${month}`);
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            Object.keys(parsed).forEach((id) => {
+              if (init[id]) init[id] = { ...init[id], ...parsed[id] };
+            });
+          }
+        } catch {}
+
         setAttendance(init);
         setLoading(false);
       } catch (e: any) {
@@ -213,6 +229,32 @@ export default function DailyReport() {
     }
   };
 
+  const saveAttendance = () => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(attendance));
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus("idle"), 2500);
+    } catch (e) {
+      alert("Save failed: " + e);
+    }
+  };
+
+  const exportCSV = () => {
+    const header = ["Engineer", ...days.map((d) => `${d}-${getMonthName(month).slice(0,3)}-${year}`)];
+    const rows   = engineers.map((eng) => [
+      eng.name,
+      ...days.map((d) => cellVal(eng.id, d) || ""),
+    ]);
+    const csv = [header, ...rows].map((r) => r.map((v) => `"${v}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = `attendance_${getMonthName(month)}_${year}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const addSite = () => {
     const name = newSite.trim();
     if (!name || siteList.includes(name)) return;
@@ -250,7 +292,24 @@ export default function DailyReport() {
               Engineer site &amp; attendance tracker — {getMonthName(month)} {year}
             </p>
           </div>
-          <div className="flex gap-2 items-center">
+          <div className="flex gap-2 items-center flex-wrap">
+            {/* Save button — admin only */}
+            {adminMode && (
+              <Button
+                size="sm"
+                onClick={saveAttendance}
+                className="gap-2"
+                variant={saveStatus === "saved" ? "default" : "default"}
+              >
+                <Save className="h-4 w-4" />
+                {saveStatus === "saved" ? "Saved ✓" : "Save"}
+              </Button>
+            )}
+            {/* CSV export — always visible */}
+            <Button size="sm" variant="outline" onClick={exportCSV} className="gap-2">
+              <Download className="h-4 w-4" />
+              Export CSV
+            </Button>
             {adminMode ? (
               <Button variant="destructive" size="sm" className="gap-2" onClick={() => { setAdminMode(false); setAdminName(""); }}>
                 <Unlock className="h-4 w-4" />
