@@ -2,27 +2,28 @@ import { useState, useEffect, useRef } from "react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Header } from "@/components/header";
-import { ArrowLeft, Lock, Unlock, Plus, X, ChevronDown } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { ArrowLeft, Lock, Unlock, Plus, X } from "lucide-react";
 
 // ── GitHub Data Sources ────────────────────────────────────────────────────────
 const ENGINEERS_URL =
   "https://raw.githubusercontent.com/Github2drb/Controls_Team_Tracker/main/engineers_master_list.json";
 const MASTER_SITE_URL =
   "https://raw.githubusercontent.com/Github2drb/Controls_Team_Tracker/main/master_site.json";
+const AUTH_URL =
+  "https://raw.githubusercontent.com/Github2drb/Controls_Team_Tracker/main/engineers_auth.json";
 
 const DEFAULT_SITE = "3D CAD U1";
-const ADMIN_PASSWORD = "drb2024"; // change as needed
 
 // ── Leave / Absence Codes ──────────────────────────────────────────────────────
 const LEAVE_CODES = [
-  { code: "Leave", label: "Leave",                      color: "bg-red-100 text-red-700 border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800" },
-  { code: "RH",    label: "RH – Restricted Holiday",    color: "bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800" },
-  { code: "CL",    label: "CL – Casual Leave",          color: "bg-orange-100 text-orange-700 border-orange-300 dark:bg-orange-950 dark:text-orange-300 dark:border-orange-800" },
-  { code: "EL",    label: "EL – Earned Leave",          color: "bg-purple-100 text-purple-700 border-purple-300 dark:bg-purple-950 dark:text-purple-300 dark:border-purple-800" },
-  { code: "COff",  label: "COff – Comp Off",            color: "bg-green-100 text-green-700 border-green-300 dark:bg-green-950 dark:text-green-300 dark:border-green-800" },
+  { code: "Leave", label: "Leave",               color: "bg-red-100 text-red-700 border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800" },
+  { code: "RH",    label: "RH – Restricted Holiday", color: "bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800" },
+  { code: "CL",    label: "CL – Casual Leave",   color: "bg-orange-100 text-orange-700 border-orange-300 dark:bg-orange-950 dark:text-orange-300 dark:border-orange-800" },
+  { code: "EL",    label: "EL – Earned Leave",   color: "bg-purple-100 text-purple-700 border-purple-300 dark:bg-purple-950 dark:text-purple-300 dark:border-purple-800" },
+  { code: "COff",  label: "COff – Comp Off",     color: "bg-green-100 text-green-700 border-green-300 dark:bg-green-950 dark:text-green-300 dark:border-green-800" },
+  { code: "FH",    label: "FH – First Half",     color: "bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950 dark:text-sky-300 dark:border-sky-800" },
+  { code: "WP+",   label: "WP+ – Work Plus",     color: "bg-teal-100 text-teal-700 border-teal-300 dark:bg-teal-950 dark:text-teal-300 dark:border-teal-800" },
 ];
-const LEAVE_SET = new Set(LEAVE_CODES.map((l) => l.code));
 const FALLBACK_SITES = ["3D CAD U1", "Daikin", "TKM", "GE", "EY"];
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -49,11 +50,19 @@ interface Engineer {
   initials: string;
 }
 
+interface AdminUser {
+  username: string;
+  password: string;
+  name?: string;
+  role?: string;
+  isActive?: boolean;
+}
+
 // ── Component ──────────────────────────────────────────────────────────────────
 export default function DailyReport() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth();
+  const now      = new Date();
+  const year     = now.getFullYear();
+  const month    = now.getMonth();
   const todayDay = now.getDate();
   const totalDays = getDaysInMonth(year, month);
   const days = Array.from({ length: totalDays }, (_, i) => i + 1);
@@ -68,8 +77,12 @@ export default function DailyReport() {
 
   // Admin
   const [adminMode, setAdminMode]     = useState(false);
+  const [adminName, setAdminName]     = useState("");
   const [showPassDlg, setShowPassDlg] = useState(false);
-  const [adminPass, setAdminPass]     = useState("");
+  const [adminUsers, setAdminUsers]   = useState<AdminUser[]>([]);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [inputUser, setInputUser]     = useState("");
+  const [inputPass, setInputPass]     = useState("");
   const [passError, setPassError]     = useState(false);
 
   // Popup for cell assignment
@@ -79,7 +92,7 @@ export default function DailyReport() {
   // Admin: new site input
   const [newSite, setNewSite] = useState("");
 
-  // ── Fetch data ───────────────────────────────────────────────────────────────
+  // ── Fetch engineers & sites ──────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
       try {
@@ -132,16 +145,45 @@ export default function DailyReport() {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  // ── Fetch admin credentials when dialog opens ────────────────────────────────
+  const openLoginDialog = async () => {
+    setShowPassDlg(true);
+    setInputUser("");
+    setInputPass("");
+    setPassError(false);
+    setAuthLoading(true);
+    try {
+      const res = await fetch(AUTH_URL + "?t=" + Date.now());
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      const list: AdminUser[] = data.engineers || data;
+      const admins = list.filter((u) => u.role === "admin" && u.isActive !== false);
+      setAdminUsers(admins.length ? admins : [{ username: "admin", password: "admin@drb", name: "Admin", role: "admin" }]);
+    } catch {
+      // fallback credentials
+      setAdminUsers([{ username: "admin", password: "admin@drb", name: "Admin", role: "admin" }]);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
   // ── Actions ──────────────────────────────────────────────────────────────────
   const openPopup = (engId: string, day: number, e: React.MouseEvent<HTMLTableCellElement>) => {
     if (!adminMode || isWeekend(year, month, day)) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    setPopup({
-      engId,
-      day,
-      top: rect.bottom + window.scrollY + 4,
-      left: Math.min(rect.left + window.scrollX, window.innerWidth - 260),
-    });
+    const rect     = e.currentTarget.getBoundingClientRect();
+    const POPUP_H  = 340; // estimated popup height
+    const POPUP_W  = 224;
+
+    // Position ABOVE the cell; fall back below if too close to top
+    let top  = rect.top - POPUP_H - 6;
+    if (top < 8) top = rect.bottom + 6;
+
+    // Align left of cell, clamp to screen
+    let left = rect.left;
+    if (left + POPUP_W > window.innerWidth - 8) left = window.innerWidth - POPUP_W - 8;
+    if (left < 8) left = 8;
+
+    setPopup({ engId, day, top, left });
   };
 
   const assignSite = (engId: string, day: number, value: string) => {
@@ -153,13 +195,21 @@ export default function DailyReport() {
   };
 
   const tryLogin = () => {
-    if (adminPass === ADMIN_PASSWORD) {
+    const un    = inputUser.trim().toLowerCase();
+    const pw    = inputPass;
+    const match = adminUsers.find(
+      (u) => u.username.toLowerCase() === un && u.password === pw
+    );
+    if (match) {
       setAdminMode(true);
+      setAdminName(match.name || match.username);
       setShowPassDlg(false);
-      setAdminPass("");
+      setInputUser("");
+      setInputPass("");
       setPassError(false);
     } else {
       setPassError(true);
+      setInputPass("");
     }
   };
 
@@ -197,27 +247,17 @@ export default function DailyReport() {
           <div>
             <h1 className="text-3xl font-bold tracking-tight mb-1">Daily Report</h1>
             <p className="text-muted-foreground">
-              Engineer site & attendance tracker — {getMonthName(month)} {year}
+              Engineer site &amp; attendance tracker — {getMonthName(month)} {year}
             </p>
           </div>
           <div className="flex gap-2 items-center">
             {adminMode ? (
-              <Button
-                variant="destructive"
-                size="sm"
-                className="gap-2"
-                onClick={() => setAdminMode(false)}
-              >
+              <Button variant="destructive" size="sm" className="gap-2" onClick={() => { setAdminMode(false); setAdminName(""); }}>
                 <Unlock className="h-4 w-4" />
-                Exit Admin
+                Exit Admin ({adminName})
               </Button>
             ) : (
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-2"
-                onClick={() => setShowPassDlg(true)}
-              >
+              <Button variant="outline" size="sm" className="gap-2" onClick={openLoginDialog}>
                 <Lock className="h-4 w-4" />
                 Admin Mode
               </Button>
@@ -231,26 +271,53 @@ export default function DailyReport() {
           </div>
         </div>
 
-        {/* ── Admin password dialog ── */}
+        {/* ── Admin login dialog ── */}
         {showPassDlg && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
             <div className="bg-background border rounded-xl shadow-2xl p-6 w-80 space-y-4">
               <h2 className="text-lg font-semibold flex items-center gap-2">
                 <Lock className="h-4 w-4" /> Admin Login
               </h2>
-              <input
-                type="password"
-                placeholder="Enter admin password"
-                value={adminPass}
-                onChange={(e) => { setAdminPass(e.target.value); setPassError(false); }}
-                onKeyDown={(e) => e.key === "Enter" && tryLogin()}
-                className={`w-full border rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-primary ${passError ? "border-red-500" : "border-input"}`}
-                autoFocus
-              />
-              {passError && <p className="text-xs text-red-500">Incorrect password. Try again.</p>}
-              <div className="flex gap-2">
-                <Button size="sm" onClick={tryLogin} className="flex-1">Login</Button>
-                <Button size="sm" variant="outline" onClick={() => { setShowPassDlg(false); setAdminPass(""); setPassError(false); }} className="flex-1">Cancel</Button>
+
+              {authLoading ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary" />
+                  Loading credentials…
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-muted-foreground">Username</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. admin"
+                      value={inputUser}
+                      autoComplete="username"
+                      onChange={(e) => { setInputUser(e.target.value); setPassError(false); }}
+                      onKeyDown={(e) => e.key === "Enter" && tryLogin()}
+                      className="w-full border rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-primary border-input"
+                      autoFocus
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-muted-foreground">Password</label>
+                    <input
+                      type="password"
+                      placeholder="Enter password"
+                      value={inputPass}
+                      autoComplete="current-password"
+                      onChange={(e) => { setInputPass(e.target.value); setPassError(false); }}
+                      onKeyDown={(e) => e.key === "Enter" && tryLogin()}
+                      className={`w-full border rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-primary ${passError ? "border-red-500" : "border-input"}`}
+                    />
+                  </div>
+                  {passError && <p className="text-xs text-red-500">Incorrect username or password. Try again.</p>}
+                </>
+              )}
+
+              <div className="flex gap-2 pt-1">
+                <Button size="sm" onClick={tryLogin} disabled={authLoading} className="flex-1">Login</Button>
+                <Button size="sm" variant="outline" onClick={() => { setShowPassDlg(false); setInputUser(""); setInputPass(""); setPassError(false); }} className="flex-1">Cancel</Button>
               </div>
             </div>
           </div>
@@ -259,15 +326,10 @@ export default function DailyReport() {
         {/* ── Admin: site manager ── */}
         {adminMode && (
           <div className="border rounded-xl p-4 bg-muted/30 space-y-3">
-            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-              Manage Sites
-            </p>
+            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Manage Sites</p>
             <div className="flex flex-wrap gap-2">
               {siteList.map((site) => (
-                <span
-                  key={site}
-                  className="inline-flex items-center gap-1 bg-indigo-100 text-indigo-700 border border-indigo-300 dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-700 text-xs font-medium px-2.5 py-1 rounded-full"
-                >
+                <span key={site} className="inline-flex items-center gap-1 bg-indigo-100 text-indigo-700 border border-indigo-300 dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-700 text-xs font-medium px-2.5 py-1 rounded-full">
                   {site}
                   {site !== DEFAULT_SITE && (
                     <button onClick={() => removeSite(site)} className="ml-1 text-red-400 hover:text-red-600">
@@ -302,9 +364,7 @@ export default function DailyReport() {
             🏢 Site
           </span>
           {LEAVE_CODES.map((lv) => (
-            <span key={lv.code} className={`${lv.color} border text-xs font-medium px-2 py-0.5 rounded`}>
-              {lv.code}
-            </span>
+            <span key={lv.code} className={`${lv.color} border text-xs font-medium px-2 py-0.5 rounded`}>{lv.code}</span>
           ))}
           <span className="inline-flex items-center gap-1 bg-red-100 text-red-600 border border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800 text-xs font-medium px-2 py-0.5 rounded">
             📅 Today
@@ -329,43 +389,30 @@ export default function DailyReport() {
           <div className="rounded-xl border overflow-x-auto shadow-sm">
             <table className="w-full border-collapse text-sm" style={{ minWidth: `${160 + totalDays * 62}px` }}>
               <thead>
-                {/* Day name row */}
                 <tr className="border-b">
                   <th className="sticky left-0 z-20 bg-muted border-r px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground whitespace-nowrap min-w-[160px]">
                     Engineer
                   </th>
                   {days.map((d) => (
-                    <th
-                      key={d}
-                      className={`border-r px-1 pt-2 pb-0.5 text-center text-[10px] font-semibold uppercase tracking-wide min-w-[58px]
-                        ${d === todayDay ? "bg-red-500 text-white" : isWeekend(year, month, d) ? "bg-muted/60 text-muted-foreground/40" : "bg-muted text-muted-foreground"}`}
-                    >
+                    <th key={d} className={`border-r px-1 pt-2 pb-0.5 text-center text-[10px] font-semibold uppercase tracking-wide min-w-[58px]
+                      ${d === todayDay ? "bg-red-500 text-white" : isWeekend(year, month, d) ? "bg-muted/60 text-muted-foreground/40" : "bg-muted text-muted-foreground"}`}>
                       {getDayLabel(year, month, d)}
                     </th>
                   ))}
                 </tr>
-                {/* Day number row */}
                 <tr className="border-b">
                   <th className="sticky left-0 z-20 bg-muted border-r px-3 py-1.5" />
                   {days.map((d) => (
-                    <th
-                      key={d}
-                      className={`border-r px-1 pb-2 pt-0.5 text-center text-xs font-bold min-w-[58px]
-                        ${d === todayDay ? "bg-red-600 text-white" : isWeekend(year, month, d) ? "bg-muted/60 text-muted-foreground/30" : "bg-muted text-muted-foreground"}`}
-                    >
+                    <th key={d} className={`border-r px-1 pb-2 pt-0.5 text-center text-xs font-bold min-w-[58px]
+                      ${d === todayDay ? "bg-red-600 text-white" : isWeekend(year, month, d) ? "bg-muted/60 text-muted-foreground/30" : "bg-muted text-muted-foreground"}`}>
                       {d}
                     </th>
                   ))}
                 </tr>
               </thead>
-
               <tbody>
                 {engineers.map((eng, ei) => (
-                  <tr
-                    key={eng.id}
-                    className={`border-b hover:bg-muted/40 transition-colors ${ei % 2 === 0 ? "" : "bg-muted/20"}`}
-                  >
-                    {/* Engineer name */}
+                  <tr key={eng.id} className={`border-b hover:bg-muted/40 transition-colors ${ei % 2 === 0 ? "" : "bg-muted/20"}`}>
                     <td className="sticky left-0 z-10 bg-background border-r px-3 py-2 whitespace-nowrap">
                       <div className="flex items-center gap-2">
                         <span className="inline-flex items-center justify-center h-7 w-7 rounded-full bg-primary/10 text-primary text-[9px] font-bold border border-primary/20 flex-shrink-0">
@@ -374,33 +421,23 @@ export default function DailyReport() {
                         <span className="font-medium text-xs text-foreground">{eng.name}</span>
                       </div>
                     </td>
-
-                    {/* Day cells */}
                     {days.map((d) => {
                       const val     = cellVal(eng.id, d);
                       const isToday = d === todayDay;
                       const weekend = isWeekend(year, month, d);
-
                       return (
                         <td
                           key={d}
                           onClick={(e) => openPopup(eng.id, d, e)}
                           className={`border-r text-center align-middle transition-colors relative
                             ${isToday ? "bg-red-50 dark:bg-red-950/30" : weekend ? "bg-muted/30" : ""}
-                            ${adminMode && !weekend ? "cursor-pointer hover:bg-primary/5" : "cursor-default"}
-                          `}
+                            ${adminMode && !weekend ? "cursor-pointer hover:bg-primary/5" : "cursor-default"}`}
                           style={{ padding: "5px 3px" }}
-                          title={adminMode && !weekend ? `${eng.name} · ${d} ${getMonthName(month)} — click to assign` : val || undefined}
+                          title={adminMode && !weekend ? `${eng.name} · ${d} ${getMonthName(month)}` : val || undefined}
                         >
-                          {/* Today column left+right border highlight */}
-                          {isToday && (
-                            <span className="absolute inset-0 border-x-2 border-red-400/50 pointer-events-none" />
-                          )}
-
+                          {isToday && <span className="absolute inset-0 border-x-2 border-red-400/50 pointer-events-none" />}
                           {val ? (
-                            <span className={chipClass(val)} style={{ fontSize: val.length > 8 ? 9 : 10 }}>
-                              {val}
-                            </span>
+                            <span className={chipClass(val)} style={{ fontSize: val.length > 8 ? 9 : 10 }}>{val}</span>
                           ) : (
                             <span className="text-muted-foreground/30 text-xs">{weekend ? "—" : ""}</span>
                           )}
@@ -414,11 +451,10 @@ export default function DailyReport() {
           </div>
         )}
 
-        {/* ── Footer note ── */}
         {!loading && !error && (
           <p className="text-xs text-muted-foreground text-center pb-4">
             {adminMode
-              ? "Admin mode active — click any weekday cell to assign a site or leave type"
+              ? `Admin mode active (${adminName}) — click any weekday cell to assign a site or leave type`
               : "View only — enable Admin Mode to make changes"}
           </p>
         )}
@@ -434,50 +470,31 @@ export default function DailyReport() {
           <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground px-3 pb-1">
             Assign · Day {popup.day}
           </p>
-
-          {/* Sites */}
           <p className="text-[10px] text-muted-foreground/60 px-3 pt-1">Sites</p>
           {siteList.map((site) => {
             const active = cellVal(popup.engId, popup.day) === site;
             return (
-              <button
-                key={site}
-                onClick={() => assignSite(popup.engId, popup.day, site)}
+              <button key={site} onClick={() => assignSite(popup.engId, popup.day, site)}
                 className={`w-full text-left text-xs px-3 py-1.5 flex items-center gap-2 hover:bg-muted transition-colors
-                  ${active ? "bg-primary/10 text-primary font-semibold" : "text-foreground"}`}
-              >
+                  ${active ? "bg-primary/10 text-primary font-semibold" : "text-foreground"}`}>
                 🏢 {site}
               </button>
             );
           })}
-
           <div className="border-t my-1.5" />
-
-          {/* Leave codes */}
           <p className="text-[10px] text-muted-foreground/60 px-3 pb-1">Leave / Absence</p>
           {LEAVE_CODES.map((lv) => {
             const active = cellVal(popup.engId, popup.day) === lv.code;
             return (
-              <button
-                key={lv.code}
-                onClick={() => assignSite(popup.engId, popup.day, lv.code)}
-                className={`w-full text-left text-xs px-3 py-1.5 hover:bg-muted transition-colors
-                  ${active ? "bg-primary/10 font-semibold" : ""}`}
-              >
-                <span className={`${lv.color} border text-[10px] font-semibold px-1.5 py-0.5 rounded`}>
-                  {lv.label}
-                </span>
+              <button key={lv.code} onClick={() => assignSite(popup.engId, popup.day, lv.code)}
+                className={`w-full text-left text-xs px-3 py-1.5 hover:bg-muted transition-colors ${active ? "bg-primary/10 font-semibold" : ""}`}>
+                <span className={`${lv.color} border text-[10px] font-semibold px-1.5 py-0.5 rounded`}>{lv.label}</span>
               </button>
             );
           })}
-
           <div className="border-t my-1.5" />
-
-          {/* Reset */}
-          <button
-            onClick={() => assignSite(popup.engId, popup.day, DEFAULT_SITE)}
-            className="w-full text-left text-xs px-3 py-1.5 text-muted-foreground hover:bg-muted transition-colors"
-          >
+          <button onClick={() => assignSite(popup.engId, popup.day, DEFAULT_SITE)}
+            className="w-full text-left text-xs px-3 py-1.5 text-muted-foreground hover:bg-muted transition-colors">
             ↩ Reset to {DEFAULT_SITE}
           </button>
         </div>
