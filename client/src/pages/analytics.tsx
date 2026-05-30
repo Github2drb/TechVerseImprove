@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { ArrowLeft, TrendingUp, Users, FolderKanban, BarChart3, Briefcase, Calendar } from "lucide-react";
+import { ProjectStatusDashboard } from "@/components/ProjectStatusDashboard";
 import {
   BarChart,
   Bar,
