@@ -136,15 +136,15 @@ export default function DailyReport() {
     })();
   },[]);
 
-  // Auto-scroll to today's column once table renders
+  // Scroll table so today is the first visible column
+  const scrollToToday = () => {
+    if (!tableRef.current) return;
+    tableRef.current.scrollLeft = (todayDay - 1) * 62;
+  };
+
+  // Auto-scroll on load
   useEffect(()=>{
-    if (!loading && tableRef.current && todayDay>1) {
-      // Each day column ≈ 62px wide; sticky engineer col ≈ 160px
-      // Scroll so today is the FIRST visible day column
-      const colWidth = 62;
-      const scrollTo = (todayDay-1)*colWidth;
-      tableRef.current.scrollLeft = scrollTo;
-    }
+    if (!loading) setTimeout(scrollToToday, 80);
   },[loading]);
 
   // Close popup on outside click
@@ -237,7 +237,7 @@ export default function DailyReport() {
 
   // ── Cell popup ───────────────────────────────────────────────────────────────
   const openPopup=(engId:string,day:number,e:React.MouseEvent<HTMLTableCellElement>)=>{
-    if (!adminMode||isWeekend(year,month,day)) return;
+    if (!adminMode) return;
     const rect=e.currentTarget.getBoundingClientRect();
     const POPUP_H=340, POPUP_W=224;
     let top=rect.top-POPUP_H-6; if(top<8) top=rect.bottom+6;
@@ -368,7 +368,7 @@ export default function DailyReport() {
           <span className="text-xs text-muted-foreground font-medium mr-1">Legend:</span>
           <span className="inline-flex items-center gap-1 bg-indigo-100 text-indigo-700 border border-indigo-300 dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-700 text-xs font-medium px-2 py-0.5 rounded">🏢 Site</span>
           {LEAVE_CODES.map(lv=><span key={lv.code} className={`${lv.color} border text-xs font-medium px-2 py-0.5 rounded`}>{lv.code}</span>)}
-          <span className="inline-flex items-center gap-1 bg-red-100 text-red-600 border border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800 text-xs font-medium px-2 py-0.5 rounded">📅 Today</span>
+          <button onClick={scrollToToday} className="inline-flex items-center gap-1 bg-red-100 text-red-600 border border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800 text-xs font-medium px-2 py-0.5 rounded hover:bg-red-200 transition-colors cursor-pointer">📅 Today</button>
         </div>
 
         {loading&&<div className="flex items-center justify-center py-20"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"/><span className="ml-3 text-muted-foreground text-sm">Loading team data…</span></div>}
@@ -415,9 +415,9 @@ export default function DailyReport() {
                         <td key={d} onClick={e=>openPopup(eng.id,d,e)}
                           className={`border-r text-center align-middle transition-colors relative
                             ${isToday?"bg-red-50 dark:bg-red-950/30":weekend?"bg-muted/30":""}
-                            ${adminMode&&!weekend?"cursor-pointer hover:bg-primary/5":"cursor-default"}`}
+                            ${adminMode?"cursor-pointer hover:bg-primary/5":"cursor-default"}`}
                           style={{padding:"5px 3px"}}
-                          title={adminMode&&!weekend?`${eng.name} · ${d} ${getMonthName(month)}`:val||undefined}>
+                          title={adminMode?`${eng.name} · ${d} ${getMonthName(month)}`:val||undefined}>
                           {isToday&&<span className="absolute inset-0 border-x-2 border-red-400/50 pointer-events-none"/>}
                           {val
                             ? <span className={chipClass(val)} style={{fontSize:val.length>8?9:10}}>{val}</span>
