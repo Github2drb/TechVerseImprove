@@ -448,6 +448,7 @@ export default function Analytics() {
           </>
         )}
       </main>
+      <ProjectStatusDashboard />
     </div>
   );
 }
