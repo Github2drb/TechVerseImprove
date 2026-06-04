@@ -1,0 +1,25 @@
+{
+  "notifications": [
+    {
+      "id": "notif-1748700000000",
+      "title": "New Blog Post Published",
+      "message": "Check out: Introduction to PLC Programming for Controls Engineers",
+      "type": "info",
+      "link": "/blog",
+      "isRead": false,
+      "author": "Admin",
+      "createdAt": "2026-06-01T08:00:00.000Z"
+    },
+    {
+      "id": "notif-1748700001000",
+      "title": "Daily Report Updated",
+      "message": "June 2026 attendance tracker is now live. Log your status daily.",
+      "type": "success",
+      "link": "/daily-report",
+      "isRead": false,
+      "author": "Admin",
+      "createdAt": "2026-06-02T08:00:00.000Z"
+    }
+  ],
+  "lastUpdated": "2026-06-02T08:00:00.000Z"
+}

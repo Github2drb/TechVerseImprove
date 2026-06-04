@@ -1,0 +1,33 @@
+{
+  "posts": [
+    {
+      "id": "post-1748700000000",
+      "title": "Introduction to PLC Programming for Controls Engineers",
+      "author": "Admin",
+      "date": "2026-06-01",
+      "category": "PLC",
+      "tags": ["PLC", "SIEMENS", "Ladder Logic", "Basics"],
+      "coverImage": "",
+      "excerpt": "A practical introduction to PLC programming concepts every controls engineer should know.",
+      "content": "<h2>What is a PLC?</h2><p>A Programmable Logic Controller (PLC) is an industrial digital computer used for automation of electromechanical processes. Unlike general-purpose computers, PLCs are designed for multiple input/output arrangements, extended temperature ranges, and resistance to vibration and impact.</p><h2>Key Programming Languages</h2><ul><li><strong>Ladder Diagram (LD)</strong> – Most widely used. Resembles electrical relay logic diagrams.</li><li><strong>Function Block Diagram (FBD)</strong> – Graphical language using blocks and wires.</li><li><strong>Structured Text (ST)</strong> – High-level language similar to Pascal.</li><li><strong>Instruction List (IL)</strong> – Low-level assembly-like language.</li></ul><h2>Getting Started</h2><p>Start with Ladder Logic — it is the most common and best supported across all major PLC platforms including SIEMENS, Allen Bradley, and Mitsubishi.</p>",
+      "isPinned": true,
+      "isPublished": true,
+      "createdAt": "2026-06-01T08:00:00.000Z"
+    },
+    {
+      "id": "post-1748700001000",
+      "title": "HMI Design Best Practices — ISA-101 Guidelines",
+      "author": "Admin",
+      "date": "2026-06-02",
+      "category": "HMI",
+      "tags": ["HMI", "ISA-101", "SCADA", "Design"],
+      "coverImage": "",
+      "excerpt": "Follow ISA-101 standards to design effective, operator-friendly HMI screens.",
+      "content": "<h2>Why ISA-101?</h2><p>ISA-101 defines a standard for Human Machine Interfaces in process control systems. Following these guidelines reduces operator errors and improves situational awareness.</p><h2>Key Principles</h2><ul><li>Use a gray background — not black or white</li><li>Reserve red for alarms only</li><li>Use high-contrast colors only for abnormal states</li><li>Organize screens in a 4-level hierarchy: Overview → Unit → Equipment → Detail</li></ul><h2>Color Coding</h2><p>Standard ISA-101 colors: Gray = normal, Red = alarm/trip, Yellow = warning, Green = running/on, Blue = setpoint/manual.</p>",
+      "isPinned": false,
+      "isPublished": true,
+      "createdAt": "2026-06-02T08:00:00.000Z"
+    }
+  ],
+  "lastUpdated": "2026-06-02T08:00:00.000Z"
+}
