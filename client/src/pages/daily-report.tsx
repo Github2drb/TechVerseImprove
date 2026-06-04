@@ -20,8 +20,9 @@ const LEAVE_CODES = [
   { code:"COff",  label:"COff – Comp Off",     color:"bg-green-100 text-green-700 border-green-300 dark:bg-green-950 dark:text-green-300 dark:border-green-800" },
   { code:"FH",    label:"FH – First Half",     color:"bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950 dark:text-sky-300 dark:border-sky-800" },
   { code:"WP+",   label:"WP+ – Work Plus",     color:"bg-teal-100 text-teal-700 border-teal-300 dark:bg-teal-950 dark:text-teal-300 dark:border-teal-800" },
+  { code:"WFH",   label:"WFH – Work From Home",  color:"bg-lime-100 text-lime-700 border-lime-300 dark:bg-lime-950 dark:text-lime-300 dark:border-lime-800" },
 ];
-const FALLBACK_SITES = ["3D CAD U1","Daikin","TKM","GE","EY"];
+const FALLBACK_SITES = ["3D CAD U1","Daikin","TKM","GE","EY","Not Applicable to Site"];
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 function getDaysInMonth(year: number, month: number) { return new Date(year, month+1, 0).getDate(); }
@@ -258,10 +259,15 @@ export default function DailyReport() {
   const removeSite=(site:string)=>{ if(site===DEFAULT_SITE) return; setSiteList(prev=>prev.filter(s=>s!==site)); };
 
   const cellVal=(engId:string,day:number)=>attendance[engId]?.[day]??"";
+  const SITE_COLORS: Record<string,string> = {
+    "3D CAD U1": "bg-stone-100 text-stone-700 border border-stone-300 dark:bg-stone-800 dark:text-stone-300 dark:border-stone-600",
+    "Not Applicable to Site": "bg-gray-100 text-gray-500 border border-gray-300 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600",
+  };
+  const DEFAULT_SITE_COLOR = "bg-indigo-100 text-indigo-700 border border-indigo-300 dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-700";
   const chipClass=(val:string)=>{
     const lv=leaveInfo(val);
     if(lv) return `${lv.color} border text-[10px] font-semibold px-1.5 py-0.5 rounded whitespace-nowrap`;
-    if(val) return "bg-indigo-100 text-indigo-700 border border-indigo-300 dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-700 text-[10px] font-semibold px-1.5 py-0.5 rounded whitespace-nowrap";
+    if(val) return `${SITE_COLORS[val]??DEFAULT_SITE_COLOR} text-[10px] font-semibold px-1.5 py-0.5 rounded whitespace-nowrap`;
     return "";
   };
 
@@ -367,6 +373,7 @@ export default function DailyReport() {
         <div className="flex flex-wrap gap-2 items-center">
           <span className="text-xs text-muted-foreground font-medium mr-1">Legend:</span>
           <span className="inline-flex items-center gap-1 bg-indigo-100 text-indigo-700 border border-indigo-300 dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-700 text-xs font-medium px-2 py-0.5 rounded">🏢 Site</span>
+          <span className="inline-flex items-center gap-1 bg-stone-100 text-stone-700 border border-stone-300 dark:bg-stone-800 dark:text-stone-300 dark:border-stone-600 text-xs font-medium px-2 py-0.5 rounded">3D CAD U1</span>
           {LEAVE_CODES.map(lv=><span key={lv.code} className={`${lv.color} border text-xs font-medium px-2 py-0.5 rounded`}>{lv.code}</span>)}
           <button onClick={scrollToToday} className="inline-flex items-center gap-1 bg-red-100 text-red-600 border border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800 text-xs font-medium px-2 py-0.5 rounded hover:bg-red-200 transition-colors cursor-pointer">📅 Today</button>
         </div>
@@ -451,7 +458,7 @@ export default function DailyReport() {
             const active=cellVal(popup.engId,popup.day)===site;
             return <button key={site} onClick={()=>assignSite(popup.engId,popup.day,site)}
               className={`w-full text-left text-xs px-3 py-1.5 flex items-center gap-2 hover:bg-muted transition-colors ${active?"bg-primary/10 text-primary font-semibold":"text-foreground"}`}>
-              🏢 {site}
+              <span className={`${SITE_COLORS[site]??DEFAULT_SITE_COLOR} text-[10px] font-semibold px-1.5 py-0.5 rounded`}>{site}</span>
             </button>;
           })}
           <div className="border-t my-1.5"/>
