@@ -4,6 +4,7 @@ import { ThemeToggle } from "./theme-toggle";
 import { NotificationBell } from "./notification-bell";
 import { UserMenu } from "./user-menu";
 import { Link } from "wouter";
+import { NotifBell } from "@/components/NotifBell";
 
 interface HeaderProps {
   searchQuery: string;
@@ -41,6 +42,7 @@ export function Header({ searchQuery, onSearchChange }: HeaderProps) {
           <UserMenu />
         </div>
       </div>
+    <NotifBell />
     </header>
   );
 }
