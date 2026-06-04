@@ -10,8 +10,10 @@ import { useState, useEffect } from "react";
 import * as XLSX from "xlsx";
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const EXCEL_URL =
-  "https://raw.githubusercontent.com/Github2drb/TechVerseImprove/main/Project%20Status_May_Sept_2026.xlsx";
+// Uses GitHub Contents API — always returns fresh content, bypasses CDN cache.
+// raw.githubusercontent.com caches for 5+ min and ignores cache-bust params.
+const GITHUB_API_URL =
+  "https://api.github.com/repos/Github2drb/TechVerseImprove/contents/Project%20Status_May_Sept_2026.xlsx";
 
 // ── Symbol map (as they appear in the Excel file) ─────────────────────────────
 const SYM_COMPLETED   = "\u00fc"; // ü
@@ -125,14 +127,32 @@ export function ProjectStatusDashboard() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(EXCEL_URL + "?t=" + Date.now()); // cache-bust
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const buf  = await res.arrayBuffer();
+      // Use GitHub Contents API — always returns fresh file, no CDN caching.
+      // raw.githubusercontent.com caches for 5+ min even with cache-bust params.
+      const apiRes = await fetch(GITHUB_API_URL, {
+        headers: {
+          "Accept": "application/vnd.github.v3+json",
+          "Cache-Control": "no-cache",
+          "Pragma": "no-cache",
+        },
+      });
+      if (!apiRes.ok) throw new Error(`GitHub API HTTP ${apiRes.status}`);
+      const meta = await apiRes.json();
+
+      // Decode base64 → binary Uint8Array for SheetJS
+      const b64    = (meta.content as string).replace(/\n/g, "");
+      const binary = atob(b64);
+      const buf    = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) buf[i] = binary.charCodeAt(i);
+
+      // Parse with SheetJS
       const wb   = XLSX.read(buf, { type: "array" });
       const ws   = wb.Sheets[wb.SheetNames[0]];
       const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
       setData(parseSheet(rows));
-      setLastRefresh(new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }));
+      setLastRefresh(
+        new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+      );
     } catch (e: any) {
       setError("Could not load Excel file: " + e.message);
     } finally {
