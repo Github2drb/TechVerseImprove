@@ -777,10 +777,181 @@ app.get("/api/knowledge/isa-101/readers", async (_req, res) => {
   // ── NOTIFICATIONS (in-memory, ephemeral is fine) ────────────────────────────
   
   const notifs: any[] = [];
-  r.get("/notifications", (_q, res) => res.json(notifs));
-  r.post("/notifications", (req, res) => { const n = { id: `n-${Date.now()}`, ...req.body }; notifs.push(n); res.status(201).json(n); });
-  r.patch("/notifications/:id/read", (req, res) => { const n = notifs.find(x => x.id === req.params.id); if (n) n.read = true; res.json({ success: true }); });
-  r.patch("/notifications/read-all", (_q, res) => { notifs.forEach(n => n.read = true); res.json({ success: true }); });
+  // ─────────────────────────────────────────────────────────────────────────────
+// ADD THIS BLOCK TO server/routes.ts
+// Paste it inside registerRoutes(), just before the health check route.
+// Also REPLACE the existing in-memory notifications block (4 lines) with
+// the persistent versions below.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+interface BlogPost {
+  id: string; title: string; author: string; date: string;
+  category: string; tags: string[]; coverImage: string;
+  excerpt: string; content: string;
+  isPinned: boolean; isPublished: boolean; createdAt: string;
+}
+interface BlogFile { posts: BlogPost[]; lastUpdated: string; }
+
+interface Notification {
+  id: string; title: string; message: string;
+  type: "info"|"success"|"warning"|"alert";
+  link?: string; isRead: boolean; author: string; createdAt: string;
+}
+interface NotifFile { notifications: Notification[]; lastUpdated: string; }
+
+// ── BLOG POSTS ────────────────────────────────────────────────────────────────
+
+r.get("/blog-posts", async (req, res) => {
+  try {
+    const f = await readJsonFile<BlogFile>("blog-posts.json");
+    let posts = (f?.posts ?? []);
+    // Non-admins only see published posts
+    if (!isAdmin(req)) posts = posts.filter(p => p.isPublished);
+    // Sort: pinned first, then newest
+    posts.sort((a, b) => {
+      if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+    res.json(posts);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+r.get("/blog-posts/:id", async (req, res) => {
+  try {
+    const f = await readJsonFile<BlogFile>("blog-posts.json");
+    const post = (f?.posts ?? []).find(p => p.id === req.params.id);
+    if (!post) return res.status(404).json({ message: "Post not found" });
+    if (!post.isPublished && !isAdmin(req))
+      return res.status(403).json({ message: "Not published" });
+    res.json(post);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+r.post("/blog-posts", async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+    const f = (await readJsonFile<BlogFile>("blog-posts.json"))
+      ?? { posts: [], lastUpdated: "" };
+    const post: BlogPost = {
+      id: `post-${Date.now()}`,
+      title:       req.body.title       ?? "Untitled",
+      author:      req.body.author      ?? "Admin",
+      date:        req.body.date        ?? new Date().toISOString().split("T")[0],
+      category:    req.body.category    ?? "General",
+      tags:        req.body.tags        ?? [],
+      coverImage:  req.body.coverImage  ?? "",
+      excerpt:     req.body.excerpt     ?? "",
+      content:     req.body.content     ?? "",
+      isPinned:    req.body.isPinned    ?? false,
+      isPublished: req.body.isPublished ?? false,
+      createdAt:   new Date().toISOString(),
+    };
+    f.posts.push(post);
+    f.lastUpdated = new Date().toISOString();
+    await writeJsonFile("blog-posts.json", f, `New post: ${post.title}`);
+    res.status(201).json(post);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+r.put("/blog-posts/:id", async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+    const f = await readJsonFile<BlogFile>("blog-posts.json");
+    if (!f) return res.status(404).json({ message: "Not found" });
+    const i = f.posts.findIndex(p => p.id === req.params.id);
+    if (i === -1) return res.status(404).json({ message: "Post not found" });
+    f.posts[i] = { ...f.posts[i], ...req.body, id: req.params.id };
+    f.lastUpdated = new Date().toISOString();
+    await writeJsonFile("blog-posts.json", f, `Update post: ${f.posts[i].title}`);
+    res.json(f.posts[i]);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+r.delete("/blog-posts/:id", async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+    const f = await readJsonFile<BlogFile>("blog-posts.json");
+    if (!f) return res.status(404).json({ message: "Not found" });
+    const prev = f.posts.length;
+    f.posts = f.posts.filter(p => p.id !== req.params.id);
+    if (f.posts.length === prev) return res.status(404).json({ message: "Post not found" });
+    f.lastUpdated = new Date().toISOString();
+    await writeJsonFile("blog-posts.json", f, `Delete post ${req.params.id}`);
+    res.json({ success: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// ── NOTIFICATIONS (persistent — replaces the in-memory block) ─────────────────
+// DELETE the old 4-line in-memory notifications block and use these instead:
+
+r.get("/notifications", async (_q, res) => {
+  try {
+    const f = await readJsonFile<NotifFile>("notifications.json");
+    const notifs = (f?.notifications ?? [])
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    res.json(notifs);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+r.post("/notifications", async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+    const f = (await readJsonFile<NotifFile>("notifications.json"))
+      ?? { notifications: [], lastUpdated: "" };
+    const n: Notification = {
+      id:        `notif-${Date.now()}`,
+      title:     req.body.title   ?? "Notification",
+      message:   req.body.message ?? "",
+      type:      req.body.type    ?? "info",
+      link:      req.body.link,
+      isRead:    false,
+      author:    req.body.author  ?? "Admin",
+      createdAt: new Date().toISOString(),
+    };
+    f.notifications.push(n);
+    f.lastUpdated = new Date().toISOString();
+    await writeJsonFile("notifications.json", f, `New notification: ${n.title}`);
+    res.status(201).json(n);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+r.patch("/notifications/:id/read", async (req, res) => {
+  try {
+    const f = await readJsonFile<NotifFile>("notifications.json");
+    if (!f) return res.status(404).json({ message: "Not found" });
+    const n = f.notifications.find(x => x.id === req.params.id);
+    if (!n) return res.status(404).json({ message: "Not found" });
+    n.isRead = true;
+    f.lastUpdated = new Date().toISOString();
+    await writeJsonFile("notifications.json", f, `Read notification ${req.params.id}`);
+    res.json({ success: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+r.patch("/notifications/read-all", async (_q, res) => {
+  try {
+    const f = await readJsonFile<NotifFile>("notifications.json");
+    if (!f) return res.json({ success: true });
+    f.notifications.forEach(n => n.isRead = true);
+    f.lastUpdated = new Date().toISOString();
+    await writeJsonFile("notifications.json", f, "Mark all notifications read");
+    res.json({ success: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+r.delete("/notifications/:id", async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+    const f = await readJsonFile<NotifFile>("notifications.json");
+    if (!f) return res.status(404).json({ message: "Not found" });
+    f.notifications = f.notifications.filter(n => n.id !== req.params.id);
+    f.lastUpdated = new Date().toISOString();
+    await writeJsonFile("notifications.json", f, `Delete notification ${req.params.id}`);
+    res.json({ success: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
 
   // ── PROJECTS ────────────────────────────────────────────────────────────────
 
