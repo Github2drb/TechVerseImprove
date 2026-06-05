@@ -6,7 +6,7 @@ import { BlogCard } from "@/components/BlogCard";
 import { Button } from "@/components/ui/button";
 import {
   ArrowLeft, Plus, X, Save, Trash2, Pin, Eye, EyeOff,
-  Search, ChevronLeft, Edit2,
+  Search, ChevronLeft, Edit2, Lock, Unlock,
 } from "lucide-react";
 
 const CATEGORIES = ["All", "PLC", "HMI", "SCADA", "Project Update", "Training", "General"];
@@ -42,7 +42,19 @@ function getAdminHeader(): string {
     return btoa(JSON.stringify({ username: name.toLowerCase(), role: "admin" }));
   } catch { return ""; }
 }
-function isAdminSession() { return sessionStorage.getItem("drb_admin") === "1"; }
+function isAdminSession(): boolean {
+  if (sessionStorage.getItem("drb_admin") === "1") return true;
+  try {
+    const keys = ["user","currentUser","auth","drb_user","session"];
+    for (const k of keys) {
+      const raw = localStorage.getItem(k);
+      if (!raw) continue;
+      const obj = JSON.parse(raw);
+      if (obj?.role === "admin" || obj?.username?.toLowerCase() === "admin") return true;
+    }
+  } catch {}
+  return false;
+}
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function BlogPage() {
@@ -56,7 +68,41 @@ export default function BlogPage() {
   const [draft,    setDraft]    = useState<typeof EMPTY_POST & { id?:string; createdAt?:string }>(EMPTY_POST);
   const [saving,   setSaving]   = useState(false);
   const [tagInput, setTagInput] = useState("");
-  const adminMode = isAdminSession();
+  const [adminMode,    setAdminMode]    = useState(isAdminSession());
+  const [showLogin,    setShowLogin]    = useState(false);
+  const [loginUser,    setLoginUser]    = useState("");
+  const [loginPass,    setLoginPass]    = useState("");
+  const [loginErr,     setLoginErr]     = useState(false);
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [adminUsers,   setAdminUsers]   = useState<{username:string;password:string;name?:string}[]>([]);
+
+  const loadAdmins = async () => {
+    setLoginLoading(true);
+    try {
+      const r = await fetch("https://raw.githubusercontent.com/Github2drb/Controls_Team_Tracker/main/engineers_auth.json?t="+Date.now());
+      const data = await r.json();
+      const list = data.engineers || data;
+      const admins = list.filter((u:any) => u.role==="admin" && u.isActive!==false);
+      setAdminUsers(admins.length ? admins : [{username:"admin",password:"admin@drb",name:"Admin"}]);
+    } catch {
+      setAdminUsers([{username:"admin",password:"admin@drb",name:"Admin"}]);
+    } finally { setLoginLoading(false); }
+  };
+
+  const submitLogin = () => {
+    const un = loginUser.trim().toLowerCase();
+    const pw = loginPass;
+    const match = adminUsers.find(u => u.username.toLowerCase()===un && u.password===pw);
+    if (match) {
+      sessionStorage.setItem("drb_admin","1");
+      sessionStorage.setItem("drb_admin_name", match.name||match.username);
+      setAdminMode(true);
+      setShowLogin(false);
+      setLoginUser(""); setLoginPass(""); setLoginErr(false);
+    } else {
+      setLoginErr(true); setLoginPass("");
+    }
+  };
 
   const load = async () => {
     setLoading(true); setError(null);
@@ -279,15 +325,66 @@ export default function BlogPage() {
             <h1 className="text-3xl font-bold tracking-tight mb-1">Knowledge Base</h1>
             <p className="text-muted-foreground text-sm">Automation insights and technical updates from the Controls team</p>
           </div>
-          <div className="flex gap-2 items-center">
-            {adminMode && (
-              <Button size="sm" onClick={openNew} className="gap-2">
-                <Plus className="h-4 w-4" /> New post
+          <div className="flex gap-2 items-center flex-wrap">
+            {adminMode ? (
+              <>
+                <Button size="sm" onClick={openNew} className="gap-2">
+                  <Plus className="h-4 w-4" /> New post
+                </Button>
+                <Button variant="destructive" size="sm" className="gap-2" onClick={() => {
+                  sessionStorage.removeItem("drb_admin"); setAdminMode(false);
+                }}>
+                  <Unlock className="h-4 w-4"/> Lock
+                </Button>
+              </>
+            ) : (
+              <Button variant="outline" size="sm" className="gap-2" onClick={() => {
+                setShowLogin(true); setLoginErr(false); loadAdmins();
+              }}>
+                <Lock className="h-4 w-4"/> Admin Mode
               </Button>
             )}
             <Link href="/"><Button variant="outline" size="sm" className="gap-2"><ArrowLeft className="h-4 w-4"/>Back</Button></Link>
           </div>
         </div>
+
+        {/* Admin login modal */}
+        {showLogin && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+            <div className="bg-background border rounded-xl shadow-2xl p-6 w-80 space-y-4">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <Lock className="h-4 w-4"/> Admin Login
+              </h2>
+              {loginLoading ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"/>Loading…
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-muted-foreground">Username</label>
+                    <input type="text" placeholder="e.g. admin" value={loginUser} autoFocus
+                      onChange={e=>{setLoginUser(e.target.value);setLoginErr(false);}}
+                      onKeyDown={e=>e.key==="Enter"&&submitLogin()}
+                      className="w-full border rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-primary border-input"/>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-muted-foreground">Password</label>
+                    <input type="password" placeholder="Enter password" value={loginPass}
+                      onChange={e=>{setLoginPass(e.target.value);setLoginErr(false);}}
+                      onKeyDown={e=>e.key==="Enter"&&submitLogin()}
+                      className={`w-full border rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-primary ${loginErr?"border-red-500":"border-input"}`}/>
+                  </div>
+                  {loginErr && <p className="text-xs text-red-500">Incorrect username or password.</p>}
+                </>
+              )}
+              <div className="flex gap-2 pt-1">
+                <Button size="sm" onClick={submitLogin} disabled={loginLoading} className="flex-1">Login</Button>
+                <Button size="sm" variant="outline" onClick={()=>{setShowLogin(false);setLoginUser("");setLoginPass("");setLoginErr(false);}} className="flex-1">Cancel</Button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Search + filter */}
         <div className="flex gap-3 flex-wrap items-center">
