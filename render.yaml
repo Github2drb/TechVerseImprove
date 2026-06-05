@@ -4,7 +4,7 @@ services:
     runtime: node
     region: singapore          # closest to India — change to oregon if preferred
     branch: main               # auto-deploy triggers on every push to this branch
-    buildCommand: npm install && npm run build
+    buildCommand: npm install --legacy-peer-deps && npm run build
     startCommand: npm start
     autoDeploy: true           # THIS is what was missing — enables auto-deploy
     envVars:
