@@ -1281,7 +1281,37 @@ r.post("/project-status-data", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ADD TO server/routes.ts — paste just before the health check route
+// Proxies the Excel file through the backend (uses GITHUB_TOKEN, no CORS issues)
+// ─────────────────────────────────────────────────────────────────────────────
 
+r.get("/project-status-excel", async (_q, res) => {
+  try {
+    const token = process.env.GITHUB_TOKEN || "";
+    const headers: Record<string,string> = {
+      "Accept":        "application/vnd.github.v3+json",
+      "Cache-Control": "no-cache",
+      "User-Agent":    "DRBTechVerse/1.0",
+    };
+    if (token) headers["Authorization"] = `token ${token}`;
+
+    const apiRes = await fetch(
+      "https://api.github.com/repos/Github2drb/TechVerseImprove/contents/Project%20Status_May_Sept_2026.xlsx",
+      { headers }
+    );
+    if (!apiRes.ok) {
+      const txt = await apiRes.text();
+      throw new Error(`GitHub API HTTP ${apiRes.status}: ${txt}`);
+    }
+    const meta: any = await apiRes.json();
+    // Return base64 content — frontend decodes with SheetJS
+    res.json({ content: meta.content, sha: meta.sha });
+  } catch (e: any) {
+    console.error("[project-status-excel]", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
 
 
 
