@@ -168,7 +168,7 @@ export default function Dashboard() {
       <Header searchQuery={searchQuery} onSearchChange={setSearchQuery} />
       
       <HeroSection />
-      
+      <Ticker />
       <main className="mx-auto max-w-7xl space-y-12 px-4 py-8 md:px-6 md:py-12">
         <div className="flex justify-end">
           <WidgetSettings
