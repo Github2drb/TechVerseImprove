@@ -6,9 +6,8 @@ import { useState, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
 import { Save, RefreshCw, Lock, Unlock, X } from "lucide-react";
 
-// ── GitHub source ─────────────────────────────────────────────────────────────
-const GITHUB_API_URL =
-  "https://api.github.com/repos/Github2drb/TechVerseImprove/contents/Project%20Status_May_Sept_2026.xlsx";
+// ── Data source — proxied through backend (avoids CORS + uses GITHUB_TOKEN) ──
+const EXCEL_API = "/api/project-status-excel";
 
 // ── All status symbols ────────────────────────────────────────────────────────
 const SYM_COMPLETED   = "\u00fc"; // ü  Completed
@@ -167,13 +166,14 @@ export function ProjectStatusDashboard() {
   const [picker, setPicker] = useState<{ projId: string; ci: number; top: number; left: number } | null>(null);
   const [adminMode, setAdminMode] = useState(isAdmin());
 
-  // ── Fetch Excel from GitHub API ───────────────────────────────────────────
+  // ── Fetch Excel via backend proxy (GITHUB_TOKEN, no CORS issues) ────────────
   const fetchExcel = async (): Promise<SheetData | null> => {
-    const apiRes = await fetch(GITHUB_API_URL, {
-      headers: { "Accept":"application/vnd.github.v3+json", "Cache-Control":"no-cache", "Pragma":"no-cache" },
-    });
-    if (!apiRes.ok) throw new Error(`GitHub API HTTP ${apiRes.status}`);
-    const meta   = await apiRes.json();
+    const res = await fetch(EXCEL_API, { cache: "no-store" });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error ?? `Backend HTTP ${res.status}`);
+    }
+    const meta   = await res.json();
     const b64    = (meta.content as string).replace(/\n/g, "");
     const binary = atob(b64);
     const buf    = new Uint8Array(binary.length);
