@@ -13,6 +13,7 @@ import { WeeklyAssignmentsTable } from "@/components/weekly-assignments-table";
 import { ManagerOverview } from "@/components/manager-overview";
 import { WeeklyScheduleOverview } from "@/components/weekly-schedule-overview";
 import { useAuth } from "@/components/auth-provider";
+import { Ticker } from "@/components/Ticker";
 import type { DashboardStats, NavigationCard, TeamMember, Project } from "@shared/schema";
 
 const navigationCards: NavigationCard[] = [
