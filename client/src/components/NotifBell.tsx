@@ -1,16 +1,11 @@
 // client/src/components/NotifBell.tsx
-// Drop-in notification bell for the Header component.
-// Usage: import { NotifBell } from "@/components/NotifBell";
-//        Then add <NotifBell /> inside your header JSX.
-
 import { useState, useEffect, useRef } from "react";
 import { Link } from "wouter";
 import { Bell } from "lucide-react";
 
 interface Notification {
   id: string; title: string; message: string;
-  type: "info"|"success"|"warning"|"alert";
-  link?: string; isRead: boolean; createdAt: string;
+  type: string; link?: string; isRead: boolean; createdAt: string;
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -22,10 +17,28 @@ const TYPE_COLORS: Record<string, string> = {
 
 function timeAgo(iso: string): string {
   const diff = (Date.now() - new Date(iso).getTime()) / 1000;
-  if (diff < 60)   return "just now";
-  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
-  if (diff < 86400)return `${Math.floor(diff/3600)}h ago`;
+  if (diff < 60)    return "just now";
+  if (diff < 3600)  return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
   return `${Math.floor(diff/86400)}d ago`;
+}
+
+// Get current logged-in user from all auth sources
+function getCurrentUser(): string {
+  try {
+    const adminName = sessionStorage.getItem("drb_admin_name");
+    if (adminName) return adminName.toLowerCase();
+    for (const key of ["user","currentUser","auth","drb_user","session","authUser"]) {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      const obj = JSON.parse(raw);
+      if (obj?.username) return obj.username.toLowerCase();
+      if (obj?.name)     return obj.name.toLowerCase().replace(/\s+/g,"-");
+    }
+  } catch {}
+  let id = localStorage.getItem("drb_device_id");
+  if (!id) { id = "device-" + Math.random().toString(36).substr(2,9); localStorage.setItem("drb_device_id", id); }
+  return id;
 }
 
 export function NotifBell() {
@@ -35,18 +48,27 @@ export function NotifBell() {
 
   const load = async () => {
     try {
-      const r = await fetch("/api/notifications");
+      const user = getCurrentUser();
+      const r = await fetch("/api/notifications", {
+        headers: { "x-current-user": user },
+      });
       if (r.ok) setNotifs(await r.json());
     } catch {}
   };
 
   useEffect(() => {
     load();
-    const interval = setInterval(load, 30000); // refresh every 30s
-    return () => clearInterval(interval);
+    const iv = setInterval(load, 30000);
+    return () => clearInterval(iv);
   }, []);
 
-  // Close on outside click
+  // Re-check user when sessionStorage changes (login/logout)
+  useEffect(() => {
+    const onStorage = () => load();
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
@@ -59,16 +81,24 @@ export function NotifBell() {
   const recent = notifs.slice(0, 5);
 
   const markRead = async (id: string) => {
+    const user = getCurrentUser();
     try {
-      await fetch(`/api/notifications/${id}/read`, { method: "PATCH" });
-      setNotifs(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
+      await fetch(`/api/notifications/${id}/read`, {
+        method: "PATCH",
+        headers: { "x-current-user": user },
+      });
+      setNotifs(prev => prev.map(n => n.id===id ? {...n, isRead:true} : n));
     } catch {}
   };
 
   const markAllRead = async () => {
+    const user = getCurrentUser();
     try {
-      await fetch("/api/notifications/read-all", { method: "PATCH" });
-      setNotifs(prev => prev.map(n => ({ ...n, isRead: true })));
+      await fetch("/api/notifications/read-all", {
+        method: "PATCH",
+        headers: { "x-current-user": user },
+      });
+      setNotifs(prev => prev.map(n => ({...n, isRead:true})));
     } catch {}
   };
 
@@ -77,21 +107,26 @@ export function NotifBell() {
       <button
         onClick={() => setOpen(o => !o)}
         className="relative p-2 rounded-lg hover:bg-muted transition-colors"
-        aria-label={`Notifications${unread > 0 ? ` (${unread} unread)` : ""}`}
+        aria-label={`Notifications — ${unread} unread for ${getCurrentUser()}`}
       >
         <Bell className="h-5 w-5 text-muted-foreground" />
         {unread > 0 && (
-          <span className="absolute top-1 right-1 flex items-center justify-center w-4 h-4 text-[10px] font-bold rounded-full bg-red-500 text-white leading-none">
-            {unread > 9 ? "9+" : unread}
+          <span className="absolute top-1 right-1 flex items-center justify-center
+            min-w-[16px] h-4 px-0.5 text-[10px] font-bold rounded-full bg-red-500 text-white leading-none">
+            {unread > 99 ? "99+" : unread}
           </span>
         )}
       </button>
 
       {open && (
         <div className="absolute right-0 top-full mt-2 w-80 bg-background border rounded-xl shadow-2xl z-50 overflow-hidden">
-          {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b">
-            <span className="text-sm font-semibold">Notifications</span>
+            <div>
+              <span className="text-sm font-semibold">Notifications</span>
+              <p className="text-[10px] text-muted-foreground mt-0.5">
+                Showing for: <span className="font-medium text-primary">{getCurrentUser()}</span>
+              </p>
+            </div>
             {unread > 0 && (
               <button onClick={markAllRead} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
                 Mark all read
@@ -99,30 +134,31 @@ export function NotifBell() {
             )}
           </div>
 
-          {/* List */}
           <div className="max-h-80 overflow-y-auto divide-y">
             {recent.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-8">No notifications</p>
             ) : recent.map(n => (
-              <div
-                key={n.id}
+              <div key={n.id}
                 onClick={() => { markRead(n.id); if (n.link) window.location.href = n.link; }}
-                className={`px-4 py-3 cursor-pointer hover:bg-muted/50 transition-colors ${!n.isRead ? "bg-primary/5" : ""}`}
-              >
-                <div className="flex items-start gap-2">
-                  <span className={`mt-0.5 inline-flex px-1.5 py-0.5 text-[10px] font-semibold rounded ${TYPE_COLORS[n.type] ?? TYPE_COLORS.info}`}>
+                className={`px-4 py-3 cursor-pointer hover:bg-muted/50 transition-colors
+                  ${!n.isRead ? "bg-primary/5" : ""}`}>
+                <div className="flex items-start gap-2 mb-1">
+                  <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${TYPE_COLORS[n.type] ?? TYPE_COLORS.info}`}>
                     {n.type}
                   </span>
-                  {!n.isRead && <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0 mt-1.5" />}
+                  {!n.isRead && <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0 mt-1" />}
+                  <span className="text-[10px] text-muted-foreground ml-auto">{timeAgo(n.createdAt)}</span>
                 </div>
-                <p className={`text-sm mt-1 ${!n.isRead ? "font-medium text-foreground" : "text-muted-foreground"}`}>{n.title}</p>
-                <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{n.message}</p>
-                <p className="text-[10px] text-muted-foreground/60 mt-1">{timeAgo(n.createdAt)}</p>
+                <p className={`text-sm leading-snug ${!n.isRead ? "font-medium text-foreground" : "text-muted-foreground"}`}>
+                  {n.title}
+                </p>
+                {n.message && (
+                  <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{n.message}</p>
+                )}
               </div>
             ))}
           </div>
 
-          {/* Footer */}
           <div className="border-t px-4 py-2.5">
             <Link href="/notifications" onClick={() => setOpen(false)}
               className="text-xs text-primary hover:underline font-medium">
