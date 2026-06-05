@@ -3,12 +3,13 @@ import { useState, useEffect } from "react";
 import { Link } from "wouter";
 import { Header } from "@/components/header";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Bell, Plus, Trash2, CheckCheck, X, Lock, Unlock } from "lucide-react";
+import { ArrowLeft, Bell, Plus, Trash2, CheckCheck, X, Lock, Unlock, Megaphone } from "lucide-react";
 
 interface Notification {
   id: string; title: string; message: string;
   type: "info"|"success"|"warning"|"alert";
   link?: string; isRead: boolean; author: string; createdAt: string;
+  isTicker?: boolean;
 }
 
 const TYPE_STYLE: Record<string, { badge:string; bar:string }> = {
@@ -121,6 +122,17 @@ export default function NotificationsPage() {
       method:"DELETE", headers:{"x-admin-auth": getAdminHeader()},
     });
     setNotifs(prev => prev.filter(n => n.id !== id));
+  };
+
+  const toggleTicker = async (id: string, current: boolean) => {
+    try {
+      await fetch(`/api/notifications/${id}/ticker`, {
+        method: "PATCH",
+        headers: { "Content-Type":"application/json", "x-admin-auth": getAdminHeader() },
+        body: JSON.stringify({ isTicker: !current }),
+      });
+      setNotifs(prev => prev.map(n => n.id===id ? {...n, isTicker: !current} : n));
+    } catch(e:any) { alert("Failed: "+e.message); }
   };
 
   const send = async () => {
@@ -312,6 +324,7 @@ export default function NotificationsPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${s.badge}`}>{n.type}</span>
+                        {n.isTicker && <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"><Megaphone className="h-2.5 w-2.5"/>Scrolling</span>}
                         {!n.isRead && <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0"/>}
                         <span className="text-[11px] text-muted-foreground">{timeAgo(n.createdAt)}</span>
                       </div>
@@ -332,9 +345,19 @@ export default function NotificationsPage() {
                       </div>
                     </div>
                     {adminMode && (
-                      <button onClick={()=>deleteNotif(n.id)} className="text-muted-foreground/50 hover:text-red-500 transition-colors flex-shrink-0 mt-0.5">
-                        <Trash2 className="h-4 w-4"/>
-                      </button>
+                      <div className="flex items-center gap-2 flex-shrink-0 mt-0.5">
+                        <button
+                          onClick={()=>toggleTicker(n.id, !!n.isTicker)}
+                          title={n.isTicker ? "Remove from scrolling banner" : "Add to scrolling banner"}
+                          className={`transition-colors ${n.isTicker
+                            ? "text-amber-500 hover:text-amber-300"
+                            : "text-muted-foreground/40 hover:text-amber-500"}`}>
+                          <Megaphone className="h-4 w-4"/>
+                        </button>
+                        <button onClick={()=>deleteNotif(n.id)} className="text-muted-foreground/50 hover:text-red-500 transition-colors">
+                          <Trash2 className="h-4 w-4"/>
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>
