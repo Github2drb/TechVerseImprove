@@ -1313,7 +1313,24 @@ r.get("/project-status-excel", async (_q, res) => {
   }
 });
 
-
+// ─────────────────────────────────────────────────────────────────────────────
+// ADD TO server/routes.ts — paste just before the health check route
+// Toggles isTicker flag on a notification
+// ─────────────────────────────────────────────────────────────────────────────
+ 
+r.patch("/notifications/:id/ticker", async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+    const f = await readJsonFile<{ notifications: any[]; lastUpdated: string }>("notifications.json");
+    if (!f) return res.status(404).json({ message: "Not found" });
+    const n = f.notifications.find((x: any) => x.id === req.params.id);
+    if (!n) return res.status(404).json({ message: "Notification not found" });
+    n.isTicker = req.body.isTicker ?? !n.isTicker; // toggle if not passed
+    f.lastUpdated = new Date().toISOString();
+    await writeJsonFile("notifications.json", f, `Toggle ticker: ${n.title}`);
+    res.json({ success: true, isTicker: n.isTicker });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
 
 // ── END DAILY REPORT ATTENDANCE ──────────────────────────────────────────────  
 // ── Health check ─────────────────────────────────────────────────────────────
