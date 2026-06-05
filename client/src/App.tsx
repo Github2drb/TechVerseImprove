@@ -19,6 +19,8 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DailyReport from "@/pages/daily-report";
 import ISA101Page from "@/pages/ISA101Page";
+import BlogPage          from "@/pages/blog";
+import NotificationsPage from "@/pages/notifications";
 
 function AppRoutes() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -39,6 +41,8 @@ function AppRoutes() {
       <Route path="/teamsheet" component={TeamSheet} />
       <Route path="/daily-report" component={DailyReport} />  {/* ← ADD */}
       <Route path="/knowledge/isa-101-hmi-standards" component={ISA101Page} />
+      <Route path="/blog"          component={BlogPage} />
+      <Route path="/notifications" component={NotificationsPage} />
       <Route component={NotFound} />
     </Switch>
   );
