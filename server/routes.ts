@@ -885,28 +885,62 @@ r.delete("/blog-posts/:id", async (req, res) => {
 // ── NOTIFICATIONS (persistent — replaces the in-memory block) ─────────────────
 // DELETE the old 4-line in-memory notifications block and use these instead:
 
-r.get("/notifications", async (_q, res) => {
+// ─────────────────────────────────────────────────────────────────────────────
+// REPLACE all existing notification routes in server/routes.ts with these.
+// Find the block starting with:
+//   r.get("/notifications", ...
+// and ending with:
+//   r.patch("/notifications/read-all", ...
+// Delete those lines and paste this entire block instead.
+// ─────────────────────────────────────────────────────────────────────────────
+ 
+interface NotifV2 {
+  id: string; title: string; message: string;
+  type: string; link?: string; isTicker?: boolean;
+  readBy: string[];   // ← replaces isRead boolean
+  author: string; createdAt: string;
+}
+interface NotifFile2 { notifications: NotifV2[]; lastUpdated: string; }
+ 
+// Helper: migrate old isRead boolean → readBy array
+function migrateNotif(n: any): NotifV2 {
+  if (!n.readBy) {
+    n.readBy = n.isRead ? ["__all__"] : []; // __all__ = was already read by everyone (legacy)
+    delete n.isRead;
+  }
+  return n as NotifV2;
+}
+ 
+r.get("/notifications", async (req, res) => {
   try {
-    const f = await readJsonFile<NotifFile>("notifications.json");
+    const currentUser = ((req.headers["x-current-user"] as string) || "guest").toLowerCase();
+    const f = await readJsonFile<NotifFile2>("notifications.json");
     const notifs = (f?.notifications ?? [])
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      .map(migrateNotif)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .map(n => ({
+        ...n,
+        isRead: n.readBy.includes(currentUser) || n.readBy.includes("__all__"),
+      }));
     res.json(notifs);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
-
+ 
 r.post("/notifications", async (req, res) => {
   try {
     if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-    const f = (await readJsonFile<NotifFile>("notifications.json"))
+    const f = (await readJsonFile<NotifFile2>("notifications.json"))
       ?? { notifications: [], lastUpdated: "" };
-    const n: Notification = {
+    f.notifications = f.notifications.map(migrateNotif);
+    const n: NotifV2 = {
       id:        `notif-${Date.now()}`,
       title:     req.body.title   ?? "Notification",
       message:   req.body.message ?? "",
       type:      req.body.type    ?? "info",
       link:      req.body.link,
-      isRead:    false,
-      author:    req.body.author  ?? "Admin",
+      isTicker:  req.body.isTicker ?? false,
+      readBy:    [],  // unread for everyone
+      author:    req.body.author ?? "Admin",
       createdAt: new Date().toISOString(),
     };
     f.notifications.push(n);
@@ -915,27 +949,62 @@ r.post("/notifications", async (req, res) => {
     res.status(201).json(n);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
-
+ 
 r.patch("/notifications/:id/read", async (req, res) => {
   try {
-    const f = await readJsonFile<NotifFile>("notifications.json");
+    const currentUser = ((req.headers["x-current-user"] as string) || "guest").toLowerCase();
+    const f = await readJsonFile<NotifFile2>("notifications.json");
     if (!f) return res.status(404).json({ message: "Not found" });
+    f.notifications = f.notifications.map(migrateNotif);
     const n = f.notifications.find(x => x.id === req.params.id);
     if (!n) return res.status(404).json({ message: "Not found" });
-    n.isRead = true;
-    f.lastUpdated = new Date().toISOString();
-    await writeJsonFile("notifications.json", f, `Read notification ${req.params.id}`);
+    if (!n.readBy.includes(currentUser)) {
+      n.readBy.push(currentUser);
+      f.lastUpdated = new Date().toISOString();
+      await writeJsonFile("notifications.json", f, `Read by ${currentUser}`);
+    }
     res.json({ success: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
-
-r.patch("/notifications/read-all", async (_q, res) => {
+ 
+r.patch("/notifications/read-all", async (req, res) => {
   try {
-    const f = await readJsonFile<NotifFile>("notifications.json");
+    const currentUser = ((req.headers["x-current-user"] as string) || "guest").toLowerCase();
+    const f = await readJsonFile<NotifFile2>("notifications.json");
     if (!f) return res.json({ success: true });
-    f.notifications.forEach(n => n.isRead = true);
+    f.notifications = f.notifications.map(migrateNotif);
+    f.notifications.forEach(n => {
+      if (!n.readBy.includes(currentUser)) n.readBy.push(currentUser);
+    });
     f.lastUpdated = new Date().toISOString();
-    await writeJsonFile("notifications.json", f, "Mark all notifications read");
+    await writeJsonFile("notifications.json", f, `Read all by ${currentUser}`);
+    res.json({ success: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+ 
+r.patch("/notifications/:id/ticker", async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+    const f = await readJsonFile<NotifFile2>("notifications.json");
+    if (!f) return res.status(404).json({ message: "Not found" });
+    f.notifications = f.notifications.map(migrateNotif);
+    const n = f.notifications.find((x: any) => x.id === req.params.id);
+    if (!n) return res.status(404).json({ message: "Not found" });
+    n.isTicker = req.body.isTicker ?? !n.isTicker;
+    f.lastUpdated = new Date().toISOString();
+    await writeJsonFile("notifications.json", f, `Toggle ticker: ${n.title}`);
+    res.json({ success: true, isTicker: n.isTicker });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+ 
+r.delete("/notifications/:id", async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+    const f = await readJsonFile<NotifFile2>("notifications.json");
+    if (!f) return res.status(404).json({ message: "Not found" });
+    f.notifications = f.notifications.filter((n: any) => n.id !== req.params.id);
+    f.lastUpdated = new Date().toISOString();
+    await writeJsonFile("notifications.json", f, `Delete notification ${req.params.id}`);
     res.json({ success: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
