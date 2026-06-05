@@ -1,17 +1,18 @@
 services:
   - type: web
-    name: techverse-improve
-    env: node
-    region: singapore
-    plan: free
+    name: controls-dashboard-1
+    runtime: node
+    region: singapore          # closest to India — change to oregon if preferred
+    branch: main               # auto-deploy triggers on every push to this branch
     buildCommand: npm install && npm run build
-    startCommand: npm run start
+    startCommand: npm start
+    autoDeploy: true           # THIS is what was missing — enables auto-deploy
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 5000
       - key: GITHUB_TOKEN
-        sync: false   # You must set this manually in Render dashboard
-      - key: MICROSOFT_ACCESS_TOKEN
-        sync: false   # Optional - set only if SharePoint is used
+        fromService:
+          type: web
+          name: controls-dashboard-1
+          envVarKey: GITHUB_TOKEN  # keep using existing token from Render dashboard
+    healthCheckPath: /api/health   # Render pings this to confirm deploy succeeded
