@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { Link } from "wouter";
 import { Header } from "@/components/header";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Bell, Plus, Trash2, CheckCheck, X } from "lucide-react";
+import { ArrowLeft, Bell, Plus, Trash2, CheckCheck, X, Lock, Unlock } from "lucide-react";
 
 interface Notification {
   id: string; title: string; message: string;
@@ -33,7 +33,21 @@ function getAdminHeader(): string {
     return btoa(JSON.stringify({ username: name.toLowerCase(), role:"admin" }));
   } catch { return ""; }
 }
-function isAdminSession() { return sessionStorage.getItem("drb_admin") === "1"; }
+function isAdminSession(): boolean {
+  // Check daily-report admin session
+  if (sessionStorage.getItem("drb_admin") === "1") return true;
+  // Check main app auth (stored in localStorage by the main login)
+  try {
+    const keys = ["user","currentUser","auth","drb_user","session"];
+    for (const k of keys) {
+      const raw = localStorage.getItem(k);
+      if (!raw) continue;
+      const obj = JSON.parse(raw);
+      if (obj?.role === "admin" || obj?.username?.toLowerCase() === "admin") return true;
+    }
+  } catch {}
+  return false;
+}
 
 const EMPTY_NOTIF = { title:"", message:"", type:"info" as const, link:"" };
 
@@ -44,8 +58,42 @@ export default function NotificationsPage() {
   const [compose, setCompose] = useState(false);
   const [draft,   setDraft]   = useState({ ...EMPTY_NOTIF });
   const [sending, setSending] = useState(false);
-  const [filter,  setFilter]  = useState<"all"|"unread">("all");
-  const adminMode = isAdminSession();
+  const [filter,      setFilter]      = useState<"all"|"unread">("all");
+  const [adminMode,   setAdminMode]   = useState(isAdminSession());
+  const [showLogin,   setShowLogin]   = useState(false);
+  const [loginUser,   setLoginUser]   = useState("");
+  const [loginPass,   setLoginPass]   = useState("");
+  const [loginErr,    setLoginErr]    = useState(false);
+  const [loginLoading,setLoginLoading]= useState(false);
+  const [adminUsers,  setAdminUsers]  = useState<{username:string;password:string;name?:string}[]>([]);
+
+  const loadAdmins = async () => {
+    setLoginLoading(true);
+    try {
+      const r = await fetch("https://raw.githubusercontent.com/Github2drb/Controls_Team_Tracker/main/engineers_auth.json?t="+Date.now());
+      const data = await r.json();
+      const list = data.engineers || data;
+      const admins = list.filter((u:any) => u.role === "admin" && u.isActive !== false);
+      setAdminUsers(admins.length ? admins : [{username:"admin",password:"admin@drb",name:"Admin"}]);
+    } catch {
+      setAdminUsers([{username:"admin",password:"admin@drb",name:"Admin"}]);
+    } finally { setLoginLoading(false); }
+  };
+
+  const submitLogin = () => {
+    const un = loginUser.trim().toLowerCase();
+    const pw = loginPass;
+    const match = adminUsers.find(u => u.username.toLowerCase()===un && u.password===pw);
+    if (match) {
+      sessionStorage.setItem("drb_admin","1");
+      sessionStorage.setItem("drb_admin_name", match.name||match.username);
+      setAdminMode(true);
+      setShowLogin(false);
+      setLoginUser(""); setLoginPass(""); setLoginErr(false);
+    } else {
+      setLoginErr(true); setLoginPass("");
+    }
+  };
 
   const load = async () => {
     setLoading(true); setError(null);
@@ -109,20 +157,70 @@ export default function NotificationsPage() {
               {unreadCount > 0 ? `${unreadCount} unread` : "All caught up"}
             </p>
           </div>
-          <div className="flex gap-2 flex-wrap">
+          <div className="flex gap-2 flex-wrap items-center">
             {unreadCount > 0 && (
               <Button variant="outline" size="sm" onClick={markAllRead} className="gap-2">
                 <CheckCheck className="h-4 w-4" /> Mark all read
               </Button>
             )}
-            {adminMode && (
-              <Button size="sm" onClick={() => setCompose(true)} className="gap-2">
-                <Plus className="h-4 w-4" /> New notification
+            {adminMode ? (
+              <>
+                <Button size="sm" onClick={() => setCompose(true)} className="gap-2">
+                  <Plus className="h-4 w-4" /> New notification
+                </Button>
+                <Button variant="destructive" size="sm" onClick={() => {
+                  sessionStorage.removeItem("drb_admin");
+                  setAdminMode(false);
+                }}>Lock</Button>
+              </>
+            ) : (
+              <Button variant="outline" size="sm" className="gap-2" onClick={() => {
+                setShowLogin(true); setLoginErr(false); loadAdmins();
+              }}>
+                <Lock className="h-4 w-4" /> Admin Mode
               </Button>
             )}
             <Link href="/"><Button variant="outline" size="sm"><ArrowLeft className="h-4 w-4"/></Button></Link>
           </div>
         </div>
+
+        {/* Admin login modal */}
+        {showLogin && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+            <div className="bg-background border rounded-xl shadow-2xl p-6 w-80 space-y-4">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <Lock className="h-4 w-4" /> Admin Login
+              </h2>
+              {loginLoading ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"/>Loading…
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-muted-foreground">Username</label>
+                    <input type="text" placeholder="e.g. admin" value={loginUser} autoFocus
+                      onChange={e=>{setLoginUser(e.target.value);setLoginErr(false);}}
+                      onKeyDown={e=>e.key==="Enter"&&submitLogin()}
+                      className="w-full border rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-primary border-input" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-muted-foreground">Password</label>
+                    <input type="password" placeholder="Enter password" value={loginPass}
+                      onChange={e=>{setLoginPass(e.target.value);setLoginErr(false);}}
+                      onKeyDown={e=>e.key==="Enter"&&submitLogin()}
+                      className={`w-full border rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-primary ${loginErr?"border-red-500":"border-input"}`} />
+                  </div>
+                  {loginErr && <p className="text-xs text-red-500">Incorrect username or password.</p>}
+                </>
+              )}
+              <div className="flex gap-2 pt-1">
+                <Button size="sm" onClick={submitLogin} disabled={loginLoading} className="flex-1">Login</Button>
+                <Button size="sm" variant="outline" onClick={()=>{setShowLogin(false);setLoginUser("");setLoginPass("");setLoginErr(false);}} className="flex-1">Cancel</Button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Filter tabs */}
         <div className="flex gap-1.5">
