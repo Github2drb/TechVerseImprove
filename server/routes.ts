@@ -1245,6 +1245,46 @@ r.post("/daily-report-data", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ADD TO server/routes.ts — paste just before the health check route
+// Handles saving/loading project status overrides to project-status-data.json
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ProjectStatusFile {
+  overrides: Record<string, string[]>; // projId -> array of status per phase
+  phases:    string[];
+  projects:  Array<{ id: string; name: string; engineer: string }>;
+  lastUpdated: string;
+}
+
+r.get("/project-status-data", async (_q, res) => {
+  try {
+    const f = await readJsonFile<ProjectStatusFile>("project-status-data.json");
+    if (!f) return res.json({ exists: false });
+    res.json({ exists: true, ...f });
+  } catch {
+    res.json({ exists: false }); // no saved data yet = use Excel defaults
+  }
+});
+
+r.post("/project-status-data", async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+    const f: ProjectStatusFile = {
+      overrides:   req.body.overrides   ?? {},
+      phases:      req.body.phases      ?? [],
+      projects:    req.body.projects    ?? [],
+      lastUpdated: new Date().toISOString(),
+    };
+    await writeJsonFile("project-status-data.json", f, "Update project status overrides");
+    res.json({ success: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+
+
+
+
 // ── END DAILY REPORT ATTENDANCE ──────────────────────────────────────────────  
 // ── Health check ─────────────────────────────────────────────────────────────
   r.get("/health", async (_q, res) => {
