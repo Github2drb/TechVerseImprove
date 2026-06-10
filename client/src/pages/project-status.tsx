@@ -305,6 +305,11 @@ export default function ProjectStatus() {
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-4">
             <Link href="/"><Button variant="ghost" size="sm"><ArrowLeft className="h-4 w-4 mr-2"/>Back</Button></Link>
+            <Link href="/project-roadmap">
+              <Button variant="outline" size="sm" className="gap-2">
+                <Map className="h-4 w-4" /> Roadmap
+              </Button>
+            </Link>
             <div>
               <h1 className="text-2xl font-bold flex items-center gap-2">
                 <Calendar className="h-6 w-6 text-primary"/>Project Activity Tracking
