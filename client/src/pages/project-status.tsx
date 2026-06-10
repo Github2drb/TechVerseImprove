@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import {
   ArrowLeft, Calendar, RefreshCw, Save, Plus,
   CheckCircle, Clock, AlertTriangle,
-  ChevronLeft, ChevronRight, CalendarDays, Map,
+  ChevronLeft, ChevronRight, CalendarDays,
 } from "lucide-react";
 import { Link } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -110,6 +110,8 @@ export default function ProjectStatus() {
 
   const [pendingActivities, setPendingActivities] = useState<Record<string, Record<string, string>>>({});
   const [pendingStatuses,   setPendingStatuses]   = useState<Record<string, string>>({});
+  // savedStatuses: persists confirmed saves — overrides server data even after refetch
+  const [savedStatuses,     setSavedStatuses]     = useState<Record<string, string>>({});
   const [isSaving,          setIsSaving]          = useState(false);
   const [editingCell,       setEditingCell]        = useState<{ project:string; date:string } | null>(null);
   const [activityInput,     setActivityInput]      = useState("");
@@ -169,8 +171,12 @@ export default function ProjectStatus() {
   const getActivityForDate = (project:ProjectActivity, date:string) =>
     pendingActivities[project.projectName]?.[date] ?? project.activities?.[date] ?? "";
 
+  // Priority: pending (unsaved) > savedStatuses (confirmed save) > server data
   const getCurrentStatus = (project:ProjectActivity) =>
-    pendingStatuses[project.projectName] ?? project.currentStatus ?? "Design Stage";
+    pendingStatuses[project.projectName]
+    ?? savedStatuses[project.projectName]
+    ?? project.currentStatus
+    ?? "Design Stage";
 
   const openActivityEditor = (project:string, date:string, currentValue:string) => {
     setEditingCell({ project, date }); setActivityInput(currentValue);
@@ -225,13 +231,16 @@ export default function ProjectStatus() {
           }
         );
 
-        // Clear pending state — cache already shows the new values
+        // Lock in saved statuses — these override server data even after any refetch
+        setSavedStatuses(prev => ({ ...prev, ...statusesToSave }));
+
+        // Clear pending state
         setPendingActivities({});
         setPendingStatuses({});
         toast({ title:`All ${successCount} changes saved successfully` });
 
-        // Background refetch to sync with GitHub (does not affect displayed values)
-        refetch();
+        // Delayed refetch — GitHub cache (5 min TTL) will have fresh data by then
+        setTimeout(() => refetch(), 6000);
       } else {
         toast({ title:`Saved ${successCount}, ${failCount} failed`, variant:"destructive" });
       }
@@ -296,12 +305,6 @@ export default function ProjectStatus() {
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-4">
             <Link href="/"><Button variant="ghost" size="sm"><ArrowLeft className="h-4 w-4 mr-2"/>Back</Button></Link>
-            <Link href="/project-roadmap">
-              <Button variant="outline" size="sm" className="gap-2">
-                <Map className="h-4 w-4" /> Roadmap
-              </Button>
-            </Link>
-            
             <div>
               <h1 className="text-2xl font-bold flex items-center gap-2">
                 <Calendar className="h-6 w-6 text-primary"/>Project Activity Tracking
