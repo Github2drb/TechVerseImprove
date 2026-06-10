@@ -146,16 +146,15 @@ export default function ProjectStatus() {
   );
 
   // ── Mutations ─────────────────────────────────────────────────────────────
+  // No onSuccess invalidation here — saveAllChanges controls the refetch timing
   const saveMutation = useMutation({
     mutationFn: async (data: { projectName:string; date:string; activity:string }) =>
       apiRequest("POST", "/api/project-activities", data),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey:["/api/project-activities"] }),
   });
 
   const updateStatusMutation = useMutation({
     mutationFn: async (data: { projectName:string; status:string }) =>
       apiRequest("POST", "/api/project-activities/status", data),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey:["/api/project-activities"] }),
   });
 
   // ── Handlers ──────────────────────────────────────────────────────────────
@@ -196,13 +195,16 @@ export default function ProjectStatus() {
         try { await updateStatusMutation.mutateAsync({ projectName, status }); successCount++; }
         catch { failCount++; }
       }
+      // Refetch first — wait for fresh data from GitHub
+      await refetch();
+
       if (failCount === 0) {
+        // Clear pending AFTER fresh data is loaded — prevents flash of old status
         setPendingActivities({}); setPendingStatuses({});
         toast({ title:`All ${successCount} changes saved successfully` });
       } else {
         toast({ title:`Saved ${successCount}, ${failCount} failed`, variant:"destructive" });
       }
-      refetch();
     } catch { toast({ title:"An unexpected error occurred", variant:"destructive" }); }
     finally { setIsSaving(false); }
   };
