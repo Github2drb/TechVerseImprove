@@ -20,6 +20,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import DailyReport from "@/pages/daily-report";
 import ISA101Page from "@/pages/ISA101Page";
 import BlogPage          from "@/pages/blog";
+import ProjectRoadmap from "@/pages/project-roadmap";
 import NotificationsPage from "@/pages/notifications";
 
 function AppRoutes() {
@@ -43,6 +44,7 @@ function AppRoutes() {
       <Route path="/knowledge/isa-101-hmi-standards" component={ISA101Page} />
       <Route path="/blog"          component={BlogPage} />
       <Route path="/notifications" component={NotificationsPage} />
+      <Route path="/project-roadmap" component={ProjectRoadmap} />
       <Route component={NotFound} />
     </Switch>
   );
