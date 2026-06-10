@@ -184,24 +184,54 @@ export default function ProjectStatus() {
     if (!user) { toast({ title:"Please log in to save changes", variant:"destructive" }); return; }
     setIsSaving(true);
     let successCount = 0, failCount = 0;
+
+    // Snapshot what we are about to save (before any async operations)
+    const statusesToSave    = { ...pendingStatuses };
+    const activitiesToSave  = { ...pendingActivities };
+
     try {
-      for (const [projectName, dateActivities] of Object.entries(pendingActivities)) {
+      // Save activity log entries
+      for (const [projectName, dateActivities] of Object.entries(activitiesToSave)) {
         for (const [date, activity] of Object.entries(dateActivities)) {
           try { await saveMutation.mutateAsync({ projectName, date, activity }); successCount++; }
           catch { failCount++; }
         }
       }
-      for (const [projectName, status] of Object.entries(pendingStatuses)) {
+      // Save status changes
+      for (const [projectName, status] of Object.entries(statusesToSave)) {
         try { await updateStatusMutation.mutateAsync({ projectName, status }); successCount++; }
         catch { failCount++; }
       }
-      // Refetch first — wait for fresh data from GitHub
-      await refetch();
 
       if (failCount === 0) {
-        // Clear pending AFTER fresh data is loaded — prevents flash of old status
-        setPendingActivities({}); setPendingStatuses({});
+        // ── OPTIMISTIC UPDATE ────────────────────────────────────────────────
+        // Directly patch the React Query cache with the saved values.
+        // This avoids relying on refetch() timing against GitHub's cache TTL.
+        queryClient.setQueryData<ProjectActivity[]>(
+          ["/api/project-activities"],
+          (old) => {
+            if (!old) return old;
+            return old.map(project => {
+              // Apply saved status
+              const newStatus = statusesToSave[project.projectName];
+              // Apply saved activity entries
+              const newActivities = activitiesToSave[project.projectName]
+                ? { ...project.activities, ...activitiesToSave[project.projectName] }
+                : project.activities;
+              return newStatus || activitiesToSave[project.projectName]
+                ? { ...project, currentStatus: newStatus ?? project.currentStatus, activities: newActivities }
+                : project;
+            });
+          }
+        );
+
+        // Clear pending state — cache already shows the new values
+        setPendingActivities({});
+        setPendingStatuses({});
         toast({ title:`All ${successCount} changes saved successfully` });
+
+        // Background refetch to sync with GitHub (does not affect displayed values)
+        refetch();
       } else {
         toast({ title:`Saved ${successCount}, ${failCount} failed`, variant:"destructive" });
       }
