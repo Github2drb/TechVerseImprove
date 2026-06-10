@@ -1080,71 +1080,60 @@ r.delete("/notifications/:id", async (req, res) => {
   // ── PROJECT ACTIVITIES ──────────────────────────────────────────────────────
 
   r.get("/project-activities", async (_q, res) => {
-    try {
-      const [activities, dataAssignments, waFile] = await Promise.all([
-        getProjectActivities(),
-        getProjectData(),
-        readJsonFile<WAFile>("weekly-assignments.json"),
-      ]);
-      const map = new Map<string, { projectName: string; currentStatus: string; activities: Record<string,string> }>();
-
-      // 1. Seed map from project-activities.json (has actual activity log entries)
-      for (const e of activities) {
-        const k = e.projectName.trim().toLowerCase();
-        if (map.has(k)) Object.assign(map.get(k)!.activities, e.activities);
-        else map.set(k, { ...e, activities: { ...e.activities } });
+  try {
+    const [activities, waFile] = await Promise.all([
+      getProjectActivities(),
+      readJsonFile<WAFile>("weekly-assignments.json"),
+    ]);
+ 
+    // ── ONLY show projects that exist in weekly-assignments.json ──────────────
+    // This removes stale projects from data.json / project-activities.json
+    const activeAssignments = waFile?.assignments ?? [];
+ 
+    // Build a set of active project keys from weekly-assignments
+    const activeProjKeys = new Set(
+      activeAssignments
+        .filter(a => a.projectName?.trim())
+        .map(a => projKey(a.projectName))
+    );
+ 
+    // If weekly-assignments is empty (first load), fall back to showing all
+    const filterByActive = activeProjKeys.size > 0;
+ 
+    const map = new Map<string, {
+      projectName: string; currentStatus: string; activities: Record<string,string>
+    }>();
+ 
+    // 1. Seed from project-activities.json — but only if project is active
+    for (const e of activities) {
+      const pk = projKey(e.projectName);
+      if (filterByActive && !activeProjKeys.has(pk)) continue; // skip inactive
+      const k = e.projectName.trim().toLowerCase();
+      if (map.has(k)) Object.assign(map.get(k)!.activities, e.activities);
+      else map.set(k, { ...e, activities: { ...e.activities } });
+    }
+ 
+    // 2. Add active weekly assignments not yet in map
+    const STATUS_DISPLAY: Record<string,string> = {
+      in_progress: "In Progress", not_started: "Not Started",
+      completed: "Completed", on_hold: "On Hold", blocked: "Blocked",
+    };
+    const pKeys = new Set([...map.keys()].map(projKey));
+ 
+    for (const a of activeAssignments) {
+      if (!a.projectName?.trim()) continue;
+      const k  = a.projectName.trim().toLowerCase();
+      const pk = projKey(a.projectName);
+      if (!map.has(k) && !pKeys.has(pk)) {
+        const displayStatus = STATUS_DISPLAY[a.currentStatus ?? ""] ?? a.currentStatus ?? "In Progress";
+        map.set(k, { projectName: a.projectName.trim(), currentStatus: displayStatus, activities: {} });
+        pKeys.add(pk);
       }
-
-      // 2. Add active projects from weekly-assignments.json not yet in map
-      const STATUS_DISPLAY: Record<string,string> = {
-        in_progress: "In Progress", not_started: "Not Started",
-        completed: "Completed", on_hold: "On Hold", blocked: "Blocked",
-      };
-      const pKeys = new Set([...map.keys()].map(projKey));
-      for (const a of (waFile?.assignments ?? [])) {
-        if (!a.projectName?.trim()) continue;
-        const k = a.projectName.trim().toLowerCase();
-        const pk = projKey(a.projectName);
-        if (!map.has(k) && !pKeys.has(pk)) {
-          const displayStatus = STATUS_DISPLAY[a.currentStatus ?? ""] ?? a.currentStatus ?? "In Progress";
-          map.set(k, { projectName: a.projectName.trim(), currentStatus: displayStatus, activities: {} });
-          pKeys.add(pk);
-        }
-      }
-
-      // 3. Add any data.json active assignments not already in map
-      for (const a of dataAssignments) {
-        if (a.status?.toLowerCase() === "completed") continue;
-        const k = a.projectName.trim().toLowerCase();
-        const pk = projKey(a.projectName);
-        if (!map.has(k) && !pKeys.has(pk)) {
-          map.set(k, { projectName: a.projectName.trim(), currentStatus: a.status || "In Progress", activities: {} });
-          pKeys.add(pk);
-        }
-      }
-
-      res.json(Array.from(map.values()));
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.post("/project-activities", async (req, res) => {
-    try {
-      const { projectName, date, activity, status } = req.body;
-      if (!projectName || !date || !activity) return res.status(400).json({ error: "projectName, date, activity required" });
-      const result = await upsertProjectActivity(projectName, date, activity, status);
-      if (!result.success) return res.status(400).json({ error: result.message });
-      res.json({ message: result.message });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.post("/project-activities/status", async (req, res) => {
-    try {
-      const { projectName, status } = req.body;
-      if (!projectName || !status) return res.status(400).json({ error: "projectName and status required" });
-      const result = await upsertProjectActivity(projectName, "", "", status);
-      res.json({ success: result.success });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
+    }
+ 
+    res.json(Array.from(map.values()));
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
 
   // ── ANALYTICS ───────────────────────────────────────────────────────────────
 
