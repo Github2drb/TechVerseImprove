@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Briefcase, Users, ChevronLeft, Search, Filter, Edit2, Plus, AlertTriangle, User, Trash2, ChevronDown, X } from "lucide-react";
+import { Briefcase, Users, ChevronLeft, Search, Filter, Edit2, Plus, AlertTriangle, Trash2, ChevronDown, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -56,101 +56,166 @@ interface ProjectRow {
   engineers: EngineerRowData[];
 }
 
+// ── Status config — extended with project phase statuses ─────────────────────
 const statusColors: Record<string, string> = {
-  not_started: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200",
-  in_progress: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
-  completed: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
-  on_hold: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
-  blocked: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
+  // Original statuses
+  not_started:            "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200",
+  in_progress:            "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+  completed:              "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
+  on_hold:                "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
+  blocked:                "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
+  // Phase-based statuses
+  design_stage:           "bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200",
+  electrical_design:      "bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200",
+  procurement_stage:      "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
+  waiting_for_materials:  "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
+  mechanical_assembly:    "bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200",
+  electrical_assembly:    "bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200",
+  installation_pending:   "bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200",
+  installation_in_progress:"bg-pink-100 text-pink-800 dark:bg-pink-900 dark:text-pink-200",
+  plc_power_up:           "bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200",
+  io_check:               "bg-lime-100 text-lime-800 dark:bg-lime-900 dark:text-lime-200",
+  trials_stage:           "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
+  fat:                    "bg-fuchsia-100 text-fuchsia-800 dark:bg-fuchsia-900 dark:text-fuchsia-200",
+  sat:                    "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200",
+  dispatch_stage:         "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
 };
 
 const statusLabels: Record<string, string> = {
-  not_started: "Not Started",
-  in_progress: "In Progress",
-  completed: "Completed",
-  on_hold: "On Hold",
-  blocked: "Blocked",
+  // Original
+  not_started:            "Not Started",
+  in_progress:            "In Progress",
+  completed:              "Completed",
+  on_hold:                "On Hold",
+  blocked:                "Blocked",
+  // Phase-based
+  design_stage:           "Design Stage",
+  electrical_design:      "Electrical Design",
+  procurement_stage:      "Procurement Stage",
+  waiting_for_materials:  "Waiting for Materials",
+  mechanical_assembly:    "Mechanical Assembly",
+  electrical_assembly:    "Electrical Assembly",
+  installation_pending:   "Installation Pending",
+  installation_in_progress:"Installation in Progress",
+  plc_power_up:           "PLC Power Up",
+  io_check:               "IO Check",
+  trials_stage:           "Trials Stage",
+  fat:                    "F.A.T",
+  sat:                    "S.A.T",
+  dispatch_stage:         "Dispatch Stage",
 };
+
+// Status groups for organised dropdown
+const STATUS_GROUPS = [
+  {
+    label: "General",
+    items: [
+      { value:"not_started",  label:"Not Started"  },
+      { value:"on_hold",      label:"On Hold"       },
+      { value:"blocked",      label:"Blocked"       },
+      { value:"completed",    label:"Completed"     },
+    ],
+  },
+  {
+    label: "Design & Procurement",
+    items: [
+      { value:"design_stage",          label:"Design Stage"          },
+      { value:"electrical_design",     label:"Electrical Design"     },
+      { value:"procurement_stage",     label:"Procurement Stage"     },
+      { value:"waiting_for_materials", label:"Waiting for Materials" },
+    ],
+  },
+  {
+    label: "Assembly & Installation",
+    items: [
+      { value:"mechanical_assembly",        label:"Mechanical Assembly"        },
+      { value:"electrical_assembly",        label:"Electrical Assembly"        },
+      { value:"installation_pending",       label:"Installation Pending"       },
+      { value:"installation_in_progress",   label:"Installation in Progress"   },
+    ],
+  },
+  {
+    label: "Testing & Commissioning",
+    items: [
+      { value:"plc_power_up",   label:"PLC Power Up"   },
+      { value:"io_check",       label:"IO Check"        },
+      { value:"trials_stage",   label:"Trials Stage"    },
+      { value:"fat",            label:"F.A.T"           },
+      { value:"sat",            label:"S.A.T"           },
+    ],
+  },
+  {
+    label: "Completion",
+    items: [
+      { value:"in_progress",    label:"In Progress"   },
+      { value:"dispatch_stage", label:"Dispatch Stage" },
+    ],
+  },
+];
 
 function calculateLockDays(from?: string, till?: string): number {
   if (!from || !till) return 0;
-  const fromDate = new Date(from);
-  const tillDate = new Date(till);
-  const diffTime = tillDate.getTime() - fromDate.getTime();
+  const diffTime = new Date(till).getTime() - new Date(from).getTime();
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   return diffDays > 0 ? diffDays : 0;
 }
 
 function calculateDaysExceeded(till?: string): number {
   if (!till) return 0;
-  const tillDate = new Date(till);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  tillDate.setHours(0, 0, 0, 0);
-  const diffTime = today.getTime() - tillDate.getTime();
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  const today = new Date(); today.setHours(0,0,0,0);
+  const tillDate = new Date(till); tillDate.setHours(0,0,0,0);
+  const diffDays = Math.ceil((today.getTime() - tillDate.getTime()) / (1000*60*60*24));
   return diffDays > 0 ? diffDays : 0;
 }
 
 function groupByProject(assignments: WeeklyAssignment[]): ProjectRow[] {
   const projectMap: Record<string, ProjectRow> = {};
-
   assignments.forEach((assignment) => {
     const key = assignment.projectName.toLowerCase().trim();
-
     if (!projectMap[key]) {
-      projectMap[key] = {
-        projectName: assignment.projectName,
-        engineers: [],
-      };
+      projectMap[key] = { projectName: assignment.projectName, engineers: [] };
     }
-
     const existingEngineer = projectMap[key].engineers.find(
       e => e.name === assignment.engineerName && e.assignmentId === assignment.id
     );
-
     if (!existingEngineer) {
       projectMap[key].engineers.push({
-        assignmentId: assignment.id,
-        name: assignment.engineerName,
+        assignmentId:       assignment.id,
+        name:               assignment.engineerName,
         resourceLockedFrom: assignment.resourceLockedFrom,
         resourceLockedTill: assignment.resourceLockedTill,
-        resourceLockDays: calculateLockDays(assignment.resourceLockedFrom, assignment.resourceLockedTill),
-        daysExceeded: calculateDaysExceeded(assignment.resourceLockedTill),
-        internalTarget: assignment.internalTarget,
-        customerTarget: assignment.customerTarget,
-        currentStatus: assignment.currentStatus,
-        constraint: assignment.constraint,
+        resourceLockDays:   calculateLockDays(assignment.resourceLockedFrom, assignment.resourceLockedTill),
+        daysExceeded:       calculateDaysExceeded(assignment.resourceLockedTill),
+        internalTarget:     assignment.internalTarget,
+        customerTarget:     assignment.customerTarget,
+        currentStatus:      assignment.currentStatus,
+        constraint:         assignment.constraint,
       });
     }
   });
-
   return Object.values(projectMap).sort((a, b) => a.projectName.localeCompare(b.projectName));
 }
 
 export default function TeamProjectTracker() {
-  const { toast } = useToast();
-  const { user, isAdmin } = useAuth();
-  const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [editDialogOpen, setEditDialogOpen] = useState(false);
-  const [addDialogOpen, setAddDialogOpen] = useState(false);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const { toast }   = useToast();
+  const { isAdmin } = useAuth();
+  const [searchQuery,       setSearchQuery]       = useState("");
+  const [statusFilter,      setStatusFilter]      = useState<string>("all");
+  const [editDialogOpen,    setEditDialogOpen]    = useState(false);
+  const [addDialogOpen,     setAddDialogOpen]     = useState(false);
+  const [deleteDialogOpen,  setDeleteDialogOpen]  = useState(false);
   const [editingAssignment, setEditingAssignment] = useState<WeeklyAssignment | null>(null);
-  const [deletingAssignment, setDeletingAssignment] = useState<{ id: string; projectName: string; engineerName: string } | null>(null);
+  const [deletingAssignment,setDeletingAssignment]= useState<{ id:string; projectName:string; engineerName:string }|null>(null);
 
   const [formData, setFormData] = useState({
-    engineerName: "",
-    projectName: "",
-    resourceLockedFrom: "",
-    resourceLockedTill: "",
-    internalTarget: "",
-    customerTarget: "",
-    currentStatus: "not_started",
-    constraint: "",
+    engineerName: "", projectName: "",
+    resourceLockedFrom: "", resourceLockedTill: "",
+    internalTarget: "", customerTarget: "",
+    currentStatus: "not_started", constraint: "",
   });
 
-  const { data: weeklyAssignmentsRaw = [], isLoading } = useQuery<WeeklyAssignment[]>({
+  // ── FIXED: Only fetch from weekly-assignments — no data.json merge ─────────
+  const { data: assignments = [], isLoading } = useQuery<WeeklyAssignment[]>({
     queryKey: ["/api/weekly-assignments"],
     queryFn: async () => {
       const response = await fetch("/api/weekly-assignments");
@@ -161,44 +226,6 @@ export default function TeamProjectTracker() {
     refetchOnMount: true,
   });
 
-  // Also fetch from data.json (legacy source) for non-admin engineers
-  const { data: dataJsonProjects = [] } = useQuery<Array<{ engineerName: string; projectName: string; status: string; notes?: string }>>({
-    queryKey: ["/api/projects"],
-    queryFn: async () => {
-      const response = await fetch("/api/projects");
-      if (!response.ok) return [];
-      return response.json();
-    },
-    staleTime: 0,
-    refetchOnMount: true,
-  });
-
-  // Convert data.json entries to WeeklyAssignment shape and merge with weekly assignments
-  const assignments = useMemo((): WeeklyAssignment[] => {
-    // Map data.json entries to WeeklyAssignment shape
-    const dataJsonMapped: WeeklyAssignment[] = dataJsonProjects
-      .filter(p => p.status?.toLowerCase() !== "completed")
-      .map((p, idx) => ({
-        id: `datajson-${idx}-${p.projectName}`,
-        engineerName: p.engineerName || "",
-        weekStart: new Date().toISOString().split("T")[0],
-        projectName: p.projectName,
-        currentStatus: (p.status?.toLowerCase() === "in progress" ? "in_progress" : "not_started") as any,
-        notes: p.notes || "",
-        tasks: [],
-      }));
-
-    // Merge: use weekly-assignments as primary; add data.json entries that aren't already covered
-    const weeklyProjectKeys = new Set(
-      weeklyAssignmentsRaw.map(a => a.projectName.trim().toLowerCase())
-    );
-    const additionalFromDataJson = dataJsonMapped.filter(
-      p => !weeklyProjectKeys.has(p.projectName.trim().toLowerCase())
-    );
-
-    return [...weeklyAssignmentsRaw, ...additionalFromDataJson];
-  }, [weeklyAssignmentsRaw, dataJsonProjects]);
-
   const { data: projectNames = [] } = useQuery<string[]>({
     queryKey: ["/api/project-names"],
     queryFn: async () => {
@@ -208,11 +235,7 @@ export default function TeamProjectTracker() {
     },
   });
 
-  const { data: teamMembers = [] } = useQuery<Array<{ id: string; name: string }>>({
-    queryKey: ["/api/team-members"],
-  });
-
-  const { data: masterEngineers = [] } = useQuery<Array<{ id: string; name: string; initials: string }>>({
+  const { data: masterEngineers = [] } = useQuery<Array<{ id:string; name:string; initials:string }>>({
     queryKey: ["/api/engineers-master-list"],
     queryFn: async () => {
       const response = await fetch("/api/engineers-master-list");
@@ -222,14 +245,13 @@ export default function TeamProjectTracker() {
   });
 
   const [engineerPickerOpen, setEngineerPickerOpen] = useState(false);
-  const [engineerSearch, setEngineerSearch] = useState("");
+  const [engineerSearch,     setEngineerSearch]     = useState("");
   const engineerPickerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
-      if (engineerPickerRef.current && !engineerPickerRef.current.contains(e.target as Node)) {
+      if (engineerPickerRef.current && !engineerPickerRef.current.contains(e.target as Node))
         setEngineerPickerOpen(false);
-      }
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
@@ -241,41 +263,27 @@ export default function TeamProjectTracker() {
   }, [formData.engineerName]);
 
   const toggleEngineer = (name: string) => {
-    const current = selectedEngineers;
-    const exists = current.includes(name);
-    const updated = exists ? current.filter(n => n !== name) : [...current, name];
+    const exists = selectedEngineers.includes(name);
+    const updated = exists ? selectedEngineers.filter(n => n !== name) : [...selectedEngineers, name];
     setFormData(prev => ({ ...prev, engineerName: updated.join(", ") }));
   };
 
   const filteredMasterEngineers = useMemo(() => {
     if (!engineerSearch.trim()) return masterEngineers;
-    return masterEngineers.filter(e =>
-      e.name.toLowerCase().includes(engineerSearch.toLowerCase())
-    );
+    return masterEngineers.filter(e => e.name.toLowerCase().includes(engineerSearch.toLowerCase()));
   }, [masterEngineers, engineerSearch]);
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, ...data }: Partial<WeeklyAssignment> & { id: string }) => {
-      // encodeURIComponent is REQUIRED: synthetic ids (and even real ones) can
-      // contain spaces / & / # from the project name. An un-encoded id produces
-      // a malformed URL -> the server receives a wrong id -> 404 "Failed to update".
-      const res = await apiRequest(
-        "PATCH",
-        `/api/weekly-assignments/${encodeURIComponent(id)}`,
-        data,
-        true
-      );
-      return res;
+      return apiRequest("PATCH", `/api/weekly-assignments/${encodeURIComponent(id)}`, data, true);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/weekly-assignments"] });
       toast({ title: "Assignment updated successfully" });
-      setEditDialogOpen(false);
-      setEditingAssignment(null);
+      setEditDialogOpen(false); setEditingAssignment(null);
     },
     onError: (err: any) => {
-      const msg = err?.message || "Failed to update assignment";
-      toast({ title: msg, variant: "destructive" });
+      toast({ title: err?.message || "Failed to update assignment", variant: "destructive" });
     },
   });
 
@@ -286,8 +294,7 @@ export default function TeamProjectTracker() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/weekly-assignments"] });
       toast({ title: "Assignment added successfully" });
-      setAddDialogOpen(false);
-      resetFormData();
+      setAddDialogOpen(false); resetFormData();
     },
     onError: (err: any) => {
       toast({ title: err?.message || "Failed to add assignment", variant: "destructive" });
@@ -301,8 +308,7 @@ export default function TeamProjectTracker() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/weekly-assignments"] });
       toast({ title: "Assignment deleted successfully" });
-      setDeleteDialogOpen(false);
-      setDeletingAssignment(null);
+      setDeleteDialogOpen(false); setDeletingAssignment(null);
     },
     onError: (err: any) => {
       toast({ title: err?.message || "Failed to delete assignment", variant: "destructive" });
@@ -310,18 +316,9 @@ export default function TeamProjectTracker() {
   });
 
   const resetFormData = () => {
-    setFormData({
-      engineerName: "",
-      projectName: "",
-      resourceLockedFrom: "",
-      resourceLockedTill: "",
-      internalTarget: "",
-      customerTarget: "",
-      currentStatus: "not_started",
-      constraint: "",
-    });
-    setEngineerPickerOpen(false);
-    setEngineerSearch("");
+    setFormData({ engineerName:"", projectName:"", resourceLockedFrom:"", resourceLockedTill:"",
+      internalTarget:"", customerTarget:"", currentStatus:"not_started", constraint:"" });
+    setEngineerPickerOpen(false); setEngineerSearch("");
   };
 
   const handleEdit = (assignmentId: string) => {
@@ -329,14 +326,14 @@ export default function TeamProjectTracker() {
     if (assignment) {
       setEditingAssignment(assignment);
       setFormData({
-        engineerName: assignment.engineerName || "",
-        projectName: assignment.projectName || "",
+        engineerName:       assignment.engineerName || "",
+        projectName:        assignment.projectName || "",
         resourceLockedFrom: assignment.resourceLockedFrom || "",
         resourceLockedTill: assignment.resourceLockedTill || "",
-        internalTarget: assignment.internalTarget || "",
-        customerTarget: assignment.customerTarget || "",
-        currentStatus: assignment.currentStatus || "not_started",
-        constraint: assignment.constraint || "",
+        internalTarget:     assignment.internalTarget || "",
+        customerTarget:     assignment.customerTarget || "",
+        currentStatus:      assignment.currentStatus || "not_started",
+        constraint:         assignment.constraint || "",
       });
       setEditDialogOpen(true);
     }
@@ -345,62 +342,53 @@ export default function TeamProjectTracker() {
   const handleSaveEdit = () => {
     if (!editingAssignment) return;
     updateMutation.mutate({
-      id: editingAssignment.id,
-      weekStart: editingAssignment.weekStart,
-      projectName: formData.projectName,
-      projectTargetDate: editingAssignment.projectTargetDate,
-      tasks: editingAssignment.tasks,
-      notes: editingAssignment.notes,
-      engineerName: formData.engineerName,
+      id:                 editingAssignment.id,
+      weekStart:          editingAssignment.weekStart,
+      projectName:        formData.projectName,
+      projectTargetDate:  editingAssignment.projectTargetDate,
+      tasks:              editingAssignment.tasks,
+      notes:              editingAssignment.notes,
+      engineerName:       formData.engineerName,
       resourceLockedFrom: formData.resourceLockedFrom || undefined,
       resourceLockedTill: formData.resourceLockedTill || undefined,
-      internalTarget: formData.internalTarget || undefined,
-      customerTarget: formData.customerTarget || undefined,
-      currentStatus: formData.currentStatus as any,
-      constraint: formData.constraint || undefined,
+      internalTarget:     formData.internalTarget || undefined,
+      customerTarget:     formData.customerTarget || undefined,
+      currentStatus:      formData.currentStatus as any,
+      constraint:         formData.constraint || undefined,
     });
   };
 
   const handleAdd = () => {
     if (!formData.projectName || !formData.engineerName) {
-      toast({ title: "Project and Engineer are required", variant: "destructive" });
-      return;
+      toast({ title: "Project and Engineer are required", variant: "destructive" }); return;
     }
     const weekStart = format(startOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd");
     addMutation.mutate({
-      engineerName: formData.engineerName,
-      projectName: formData.projectName,
+      engineerName:       formData.engineerName,
+      projectName:        formData.projectName,
       weekStart,
       resourceLockedFrom: formData.resourceLockedFrom || undefined,
       resourceLockedTill: formData.resourceLockedTill || undefined,
-      internalTarget: formData.internalTarget || undefined,
-      customerTarget: formData.customerTarget || undefined,
-      currentStatus: formData.currentStatus as any,
-      constraint: formData.constraint || undefined,
-      tasks: [],
+      internalTarget:     formData.internalTarget || undefined,
+      customerTarget:     formData.customerTarget || undefined,
+      currentStatus:      formData.currentStatus as any,
+      constraint:         formData.constraint || undefined,
+      tasks:              [],
     });
   };
 
-  // All users (admin and non-admin) see all active assignments — non-admins just can't edit
-  const userFilteredAssignments = useMemo(() => {
-    return assignments.filter(a => a.currentStatus !== "completed");
-  }, [assignments]);
+  const userFilteredAssignments = useMemo(() =>
+    assignments.filter(a => a.currentStatus !== "completed"), [assignments]);
 
-  const projectRows = useMemo(() => groupByProject(userFilteredAssignments), [userFilteredAssignments]);
-
+  const projectRows   = useMemo(() => groupByProject(userFilteredAssignments), [userFilteredAssignments]);
   const filteredProjects = useMemo(() => {
     return projectRows.filter((project) => {
-      // Hide projects where ALL engineers have completed status
-      const allCompleted = project.engineers.every(e => e.currentStatus === "completed");
-      if (allCompleted) return false;
-
-      const matchesSearch = 
+      if (project.engineers.every(e => e.currentStatus === "completed")) return false;
+      const matchesSearch =
         project.projectName.toLowerCase().includes(searchQuery.toLowerCase()) ||
         project.engineers.some(e => e.name.toLowerCase().includes(searchQuery.toLowerCase()));
-      
-      const matchesStatus = statusFilter === "all" || 
+      const matchesStatus = statusFilter === "all" ||
         project.engineers.some(e => e.currentStatus === statusFilter);
-
       return matchesSearch && matchesStatus;
     });
   }, [projectRows, searchQuery, statusFilter]);
@@ -411,120 +399,131 @@ export default function TeamProjectTracker() {
     return Array.from(engineers).sort();
   }, [assignments]);
 
-  const activeProjects = useMemo(() => {
-    return projectRows.filter(p => 
-      p.engineers.some(e => e.currentStatus === "in_progress")
-    ).length;
-  }, [projectRows]);
+  const activeProjects = useMemo(() =>
+    projectRows.filter(p => p.engineers.some(e => e.currentStatus === "in_progress")).length,
+    [projectRows]);
 
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return "-";
-    return new Date(dateStr).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
+    return new Date(dateStr).toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric" });
   };
+
+  // Reusable status select content
+  const StatusSelectItems = () => (
+    <>
+      {STATUS_GROUPS.map(group => (
+        <div key={group.label}>
+          <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/50 sticky top-0">
+            {group.label}
+          </div>
+          {group.items.map(item => (
+            <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
+          ))}
+        </div>
+      ))}
+    </>
+  );
+
+  const EngineerPicker = () => (
+    <div className="relative" ref={engineerPickerRef}>
+      <button type="button"
+        className="w-full flex items-center justify-between border rounded-md px-3 py-2 text-sm bg-background hover:bg-muted transition-colors"
+        onClick={() => { setEngineerPickerOpen(o => !o); setEngineerSearch(""); }}>
+        <span className="truncate text-left">
+          {selectedEngineers.length === 0 ? "Select engineers..." : selectedEngineers.join(", ")}
+        </span>
+        <ChevronDown className="h-4 w-4 shrink-0 ml-2 text-muted-foreground" />
+      </button>
+      {selectedEngineers.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-1">
+          {selectedEngineers.map(name => (
+            <span key={name} className="inline-flex items-center gap-1 bg-primary/10 text-primary text-xs px-2 py-0.5 rounded-full">
+              {name}
+              <button type="button" onClick={() => toggleEngineer(name)}><X className="h-3 w-3" /></button>
+            </span>
+          ))}
+        </div>
+      )}
+      {engineerPickerOpen && (
+        <div className="absolute z-50 mt-1 w-full bg-popover border rounded-md shadow-lg max-h-56 flex flex-col">
+          <div className="p-2 border-b">
+            <Input placeholder="Search engineers..." value={engineerSearch}
+              onChange={e => setEngineerSearch(e.target.value)} className="h-7 text-xs" autoFocus />
+          </div>
+          <div className="overflow-y-auto flex-1">
+            {filteredMasterEngineers.map(eng => {
+              const checked = selectedEngineers.includes(eng.name);
+              return (
+                <div key={eng.id}
+                  className={`flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-muted text-sm ${checked?"bg-primary/5":""}`}
+                  onClick={() => toggleEngineer(eng.name)}>
+                  <div className={`h-4 w-4 rounded border flex items-center justify-center shrink-0 ${checked?"bg-primary border-primary":"border-input"}`}>
+                    {checked && <span className="text-primary-foreground text-[10px] font-bold">✓</span>}
+                  </div>
+                  <span className="flex-1">{eng.name}</span>
+                  <span className="text-xs text-muted-foreground">{eng.initials}</span>
+                </div>
+              );
+            })}
+            {filteredMasterEngineers.length === 0 && (
+              <p className="text-xs text-muted-foreground text-center py-3">No engineers found</p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <div className="min-h-screen bg-background">
       <div className="mx-auto px-4 py-6 w-full max-w-[95vw]">
         <div className="flex items-center gap-4 mb-6">
-          <Link href="/">
-            <Button variant="ghost" size="icon" data-testid="button-back">
-              <ChevronLeft className="h-5 w-5" />
-            </Button>
-          </Link>
+          <Link href="/"><Button variant="ghost" size="icon"><ChevronLeft className="h-5 w-5" /></Button></Link>
           <div className="flex-1">
-            <h1 className="text-2xl font-bold" data-testid="text-page-title">
-              All Engineers - Week-wise Project Overview
-            </h1>
-            <p className="text-muted-foreground text-sm">
-              View all projects with resource allocation details
-            </p>
+            <h1 className="text-2xl font-bold">All Engineers - Week-wise Project Overview</h1>
+            <p className="text-muted-foreground text-sm">View all projects with resource allocation details</p>
           </div>
           {isAdmin && (
-            <Button onClick={() => { resetFormData(); setAddDialogOpen(true); }} data-testid="button-add-assignment">
-              <Plus className="h-4 w-4 mr-2" />
-              Add Assignment
+            <Button onClick={() => { resetFormData(); setAddDialogOpen(true); }}>
+              <Plus className="h-4 w-4 mr-2" /> Add Assignment
             </Button>
           )}
         </div>
 
+        {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-          <Card data-testid="stat-total-projects">
-            <CardContent className="pt-6">
+          {[
+            { label:"Total Projects",     value:projectRows.length,       color:"blue",   icon:<Briefcase className="h-5 w-5 text-blue-600 dark:text-blue-400"/> },
+            { label:"Engineers Assigned", value:uniqueEngineers.length,   color:"green",  icon:<Users className="h-5 w-5 text-green-600 dark:text-green-400"/> },
+            { label:"Active Projects",    value:activeProjects,           color:"orange", icon:<Briefcase className="h-5 w-5 text-orange-600 dark:text-orange-400"/> },
+          ].map(s => (
+            <Card key={s.label}><CardContent className="pt-6">
               <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-blue-100 dark:bg-blue-900">
-                  <Briefcase className="h-5 w-5 text-blue-600 dark:text-blue-400" />
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Total Projects</p>
-                  <p className="text-2xl font-bold">{projectRows.length}</p>
-                </div>
+                <div className={`p-2 rounded-lg bg-${s.color}-100 dark:bg-${s.color}-900`}>{s.icon}</div>
+                <div><p className="text-sm text-muted-foreground">{s.label}</p><p className="text-2xl font-bold">{s.value}</p></div>
               </div>
-            </CardContent>
-          </Card>
-
-          <Card data-testid="stat-total-engineers">
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-green-100 dark:bg-green-900">
-                  <Users className="h-5 w-5 text-green-600 dark:text-green-400" />
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Engineers Assigned</p>
-                  <p className="text-2xl font-bold">{uniqueEngineers.length}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card data-testid="stat-active-projects">
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-orange-100 dark:bg-orange-900">
-                  <Briefcase className="h-5 w-5 text-orange-600 dark:text-orange-400" />
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Active Projects</p>
-                  <p className="text-2xl font-bold">{activeProjects}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+            </CardContent></Card>
+          ))}
         </div>
 
         <Card>
           <CardHeader>
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <CardTitle className="flex items-center gap-2">
-                <Briefcase className="h-5 w-5" />
-                Projects Overview
-              </CardTitle>
+              <CardTitle className="flex items-center gap-2"><Briefcase className="h-5 w-5"/>Projects Overview</CardTitle>
               <div className="flex flex-col sm:flex-row gap-2">
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search projects or engineers..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-9 w-full sm:w-64"
-                    data-testid="input-search"
-                  />
+                  <Input placeholder="Search projects or engineers..." value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)} className="pl-9 w-full sm:w-64" />
                 </div>
                 <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger className="w-full sm:w-40" data-testid="select-status-filter">
+                  <SelectTrigger className="w-full sm:w-48">
                     <Filter className="h-4 w-4 mr-2" />
                     <SelectValue placeholder="Filter status" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="max-h-80 overflow-y-auto">
                     <SelectItem value="all">All Status</SelectItem>
-                    <SelectItem value="not_started">Not Started</SelectItem>
-                    <SelectItem value="in_progress">In Progress</SelectItem>
-                    <SelectItem value="completed">Completed</SelectItem>
-                    <SelectItem value="on_hold">On Hold</SelectItem>
-                    <SelectItem value="blocked">Blocked</SelectItem>
+                    <StatusSelectItems />
                   </SelectContent>
                 </Select>
               </div>
@@ -532,13 +531,9 @@ export default function TeamProjectTracker() {
           </CardHeader>
           <CardContent>
             {isLoading ? (
-              <div className="flex items-center justify-center py-12 text-muted-foreground">
-                Loading projects...
-              </div>
+              <div className="flex items-center justify-center py-12 text-muted-foreground">Loading projects...</div>
             ) : filteredProjects.length === 0 ? (
-              <div className="flex items-center justify-center py-12 text-muted-foreground">
-                No projects found
-              </div>
+              <div className="flex items-center justify-center py-12 text-muted-foreground">No projects found</div>
             ) : (
               <div className="rounded-md border overflow-x-auto">
                 <Table>
@@ -551,93 +546,54 @@ export default function TeamProjectTracker() {
                       <TableHead className="min-w-[140px] text-center">Resource Lock Days</TableHead>
                       <TableHead className="min-w-[110px]">Internal Target</TableHead>
                       <TableHead className="min-w-[110px]">Customer Target</TableHead>
-                      <TableHead className="min-w-[100px]">Current Status</TableHead>
+                      <TableHead className="min-w-[160px]">Current Status</TableHead>
                       <TableHead className="min-w-[150px]">Constraints</TableHead>
                       <TableHead className="w-[60px]">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredProjects.map((project) => (
+                    {filteredProjects.map(project =>
                       project.engineers.map((engineer, idx) => (
-                        <TableRow 
-                          key={`${project.projectName}-${engineer.assignmentId}`} 
-                          data-testid={`row-project-${project.projectName}-${idx}`}
-                        >
-                          <TableCell className="font-medium">
-                            {idx === 0 ? project.projectName : ""}
-                          </TableCell>
+                        <TableRow key={`${project.projectName}-${engineer.assignmentId}`}>
+                          <TableCell className="font-medium">{idx === 0 ? project.projectName : ""}</TableCell>
                           <TableCell>
-                            <Badge variant="secondary" className="text-xs">
-                              {engineer.name}
-                            </Badge>
+                            <Badge variant="secondary" className="text-xs">{engineer.name}</Badge>
                           </TableCell>
-                          <TableCell className="text-sm">
-                            {formatDate(engineer.resourceLockedFrom)}
-                          </TableCell>
-                          <TableCell className="text-sm">
-                            {formatDate(engineer.resourceLockedTill)}
-                          </TableCell>
+                          <TableCell className="text-sm">{formatDate(engineer.resourceLockedFrom)}</TableCell>
+                          <TableCell className="text-sm">{formatDate(engineer.resourceLockedTill)}</TableCell>
                           <TableCell className="text-center">
                             {engineer.resourceLockDays > 0 ? (
                               <div className="flex flex-col items-center gap-1">
-                                <Badge 
-                                  variant="outline" 
-                                  className={engineer.daysExceeded > 0 ? "border-red-500 text-red-600 dark:text-red-400" : ""}
-                                >
+                                <Badge variant="outline" className={engineer.daysExceeded > 0 ? "border-red-500 text-red-600 dark:text-red-400" : ""}>
                                   {engineer.resourceLockDays} days
                                 </Badge>
                                 {engineer.daysExceeded > 0 && (
                                   <Badge className="bg-red-500 text-white text-xs flex items-center gap-1">
-                                    <AlertTriangle className="h-3 w-3" />
-                                    +{engineer.daysExceeded} overdue
+                                    <AlertTriangle className="h-3 w-3" />+{engineer.daysExceeded} overdue
                                   </Badge>
                                 )}
                               </div>
-                            ) : (
-                              <span className="text-muted-foreground">-</span>
-                            )}
+                            ) : <span className="text-muted-foreground">-</span>}
                           </TableCell>
-                          <TableCell className="text-sm">
-                            {formatDate(engineer.internalTarget)}
-                          </TableCell>
-                          <TableCell className="text-sm">
-                            {formatDate(engineer.customerTarget)}
-                          </TableCell>
+                          <TableCell className="text-sm">{formatDate(engineer.internalTarget)}</TableCell>
+                          <TableCell className="text-sm">{formatDate(engineer.customerTarget)}</TableCell>
                           <TableCell>
-                            <Badge className={statusColors[engineer.currentStatus]}>
-                              {statusLabels[engineer.currentStatus]}
+                            <Badge className={`${statusColors[engineer.currentStatus] ?? statusColors.not_started} text-xs`}>
+                              {statusLabels[engineer.currentStatus] ?? engineer.currentStatus}
                             </Badge>
                           </TableCell>
-                          <TableCell className="text-sm text-muted-foreground">
-                            {engineer.constraint || "-"}
-                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{engineer.constraint || "-"}</TableCell>
                           <TableCell>
                             <div className="flex items-center gap-1">
                               {isAdmin && (
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  onClick={() => handleEdit(engineer.assignmentId)}
-                                  data-testid={`button-edit-${engineer.assignmentId}`}
-                                >
+                                <Button variant="ghost" size="icon" onClick={() => handleEdit(engineer.assignmentId)}>
                                   <Edit2 className="h-4 w-4" />
                                 </Button>
                               )}
                               {isAdmin && (
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
+                                <Button variant="ghost" size="icon"
                                   className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
-                                  onClick={() => {
-                                    setDeletingAssignment({
-                                      id: engineer.assignmentId,
-                                      projectName: project.projectName,
-                                      engineerName: engineer.name,
-                                    });
-                                    setDeleteDialogOpen(true);
-                                  }}
-                                  data-testid={`button-delete-${engineer.assignmentId}`}
-                                >
+                                  onClick={() => { setDeletingAssignment({ id:engineer.assignmentId, projectName:project.projectName, engineerName:engineer.name }); setDeleteDialogOpen(true); }}>
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
                               )}
@@ -645,7 +601,7 @@ export default function TeamProjectTracker() {
                           </TableCell>
                         </TableRow>
                       ))
-                    ))}
+                    )}
                   </TableBody>
                 </Table>
               </div>
@@ -654,347 +610,104 @@ export default function TeamProjectTracker() {
         </Card>
       </div>
 
+      {/* Edit Dialog */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
         <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Edit Assignment</DialogTitle>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>Edit Assignment</DialogTitle></DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
-              <Label htmlFor="projectNameEdit">Project Name</Label>
-              <Input
-                id="projectNameEdit"
-                list="project-names-list"
-                value={formData.projectName}
-                onChange={(e) => setFormData(prev => ({ ...prev, projectName: e.target.value }))}
-                placeholder="Type or select project name"
-                data-testid="input-project-name-edit"
-              />
-              <datalist id="project-names-list">
-                {projectNames.map((name) => (
-                  <option key={name} value={name} />
-                ))}
-              </datalist>
+              <Label>Project Name</Label>
+              <Input list="project-names-list" value={formData.projectName}
+                onChange={e => setFormData(p => ({...p, projectName:e.target.value}))}
+                placeholder="Type or select project name" />
+              <datalist id="project-names-list">{projectNames.map(n => <option key={n} value={n}/>)}</datalist>
             </div>
-            <div className="grid gap-2">
-              <Label>Engineer(s)</Label>
-              <div className="relative" ref={engineerPickerRef}>
-                <button
-                  type="button"
-                  className="w-full flex items-center justify-between border rounded-md px-3 py-2 text-sm bg-background hover:bg-muted transition-colors"
-                  onClick={() => { setEngineerPickerOpen(o => !o); setEngineerSearch(""); }}
-                  data-testid="input-engineer-edit"
-                >
-                  <span className="truncate text-left">
-                    {selectedEngineers.length === 0
-                      ? "Select engineers..."
-                      : selectedEngineers.join(", ")}
-                  </span>
-                  <ChevronDown className="h-4 w-4 shrink-0 ml-2 text-muted-foreground" />
-                </button>
-                {selectedEngineers.length > 0 && (
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {selectedEngineers.map(name => (
-                      <span key={name} className="inline-flex items-center gap-1 bg-primary/10 text-primary text-xs px-2 py-0.5 rounded-full">
-                        {name}
-                        <button type="button" onClick={() => toggleEngineer(name)}><X className="h-3 w-3" /></button>
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {engineerPickerOpen && (
-                  <div className="absolute z-50 mt-1 w-full bg-popover border rounded-md shadow-lg max-h-56 flex flex-col">
-                    <div className="p-2 border-b">
-                      <Input
-                        placeholder="Search engineers..."
-                        value={engineerSearch}
-                        onChange={e => setEngineerSearch(e.target.value)}
-                        className="h-7 text-xs"
-                        autoFocus
-                      />
-                    </div>
-                    <div className="overflow-y-auto flex-1">
-                      {filteredMasterEngineers.map(eng => {
-                        const checked = selectedEngineers.includes(eng.name);
-                        return (
-                          <div
-                            key={eng.id}
-                            className={`flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-muted text-sm ${checked ? "bg-primary/5" : ""}`}
-                            onClick={() => toggleEngineer(eng.name)}
-                          >
-                            <div className={`h-4 w-4 rounded border flex items-center justify-center shrink-0 ${checked ? "bg-primary border-primary" : "border-input"}`}>
-                              {checked && <span className="text-primary-foreground text-[10px] font-bold">✓</span>}
-                            </div>
-                            <span className="flex-1">{eng.name}</span>
-                            <span className="text-xs text-muted-foreground">{eng.initials}</span>
-                          </div>
-                        );
-                      })}
-                      {filteredMasterEngineers.length === 0 && (
-                        <p className="text-xs text-muted-foreground text-center py-3">No engineers found</p>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
+            <div className="grid gap-2"><Label>Engineer(s)</Label><EngineerPicker/></div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2"><Label>Resource Locked From</Label>
+                <Input type="date" value={formData.resourceLockedFrom} onChange={e => setFormData(p => ({...p, resourceLockedFrom:e.target.value}))}/></div>
+              <div className="grid gap-2"><Label>Resource Locked Till</Label>
+                <Input type="date" value={formData.resourceLockedTill} onChange={e => setFormData(p => ({...p, resourceLockedTill:e.target.value}))}/></div>
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <div className="grid gap-2">
-                <Label htmlFor="lockedFrom">Resource Locked From</Label>
-                <Input
-                  id="lockedFrom"
-                  type="date"
-                  value={formData.resourceLockedFrom}
-                  onChange={(e) => setFormData(prev => ({ ...prev, resourceLockedFrom: e.target.value }))}
-                  data-testid="input-locked-from"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="lockedTill">Resource Locked Till</Label>
-                <Input
-                  id="lockedTill"
-                  type="date"
-                  value={formData.resourceLockedTill}
-                  onChange={(e) => setFormData(prev => ({ ...prev, resourceLockedTill: e.target.value }))}
-                  data-testid="input-locked-till"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="grid gap-2">
-                <Label htmlFor="internalTarget">Internal Target</Label>
-                <Input
-                  id="internalTarget"
-                  type="date"
-                  value={formData.internalTarget}
-                  onChange={(e) => setFormData(prev => ({ ...prev, internalTarget: e.target.value }))}
-                  data-testid="input-internal-target"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="customerTarget">Customer Target</Label>
-                <Input
-                  id="customerTarget"
-                  type="date"
-                  value={formData.customerTarget}
-                  onChange={(e) => setFormData(prev => ({ ...prev, customerTarget: e.target.value }))}
-                  data-testid="input-customer-target"
-                />
-              </div>
+              <div className="grid gap-2"><Label>Internal Target</Label>
+                <Input type="date" value={formData.internalTarget} onChange={e => setFormData(p => ({...p, internalTarget:e.target.value}))}/></div>
+              <div className="grid gap-2"><Label>Customer Target</Label>
+                <Input type="date" value={formData.customerTarget} onChange={e => setFormData(p => ({...p, customerTarget:e.target.value}))}/></div>
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="status">Current Status</Label>
-              <Select value={formData.currentStatus} onValueChange={(v) => setFormData(prev => ({ ...prev, currentStatus: v }))}>
-                <SelectTrigger data-testid="select-status">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="not_started">Not Started</SelectItem>
-                  <SelectItem value="in_progress">In Progress</SelectItem>
-                  <SelectItem value="completed">Completed</SelectItem>
-                  <SelectItem value="on_hold">On Hold</SelectItem>
-                  <SelectItem value="blocked">Blocked</SelectItem>
-                </SelectContent>
+              <Label>Current Status</Label>
+              <Select value={formData.currentStatus} onValueChange={v => setFormData(p => ({...p, currentStatus:v}))}>
+                <SelectTrigger><SelectValue/></SelectTrigger>
+                <SelectContent className="max-h-80 overflow-y-auto"><StatusSelectItems/></SelectContent>
               </Select>
             </div>
-            <div className="grid gap-2">
-              <Label htmlFor="constraint">Constraints</Label>
-              <Textarea
-                id="constraint"
-                value={formData.constraint}
-                onChange={(e) => setFormData(prev => ({ ...prev, constraint: e.target.value }))}
-                placeholder="Enter any constraints..."
-                data-testid="input-constraint"
-              />
-            </div>
+            <div className="grid gap-2"><Label>Constraints</Label>
+              <Textarea value={formData.constraint} onChange={e => setFormData(p => ({...p, constraint:e.target.value}))} placeholder="Enter any constraints..."/></div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEditDialogOpen(false)} data-testid="button-cancel-edit">
-              Cancel
-            </Button>
-            <Button onClick={handleSaveEdit} disabled={updateMutation.isPending} data-testid="button-save-edit">
+            <Button variant="outline" onClick={() => setEditDialogOpen(false)}>Cancel</Button>
+            <Button onClick={handleSaveEdit} disabled={updateMutation.isPending}>
               {updateMutation.isPending ? "Saving..." : "Save Changes"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
+      {/* Add Dialog */}
       <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
         <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Add New Assignment</DialogTitle>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>Add New Assignment</DialogTitle></DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
-              <Label htmlFor="projectNameAdd">Project Name</Label>
-              <Input
-                id="projectNameAdd"
-                list="project-names-list-add"
-                value={formData.projectName}
-                onChange={(e) => setFormData(prev => ({ ...prev, projectName: e.target.value }))}
-                placeholder="Type or select project name"
-                data-testid="input-project-name-add"
-              />
-              <datalist id="project-names-list-add">
-                {projectNames.map((name) => (
-                  <option key={name} value={name} />
-                ))}
-              </datalist>
+              <Label>Project Name</Label>
+              <Input list="project-names-list-add" value={formData.projectName}
+                onChange={e => setFormData(p => ({...p, projectName:e.target.value}))}
+                placeholder="Type or select project name"/>
+              <datalist id="project-names-list-add">{projectNames.map(n => <option key={n} value={n}/>)}</datalist>
             </div>
-            <div className="grid gap-2">
-              <Label>Engineer(s)</Label>
-              <div className="relative" ref={engineerPickerRef}>
-                <button
-                  type="button"
-                  className="w-full flex items-center justify-between border rounded-md px-3 py-2 text-sm bg-background hover:bg-muted transition-colors"
-                  onClick={() => { setEngineerPickerOpen(o => !o); setEngineerSearch(""); }}
-                  data-testid="input-engineer-add"
-                >
-                  <span className="truncate text-left">
-                    {selectedEngineers.length === 0
-                      ? "Select engineers..."
-                      : selectedEngineers.join(", ")}
-                  </span>
-                  <ChevronDown className="h-4 w-4 shrink-0 ml-2 text-muted-foreground" />
-                </button>
-                {selectedEngineers.length > 0 && (
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {selectedEngineers.map(name => (
-                      <span key={name} className="inline-flex items-center gap-1 bg-primary/10 text-primary text-xs px-2 py-0.5 rounded-full">
-                        {name}
-                        <button type="button" onClick={() => toggleEngineer(name)}><X className="h-3 w-3" /></button>
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {engineerPickerOpen && (
-                  <div className="absolute z-50 mt-1 w-full bg-popover border rounded-md shadow-lg max-h-56 flex flex-col">
-                    <div className="p-2 border-b">
-                      <Input
-                        placeholder="Search engineers..."
-                        value={engineerSearch}
-                        onChange={e => setEngineerSearch(e.target.value)}
-                        className="h-7 text-xs"
-                        autoFocus
-                      />
-                    </div>
-                    <div className="overflow-y-auto flex-1">
-                      {filteredMasterEngineers.map(eng => {
-                        const checked = selectedEngineers.includes(eng.name);
-                        return (
-                          <div
-                            key={eng.id}
-                            className={`flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-muted text-sm ${checked ? "bg-primary/5" : ""}`}
-                            onClick={() => toggleEngineer(eng.name)}
-                          >
-                            <div className={`h-4 w-4 rounded border flex items-center justify-center shrink-0 ${checked ? "bg-primary border-primary" : "border-input"}`}>
-                              {checked && <span className="text-primary-foreground text-[10px] font-bold">✓</span>}
-                            </div>
-                            <span className="flex-1">{eng.name}</span>
-                            <span className="text-xs text-muted-foreground">{eng.initials}</span>
-                          </div>
-                        );
-                      })}
-                      {filteredMasterEngineers.length === 0 && (
-                        <p className="text-xs text-muted-foreground text-center py-3">No engineers found</p>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
+            <div className="grid gap-2"><Label>Engineer(s)</Label><EngineerPicker/></div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2"><Label>Resource Locked From</Label>
+                <Input type="date" value={formData.resourceLockedFrom} onChange={e => setFormData(p => ({...p, resourceLockedFrom:e.target.value}))}/></div>
+              <div className="grid gap-2"><Label>Resource Locked Till</Label>
+                <Input type="date" value={formData.resourceLockedTill} onChange={e => setFormData(p => ({...p, resourceLockedTill:e.target.value}))}/></div>
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <div className="grid gap-2">
-                <Label htmlFor="lockedFrom">Resource Locked From</Label>
-                <Input
-                  id="lockedFrom"
-                  type="date"
-                  value={formData.resourceLockedFrom}
-                  onChange={(e) => setFormData(prev => ({ ...prev, resourceLockedFrom: e.target.value }))}
-                  data-testid="input-locked-from-add"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="lockedTill">Resource Locked Till</Label>
-                <Input
-                  id="lockedTill"
-                  type="date"
-                  value={formData.resourceLockedTill}
-                  onChange={(e) => setFormData(prev => ({ ...prev, resourceLockedTill: e.target.value }))}
-                  data-testid="input-locked-till-add"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="grid gap-2">
-                <Label htmlFor="internalTarget">Internal Target</Label>
-                <Input
-                  id="internalTarget"
-                  type="date"
-                  value={formData.internalTarget}
-                  onChange={(e) => setFormData(prev => ({ ...prev, internalTarget: e.target.value }))}
-                  data-testid="input-internal-target-add"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="customerTarget">Customer Target</Label>
-                <Input
-                  id="customerTarget"
-                  type="date"
-                  value={formData.customerTarget}
-                  onChange={(e) => setFormData(prev => ({ ...prev, customerTarget: e.target.value }))}
-                  data-testid="input-customer-target-add"
-                />
-              </div>
+              <div className="grid gap-2"><Label>Internal Target</Label>
+                <Input type="date" value={formData.internalTarget} onChange={e => setFormData(p => ({...p, internalTarget:e.target.value}))}/></div>
+              <div className="grid gap-2"><Label>Customer Target</Label>
+                <Input type="date" value={formData.customerTarget} onChange={e => setFormData(p => ({...p, customerTarget:e.target.value}))}/></div>
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="status">Current Status</Label>
-              <Select value={formData.currentStatus} onValueChange={(v) => setFormData(prev => ({ ...prev, currentStatus: v }))}>
-                <SelectTrigger data-testid="select-status-add">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="not_started">Not Started</SelectItem>
-                  <SelectItem value="in_progress">In Progress</SelectItem>
-                  <SelectItem value="completed">Completed</SelectItem>
-                  <SelectItem value="on_hold">On Hold</SelectItem>
-                  <SelectItem value="blocked">Blocked</SelectItem>
-                </SelectContent>
+              <Label>Current Status</Label>
+              <Select value={formData.currentStatus} onValueChange={v => setFormData(p => ({...p, currentStatus:v}))}>
+                <SelectTrigger><SelectValue/></SelectTrigger>
+                <SelectContent className="max-h-80 overflow-y-auto"><StatusSelectItems/></SelectContent>
               </Select>
             </div>
-            <div className="grid gap-2">
-              <Label htmlFor="constraint">Constraints</Label>
-              <Textarea
-                id="constraint"
-                value={formData.constraint}
-                onChange={(e) => setFormData(prev => ({ ...prev, constraint: e.target.value }))}
-                placeholder="Enter any constraints..."
-                data-testid="input-constraint-add"
-              />
-            </div>
+            <div className="grid gap-2"><Label>Constraints</Label>
+              <Textarea value={formData.constraint} onChange={e => setFormData(p => ({...p, constraint:e.target.value}))} placeholder="Enter any constraints..."/></div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAddDialogOpen(false)} data-testid="button-cancel-add">
-              Cancel
-            </Button>
-            <Button onClick={handleAdd} disabled={addMutation.isPending} data-testid="button-save-add">
+            <Button variant="outline" onClick={() => setAddDialogOpen(false)}>Cancel</Button>
+            <Button onClick={handleAdd} disabled={addMutation.isPending}>
               {addMutation.isPending ? "Adding..." : "Add Assignment"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <Dialog open={deleteDialogOpen} onOpenChange={(open) => { setDeleteDialogOpen(open); if (!open) setDeletingAssignment(null); }}>
+
+      {/* Delete Dialog */}
+      <Dialog open={deleteDialogOpen} onOpenChange={open => { setDeleteDialogOpen(open); if (!open) setDeletingAssignment(null); }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-red-600">
-              <Trash2 className="h-5 w-5" />
-              Delete Assignment
+              <Trash2 className="h-5 w-5"/> Delete Assignment
             </DialogTitle>
           </DialogHeader>
           <div className="py-4">
-            <p className="text-sm text-muted-foreground">
-              Are you sure you want to delete this assignment? This action cannot be undone.
-            </p>
+            <p className="text-sm text-muted-foreground">Are you sure you want to delete this assignment? This action cannot be undone.</p>
             {deletingAssignment && (
               <div className="mt-3 p-3 rounded-md bg-muted text-sm space-y-1">
                 <p><span className="font-medium">Project:</span> {deletingAssignment.projectName}</p>
@@ -1003,19 +716,8 @@ export default function TeamProjectTracker() {
             )}
           </div>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => { setDeleteDialogOpen(false); setDeletingAssignment(null); }}
-              data-testid="button-cancel-delete"
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => deletingAssignment && deleteMutation.mutate(deletingAssignment.id)}
-              disabled={deleteMutation.isPending}
-              data-testid="button-confirm-delete"
-            >
+            <Button variant="outline" onClick={() => { setDeleteDialogOpen(false); setDeletingAssignment(null); }}>Cancel</Button>
+            <Button variant="destructive" onClick={() => deletingAssignment && deleteMutation.mutate(deletingAssignment.id)} disabled={deleteMutation.isPending}>
               {deleteMutation.isPending ? "Deleting..." : "Delete"}
             </Button>
           </DialogFooter>
