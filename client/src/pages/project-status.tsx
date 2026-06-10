@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import {
   ArrowLeft, Calendar, RefreshCw, Save, Plus,
   CheckCircle, Clock, AlertTriangle,
-  ChevronLeft, ChevronRight, CalendarDays, Map,
+  ChevronLeft, ChevronRight, CalendarDays,
 } from "lucide-react";
 import { Link } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -111,7 +111,10 @@ export default function ProjectStatus() {
   const [pendingActivities, setPendingActivities] = useState<Record<string, Record<string, string>>>({});
   const [pendingStatuses,   setPendingStatuses]   = useState<Record<string, string>>({});
   // savedStatuses: persists confirmed saves — overrides server data even after refetch
-  const [savedStatuses,     setSavedStatuses]     = useState<Record<string, string>>({});
+  // Initialise from localStorage so status survives page refresh
+  const [savedStatuses, setSavedStatuses] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem("drb_project_statuses") ?? "{}"); } catch { return {}; }
+  });
   const [isSaving,          setIsSaving]          = useState(false);
   const [editingCell,       setEditingCell]        = useState<{ project:string; date:string } | null>(null);
   const [activityInput,     setActivityInput]      = useState("");
@@ -234,6 +237,12 @@ export default function ProjectStatus() {
         // Lock in saved statuses — these override server data even after any refetch
         setSavedStatuses(prev => ({ ...prev, ...statusesToSave }));
 
+        // Persist to localStorage so Roadmap page picks up changes too
+        try {
+          const existing = JSON.parse(localStorage.getItem("drb_project_statuses") ?? "{}");
+          localStorage.setItem("drb_project_statuses", JSON.stringify({ ...existing, ...statusesToSave }));
+        } catch {}
+
         // Clear pending state
         setPendingActivities({});
         setPendingStatuses({});
@@ -305,11 +314,6 @@ export default function ProjectStatus() {
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-4">
             <Link href="/"><Button variant="ghost" size="sm"><ArrowLeft className="h-4 w-4 mr-2"/>Back</Button></Link>
-            <Link href="/project-roadmap">
-              <Button variant="outline" size="sm" className="gap-2">
-                <Map className="h-4 w-4" /> Roadmap
-              </Button>
-            </Link>
             <div>
               <h1 className="text-2xl font-bold flex items-center gap-2">
                 <Calendar className="h-6 w-6 text-primary"/>Project Activity Tracking
