@@ -294,6 +294,10 @@ export default function ProjectRoadmap() {
   const [group,    setGroup]    = useState("all");
   const [pending,  setPending]  = useState<Record<string,string>>({});
   const [saving,   setSaving]   = useState(false);
+  // Load statuses saved from project-status page (shared via localStorage)
+  const [savedStatuses, setSavedStatuses] = useState<Record<string,string>>(() => {
+    try { return JSON.parse(localStorage.getItem("drb_project_statuses") ?? "{}"); } catch { return {}; }
+  });
 
   const { data: rawProjects = [], isLoading, refetch } = useQuery<ProjectActivity[]>({
     queryKey: ["/api/project-activities"],
@@ -306,19 +310,21 @@ export default function ProjectRoadmap() {
     staleTime: 30000,
   });
 
-  // Merge engineer names into project list
+  // Merge engineer names + apply savedStatuses overrides
   const projects = useMemo(() => {
     const active = rawProjects.filter(p => {
-      const s = (p.currentStatus ?? "").toLowerCase();
+      const s = (savedStatuses[p.projectName] ?? p.currentStatus ?? "").toLowerCase();
       return !s.includes("dispatch");
     });
     return active.map(p => {
       const asgn = assignments.find(a =>
         a.projectName?.trim().toLowerCase() === p.projectName?.trim().toLowerCase()
       );
-      return { ...p, engineerName: asgn?.engineerName };
+      // savedStatuses takes priority over stale server data
+      const currentStatus = savedStatuses[p.projectName] ?? p.currentStatus;
+      return { ...p, currentStatus, engineerName: asgn?.engineerName };
     });
-  }, [rawProjects, assignments]);
+  }, [rawProjects, assignments, savedStatuses]);
 
   const filtered = useMemo(() => {
     let list = projects;
@@ -358,9 +364,15 @@ export default function ProjectRoadmap() {
     }
     setSaving(false);
     if (fail === 0) {
+      // Lock in saved statuses — override server data + persist for project-status page
+      setSavedStatuses(prev => ({ ...prev, ...pending }));
+      try {
+        const existing = JSON.parse(localStorage.getItem("drb_project_statuses") ?? "{}");
+        localStorage.setItem("drb_project_statuses", JSON.stringify({ ...existing, ...pending }));
+      } catch {}
       setPending({});
       toast({ title:`${ok} status${ok>1?"es":""} saved` });
-      refetch();
+      setTimeout(() => refetch(), 6000);
     } else {
       toast({ title:`${ok} saved, ${fail} failed`, variant:"destructive" });
     }
@@ -419,7 +431,10 @@ export default function ProjectRoadmap() {
                 {saving ? "Saving…" : `Save ${Object.keys(pending).length} change${Object.keys(pending).length>1?"s":""}`}
               </Button>
             )}
-            <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-2">
+            <Button variant="outline" size="sm" onClick={() => {
+              try { setSavedStatuses(JSON.parse(localStorage.getItem("drb_project_statuses") ?? "{}")); } catch {}
+              refetch();
+            }} className="gap-2">
               <RefreshCw className="h-4 w-4"/>Refresh
             </Button>
           </div>
