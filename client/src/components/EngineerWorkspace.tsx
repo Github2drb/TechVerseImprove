@@ -818,7 +818,8 @@ export function EngineerWorkspace() {
         </div>
       </div>
 
-      </div>} {/* end viewMode==="mine" */}
+      </div>
+      }
 
       {showAssign && isAdmin && (
         <QuickAssignModal
