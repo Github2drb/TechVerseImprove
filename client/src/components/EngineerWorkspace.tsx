@@ -810,6 +810,7 @@ export function EngineerWorkspace() {
             ))}
           </div>
         </div>
+      </div>
       )}
 
       {showAssign && isAdmin && (
