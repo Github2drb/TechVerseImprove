@@ -102,6 +102,31 @@ function phaseLabel(v:string){
   return v;
 }
 
+// ── Week filter helpers ────────────────────────────────────────────────────────
+function currentWeekStart(): string {
+  const d=new Date(); d.setHours(0,0,0,0);
+  const day=d.getDay();
+  d.setDate(d.getDate()-(day===0?6:day-1));
+  return d.toISOString().split("T")[0];
+}
+function getWeekOptions() {
+  const opts: {value:string;label:string}[]=[];
+  const now=new Date(); now.setHours(0,0,0,0);
+  const day=now.getDay();
+  const base=new Date(now); base.setDate(now.getDate()-(day===0?6:day-1));
+  for(let i=0;i<8;i++){
+    const ws=new Date(base); ws.setDate(base.getDate()-(i*7));
+    const we=new Date(ws);   we.setDate(ws.getDate()+6);
+    const val=ws.toISOString().split("T")[0];
+    const lbl=i===0?"This week":i===1?"Last week":
+      ws.toLocaleDateString("en-IN",{day:"numeric",month:"short"})+" – "+
+      we.toLocaleDateString("en-IN",{day:"numeric",month:"short"});
+    opts.push({value:val,label:lbl});
+  }
+  return opts;
+}
+const WEEK_OPTIONS=getWeekOptions();
+
 // ── Task status mini picker ────────────────────────────────────────────────────
 function TaskStatusPicker({current,onSelect,onClose}:{current:string;onSelect:(v:string)=>void;onClose:()=>void}) {
   const ref=useRef<HTMLDivElement>(null);
@@ -429,8 +454,10 @@ export function EngineerWorkspace() {
   const [comments,    setComments]     = useState<NBComment[]>([]);
   const [dismissed,   setDismissed]    = useState<string[]>([]);
   const [nbLoaded,    setNbLoaded]     = useState(false);
-  const [showAssign,  setShowAssign]   = useState(false);
-  const [viewMode,    setViewMode]     = useState<"mine"|"all">("mine");
+  const [showAssign,        setShowAssign]        = useState(false);
+  const [viewMode,          setViewMode]          = useState<"mine"|"all">("mine");
+  const [adminWeekFilter,   setAdminWeekFilter]   = useState(currentWeekStart());
+  const [adminStatusFilter, setAdminStatusFilter] = useState("all");
   const [showDone,    setShowDone]     = useState(false);
   const [updatingTask,setUpdatingTask] = useState<string|null>(null);
 
@@ -443,17 +470,33 @@ export function EngineerWorkspace() {
     [allAssignments,engineerName]
   );
 
-  // Admin: group all assignments by engineer
+  // Admin: filter + group assignments by engineer
+  const filteredAdminAssignments=useMemo(()=>{
+    if(!isAdmin) return [];
+    return allAssignments.filter(a=>{
+      // Week filter: match weekStart OR task assignedDate falls in selected week
+      const weekMatch = a.weekStart===adminWeekFilter ||
+        (a.tasks??[]).some(t=>t.assignedDate?.startsWith(adminWeekFilter.slice(0,7)) &&
+          t.assignedDate>=adminWeekFilter &&
+          t.assignedDate<=adminWeekFilter.slice(0,8)+"6");
+      if(!weekMatch) return false;
+      // Status filter
+      if(adminStatusFilter==="all") return true;
+      return (a.tasks??[]).some(t=>t.status===adminStatusFilter) ||
+             a.currentStatus===adminStatusFilter;
+    });
+  },[allAssignments,isAdmin,adminWeekFilter,adminStatusFilter]);
+
   const byEngineer=useMemo(()=>{
     if(!isAdmin) return {};
-    const map: Record<string,typeof allAssignments>={}; 
-    allAssignments.forEach(a=>{
+    const map: Record<string,typeof allAssignments>={};
+    filteredAdminAssignments.forEach(a=>{
       const k=a.engineerName?.trim()||"Unassigned";
       if(!map[k]) map[k]=[];
       map[k].push(a);
     });
     return map;
-  },[allAssignments,isAdmin]);
+  },[filteredAdminAssignments,isAdmin]);
 
   // Flatten all tasks from my assignments
   const allTasks=useMemo(()=>
@@ -591,7 +634,7 @@ export function EngineerWorkspace() {
           {viewMode==="mine" && todayTasks.length>0    && <span className="text-xs px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-500 font-bold">{todayTasks.length} today</span>}
           {viewMode==="mine" && weeklyTasks.length>0   && <span className="text-xs px-2.5 py-1 rounded-full bg-muted text-muted-foreground font-medium">{weeklyTasks.length} weekly</span>}
           {viewMode==="mine" && doneTasks.length>0     && <span className="text-xs px-2.5 py-1 rounded-full bg-green-500/10 text-green-500 font-medium">{doneTasks.length} done</span>}
-          {viewMode==="all"  && <span className="text-xs px-2.5 py-1 rounded-full bg-muted text-muted-foreground font-medium">{allAssignments.length} assignments</span>}
+          {viewMode==="all"  && <span className="text-xs px-2.5 py-1 rounded-full bg-muted text-muted-foreground font-medium">{filteredAdminAssignments.length} assignments</span>}
           {isAdmin && (
             <button onClick={()=>setShowAssign(true)}
               className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full bg-primary text-primary-foreground hover:opacity-90 transition-opacity">
@@ -603,9 +646,55 @@ export function EngineerWorkspace() {
 
       {(isAdmin && viewMode==="all") ? (
         <div className="space-y-4">
+
+          {/* ── Admin filters ── */}
+          <div className="flex flex-wrap gap-3 items-center p-4 border rounded-2xl bg-card">
+            {/* Week selector */}
+            <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+              <Calendar className="h-4 w-4 text-muted-foreground flex-shrink-0"/>
+              <select
+                value={adminWeekFilter}
+                onChange={e=>setAdminWeekFilter(e.target.value)}
+                className="flex-1 border rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-primary border-input">
+                {WEEK_OPTIONS.map(w=>(
+                  <option key={w.value} value={w.value}>{w.label}</option>
+                ))}
+              </select>
+            </div>
+            {/* Status filter pills */}
+            <div className="flex gap-1.5 flex-wrap">
+              {[
+                {v:"all",          l:"All Status",   dot:""},
+                {v:"not_started",  l:"Not Started",  dot:"bg-muted-foreground/50"},
+                {v:"in_progress",  l:"In Progress",  dot:"bg-blue-500"},
+                {v:"completed",    l:"Completed",    dot:"bg-green-500"},
+              ].map(s=>(
+                <button key={s.v} onClick={()=>setAdminStatusFilter(s.v)}
+                  className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border transition-all
+                    ${adminStatusFilter===s.v
+                      ?"bg-primary text-primary-foreground border-primary"
+                      :"bg-muted/50 text-muted-foreground border-muted-foreground/20 hover:bg-muted"}`}>
+                  {s.dot && <span className={`w-2 h-2 rounded-full flex-shrink-0 ${s.dot}`}/>}
+                  {s.l}
+                </button>
+              ))}
+            </div>
+            {/* Result count */}
+            <span className="text-xs text-muted-foreground ml-auto flex-shrink-0">
+              {filteredAdminAssignments.length} assignment{filteredAdminAssignments.length!==1?"s":""}
+              {" · "}{filteredAdminAssignments.reduce((s,a)=>s+(a.tasks??[]).length,0)} tasks
+            </span>
+          </div>
+
           {Object.keys(byEngineer).length===0 && (
             <div className="border rounded-2xl p-8 text-center bg-card">
-              <p className="text-sm text-muted-foreground">No assignments found. Use "Assign Tasks" to add.</p>
+              <p className="text-sm font-semibold text-foreground">No assignments found</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {adminStatusFilter!=="all"
+                  ? `No "${adminStatusFilter.replace(/_/g," ")}" tasks for the selected week`
+                  : "No assignments for the selected week. Try a different week or use \"Assign Tasks\" above."
+                }
+              </p>
             </div>
           )}
           {Object.entries(byEngineer).sort(([a],[b])=>a.localeCompare(b)).map(([eng,assignments])=>{
@@ -641,12 +730,21 @@ export function EngineerWorkspace() {
                         </span>
                       </div>
                       {(a.tasks??[]).length===0 && (
-                        <p className="text-xs text-muted-foreground italic pl-4">No tasks assigned</p>
+                        <p className="text-xs text-muted-foreground italic pl-4">No tasks assigned yet</p>
                       )}
-                      {(a.tasks??[]).map((t:any)=>(
-                        <TaskItem key={t.id} task={t} projectName="" assignmentId={a.id}
-                          onUpdate={handleTaskUpdate} isUpdating={updatingTask===t.id}/>
-                      ))}
+                      {(a.tasks??[])
+                        .filter((t:any)=>adminStatusFilter==="all"||t.status===adminStatusFilter)
+                        .map((t:any)=>(
+                          <TaskItem key={t.id} task={t} projectName="" assignmentId={a.id}
+                            onUpdate={handleTaskUpdate} isUpdating={updatingTask===t.id}/>
+                        ))}
+                      {(a.tasks??[]).length>0 &&
+                       adminStatusFilter!=="all" &&
+                       (a.tasks??[]).filter((t:any)=>t.status===adminStatusFilter).length===0 && (
+                        <p className="text-xs text-muted-foreground italic pl-4">
+                          No {adminStatusFilter.replace(/_/g," ")} tasks in this assignment
+                        </p>
+                      )}
                     </div>
                   ))}
                 </div>
