@@ -202,12 +202,14 @@ function TaskItem({task, projectName, assignmentId, onUpdate, isUpdating}:{
         <div className="flex items-center gap-1 flex-shrink-0 relative">
           <button onClick={()=>!isUpdating&&onUpdate(assignmentId,task.id,"completed")}
             disabled={isUpdating}
+            title="Click to mark this task as completed"
             className="flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-lg
-              bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300
-              hover:bg-green-200 dark:hover:bg-green-900 transition-colors border border-green-200 dark:border-green-800
-              disabled:opacity-40">
+              bg-muted text-muted-foreground border border-input
+              hover:bg-green-100 hover:text-green-700 hover:border-green-300
+              dark:hover:bg-green-950 dark:hover:text-green-300 dark:hover:border-green-800
+              transition-colors disabled:opacity-40">
             {isUpdating?<Loader2 className="h-3 w-3 animate-spin"/>:<CheckCircle2 className="h-3 w-3"/>}
-            Done
+            Mark Done
           </button>
           <button onClick={()=>setPickerOpen(o=>!o)}
             className="p-1.5 rounded-lg border border-input hover:bg-muted transition-colors text-muted-foreground">
