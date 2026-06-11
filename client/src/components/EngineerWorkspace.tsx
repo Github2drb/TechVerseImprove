@@ -733,7 +733,6 @@ export function EngineerWorkspace() {
 
         </div>
       </div>
-    </div>
 
       {/* Quick assign modal */}
       {showAssign && isAdmin && (
