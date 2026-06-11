@@ -153,7 +153,8 @@ function TaskItem({task, projectName, assignmentId, onUpdate, isUpdating}:{
   onUpdate:(assignmentId:string,taskId:string,status:string)=>void;
   isUpdating:boolean;
 }) {
-  const [pickerOpen,setPickerOpen]=useState(false);
+  const [pickerOpen,   setPickerOpen]   = useState(false);
+  const [confirmDone,  setConfirmDone]  = useState(false);
   const st=taskStatus(task.status);
   const isOverdue=task.assignedDate && task.assignedDate < todayStr() && task.status!=="completed";
   const od=isOverdue?overdueDays(task.assignedDate):0;
@@ -200,25 +201,51 @@ function TaskItem({task, projectName, assignmentId, onUpdate, isUpdating}:{
       {/* Quick actions */}
       {task.status!=="completed" && (
         <div className="flex items-center gap-1 flex-shrink-0 relative" style={{overflow:"visible"}}>
-          <button onClick={()=>!isUpdating&&onUpdate(assignmentId,task.id,"completed")}
-            disabled={isUpdating}
-            title="Click to mark this task as completed"
-            className="flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-lg
-              bg-muted text-muted-foreground border border-input
-              hover:bg-green-100 hover:text-green-700 hover:border-green-300
-              dark:hover:bg-green-950 dark:hover:text-green-300 dark:hover:border-green-800
-              transition-colors disabled:opacity-40">
-            {isUpdating?<Loader2 className="h-3 w-3 animate-spin"/>:<CheckCircle2 className="h-3 w-3"/>}
-            Mark Done
-          </button>
-          <button onClick={()=>setPickerOpen(o=>!o)}
-            className="p-1.5 rounded-lg border border-input hover:bg-muted transition-colors text-muted-foreground">
-            <Edit2 className="h-3 w-3"/>
-          </button>
+          {confirmDone ? (
+            /* Confirmation inline */
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-amber-400/50 bg-amber-500/10">
+              <span className="text-[11px] font-medium text-amber-600 dark:text-amber-400 whitespace-nowrap">
+                Mark as completed?
+              </span>
+              <button
+                onClick={()=>{ onUpdate(assignmentId,task.id,"completed"); setConfirmDone(false); }}
+                disabled={isUpdating}
+                className="flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-lg
+                  bg-green-600 text-white hover:bg-green-700 transition-colors disabled:opacity-40">
+                {isUpdating ? <Loader2 className="h-3 w-3 animate-spin"/> : <CheckCircle2 className="h-3 w-3"/>}
+                Yes
+              </button>
+              <button
+                onClick={()=>setConfirmDone(false)}
+                className="flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-lg
+                  bg-muted text-muted-foreground hover:bg-muted/80 transition-colors border border-input">
+                <X className="h-3 w-3"/>
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <>
+              <button onClick={()=>setConfirmDone(true)}
+                disabled={isUpdating}
+                title="Click to mark this task as completed"
+                className="flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-lg
+                  bg-muted text-muted-foreground border border-input
+                  hover:bg-green-100 hover:text-green-700 hover:border-green-300
+                  dark:hover:bg-green-950 dark:hover:text-green-300 dark:hover:border-green-800
+                  transition-colors disabled:opacity-40">
+                <CheckCircle2 className="h-3 w-3"/>
+                Mark Done
+              </button>
+              <button onClick={()=>setPickerOpen(o=>!o)}
+                className="p-1.5 rounded-lg border border-input hover:bg-muted transition-colors text-muted-foreground">
+                <Edit2 className="h-3 w-3"/>
+              </button>
+            </>
+          )}
           {pickerOpen && (
             <TaskStatusPicker
               current={task.status}
-              onSelect={v=>{ onUpdate(assignmentId,task.id,v); setPickerOpen(false); }}
+              onSelect={v=>{ onUpdate(assignmentId,task.id,v); setPickerOpen(false); setConfirmDone(false); }}
               onClose={()=>setPickerOpen(false)}
             />
           )}
