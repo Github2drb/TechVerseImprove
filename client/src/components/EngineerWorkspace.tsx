@@ -135,7 +135,7 @@ function TaskStatusPicker({current,onSelect,onClose}:{current:string;onSelect:(v
     document.addEventListener("mousedown",h);return()=>document.removeEventListener("mousedown",h);
   },[]);
   return (
-    <div ref={ref} className="absolute right-0 top-full mt-1 z-50 bg-background border rounded-xl shadow-2xl p-1.5 w-36">
+    <div ref={ref} className="absolute right-0 bottom-full mb-1 z-50 bg-background border rounded-xl shadow-2xl p-1.5 w-36">
       {TASK_STATUSES.map(s=>(
         <button key={s.v} onClick={()=>{onSelect(s.v);onClose();}}
           className={`w-full flex items-center gap-2 text-xs px-2.5 py-2 rounded-lg transition-colors
@@ -199,7 +199,7 @@ function TaskItem({task, projectName, assignmentId, onUpdate, isUpdating}:{
 
       {/* Quick actions */}
       {task.status!=="completed" && (
-        <div className="flex items-center gap-1 flex-shrink-0 relative">
+        <div className="flex items-center gap-1 flex-shrink-0 relative" style={{overflow:"visible"}}>
           <button onClick={()=>!isUpdating&&onUpdate(assignmentId,task.id,"completed")}
             disabled={isUpdating}
             title="Click to mark this task as completed"
