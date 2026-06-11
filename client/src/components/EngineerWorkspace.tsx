@@ -601,8 +601,7 @@ export function EngineerWorkspace() {
         </div>
       </div>
 
-      {/* ── Admin: All Engineers view ── */}
-      {viewMode==="all" && isAdmin && (
+      {(isAdmin && viewMode==="all") ? (
         <div className="space-y-4">
           {Object.keys(byEngineer).length===0 && (
             <div className="border rounded-2xl p-8 text-center bg-card">
@@ -610,13 +609,12 @@ export function EngineerWorkspace() {
             </div>
           )}
           {Object.entries(byEngineer).sort(([a],[b])=>a.localeCompare(b)).map(([eng,assignments])=>{
-            const allTks=assignments.flatMap(a=>(a.tasks??[]).map(t=>({...t,projectName:a.projectName,assignmentId:a.id})));
-            const pending=allTks.filter(t=>t.status!=="completed").length;
-            const done=allTks.filter(t=>t.status==="completed").length;
-            const overdue=allTks.filter(t=>t.status!=="completed"&&t.assignedDate&&t.assignedDate<todayStr()).length;
+            const allTks=assignments.flatMap((a:any)=>(a.tasks??[]).map((t:any)=>({...t,projectName:a.projectName,assignmentId:a.id})));
+            const pending=allTks.filter((t:any)=>t.status!=="completed").length;
+            const done=allTks.filter((t:any)=>t.status==="completed").length;
+            const overdue=allTks.filter((t:any)=>t.status!=="completed"&&t.assignedDate&&t.assignedDate<todayStr()).length;
             return (
               <div key={eng} className="border rounded-2xl overflow-hidden bg-card">
-                {/* Engineer header */}
                 <div className="flex items-center gap-3 px-4 py-3 border-b bg-muted/30">
                   <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-xs font-bold text-primary flex-shrink-0">
                     {eng.split(" ").map((n:string)=>n[0]).slice(0,2).join("")}
@@ -631,23 +629,21 @@ export function EngineerWorkspace() {
                     {done>0    && <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-green-500/10 text-green-500">{done} done</span>}
                   </div>
                 </div>
-
-                {/* Projects + tasks */}
                 <div className="divide-y">
-                  {assignments.map(a=>(
+                  {assignments.map((a:any)=>(
                     <div key={a.id} className="px-4 py-3 space-y-2">
                       <div className="flex items-center justify-between gap-2">
                         <p className="text-xs font-semibold text-foreground line-clamp-1 flex-1" title={a.projectName}>
                           📁 {a.projectName}
                         </p>
                         <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-muted text-muted-foreground flex-shrink-0">
-                          {a.currentStatus?.replace(/_/g," ")}
+                          {(a.currentStatus??"").replace(/_/g," ")}
                         </span>
                       </div>
                       {(a.tasks??[]).length===0 && (
-                        <p className="text-xs text-muted-foreground italic pl-4">No tasks assigned yet</p>
+                        <p className="text-xs text-muted-foreground italic pl-4">No tasks assigned</p>
                       )}
-                      {(a.tasks??[]).map(t=>(
+                      {(a.tasks??[]).map((t:any)=>(
                         <TaskItem key={t.id} task={t} projectName="" assignmentId={a.id}
                           onUpdate={handleTaskUpdate} isUpdating={updatingTask===t.id}/>
                       ))}
@@ -658,10 +654,8 @@ export function EngineerWorkspace() {
             );
           })}
         </div>
-      )}
-
-      {/* ── My tasks view (engineer or admin's own) ── */}
-      {viewMode==="mine" && <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-4">
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-4">
 
         {/* ── Left: Task lists ── */}
         <div className="space-y-3 min-w-0">
@@ -816,10 +810,7 @@ export function EngineerWorkspace() {
             ))}
           </div>
         </div>
-      </div>
-
-      </div>
-      }
+      )}
 
       {showAssign && isAdmin && (
         <QuickAssignModal
