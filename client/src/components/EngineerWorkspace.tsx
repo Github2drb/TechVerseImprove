@@ -430,6 +430,7 @@ export function EngineerWorkspace() {
   const [dismissed,   setDismissed]    = useState<string[]>([]);
   const [nbLoaded,    setNbLoaded]     = useState(false);
   const [showAssign,  setShowAssign]   = useState(false);
+  const [viewMode,    setViewMode]     = useState<"mine"|"all">("mine");
   const [showDone,    setShowDone]     = useState(false);
   const [updatingTask,setUpdatingTask] = useState<string|null>(null);
 
@@ -441,6 +442,18 @@ export function EngineerWorkspace() {
     allAssignments.filter(a=>a.engineerName?.trim().toLowerCase()===engineerName.trim().toLowerCase()),
     [allAssignments,engineerName]
   );
+
+  // Admin: group all assignments by engineer
+  const byEngineer=useMemo(()=>{
+    if(!isAdmin) return {};
+    const map: Record<string,typeof allAssignments>={}; 
+    allAssignments.forEach(a=>{
+      const k=a.engineerName?.trim()||"Unassigned";
+      if(!map[k]) map[k]=[];
+      map[k].push(a);
+    });
+    return map;
+  },[allAssignments,isAdmin]);
 
   // Flatten all tasks from my assignments
   const allTasks=useMemo(()=>
@@ -559,20 +572,96 @@ export function EngineerWorkspace() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {overdueTasks.length>0 && <span className="text-xs px-2.5 py-1 rounded-full bg-red-500/10 text-red-500 font-bold">{overdueTasks.length} overdue</span>}
-          {todayTasks.length>0    && <span className="text-xs px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-500 font-bold">{todayTasks.length} today</span>}
-          {weeklyTasks.length>0   && <span className="text-xs px-2.5 py-1 rounded-full bg-muted text-muted-foreground font-medium">{weeklyTasks.length} weekly</span>}
-          {doneTasks.length>0     && <span className="text-xs px-2.5 py-1 rounded-full bg-green-500/10 text-green-500 font-medium">{doneTasks.length} done</span>}
+          {/* View toggle — admin only */}
+          {isAdmin && (
+            <div className="flex items-center gap-0 border rounded-xl overflow-hidden">
+              <button onClick={()=>setViewMode("mine")}
+                className={`text-xs font-semibold px-3 py-1.5 transition-colors
+                  ${viewMode==="mine"?"bg-primary text-primary-foreground":"hover:bg-muted text-muted-foreground"}`}>
+                My Tasks
+              </button>
+              <button onClick={()=>setViewMode("all")}
+                className={`text-xs font-semibold px-3 py-1.5 transition-colors border-l
+                  ${viewMode==="all"?"bg-primary text-primary-foreground":"hover:bg-muted text-muted-foreground"}`}>
+                All Engineers
+              </button>
+            </div>
+          )}
+          {viewMode==="mine" && overdueTasks.length>0 && <span className="text-xs px-2.5 py-1 rounded-full bg-red-500/10 text-red-500 font-bold">{overdueTasks.length} overdue</span>}
+          {viewMode==="mine" && todayTasks.length>0    && <span className="text-xs px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-500 font-bold">{todayTasks.length} today</span>}
+          {viewMode==="mine" && weeklyTasks.length>0   && <span className="text-xs px-2.5 py-1 rounded-full bg-muted text-muted-foreground font-medium">{weeklyTasks.length} weekly</span>}
+          {viewMode==="mine" && doneTasks.length>0     && <span className="text-xs px-2.5 py-1 rounded-full bg-green-500/10 text-green-500 font-medium">{doneTasks.length} done</span>}
+          {viewMode==="all"  && <span className="text-xs px-2.5 py-1 rounded-full bg-muted text-muted-foreground font-medium">{allAssignments.length} assignments</span>}
           {isAdmin && (
             <button onClick={()=>setShowAssign(true)}
-              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full bg-primary text-primary-foreground hover:opacity-90 transition-opacity ml-1">
+              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full bg-primary text-primary-foreground hover:opacity-90 transition-opacity">
               <Plus className="h-3.5 w-3.5"/>Assign Tasks
             </button>
           )}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-4">
+      {/* ── Admin: All Engineers view ── */}
+      {viewMode==="all" && isAdmin && (
+        <div className="space-y-4">
+          {Object.keys(byEngineer).length===0 && (
+            <div className="border rounded-2xl p-8 text-center bg-card">
+              <p className="text-sm text-muted-foreground">No assignments found. Use "Assign Tasks" to add.</p>
+            </div>
+          )}
+          {Object.entries(byEngineer).sort(([a],[b])=>a.localeCompare(b)).map(([eng,assignments])=>{
+            const allTks=assignments.flatMap(a=>(a.tasks??[]).map(t=>({...t,projectName:a.projectName,assignmentId:a.id})));
+            const pending=allTks.filter(t=>t.status!=="completed").length;
+            const done=allTks.filter(t=>t.status==="completed").length;
+            const overdue=allTks.filter(t=>t.status!=="completed"&&t.assignedDate&&t.assignedDate<todayStr()).length;
+            return (
+              <div key={eng} className="border rounded-2xl overflow-hidden bg-card">
+                {/* Engineer header */}
+                <div className="flex items-center gap-3 px-4 py-3 border-b bg-muted/30">
+                  <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-xs font-bold text-primary flex-shrink-0">
+                    {eng.split(" ").map((n:string)=>n[0]).slice(0,2).join("")}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-foreground">{eng}</p>
+                    <p className="text-[11px] text-muted-foreground">{assignments.length} project{assignments.length!==1?"s":""} · {allTks.length} task{allTks.length!==1?"s":""}</p>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {overdue>0 && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-500/10 text-red-500">{overdue} overdue</span>}
+                    {pending>0 && <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-500">{pending} pending</span>}
+                    {done>0    && <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-green-500/10 text-green-500">{done} done</span>}
+                  </div>
+                </div>
+
+                {/* Projects + tasks */}
+                <div className="divide-y">
+                  {assignments.map(a=>(
+                    <div key={a.id} className="px-4 py-3 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-semibold text-foreground line-clamp-1 flex-1" title={a.projectName}>
+                          📁 {a.projectName}
+                        </p>
+                        <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-muted text-muted-foreground flex-shrink-0">
+                          {a.currentStatus?.replace(/_/g," ")}
+                        </span>
+                      </div>
+                      {(a.tasks??[]).length===0 && (
+                        <p className="text-xs text-muted-foreground italic pl-4">No tasks assigned yet</p>
+                      )}
+                      {(a.tasks??[]).map(t=>(
+                        <TaskItem key={t.id} task={t} projectName="" assignmentId={a.id}
+                          onUpdate={handleTaskUpdate} isUpdating={updatingTask===t.id}/>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── My tasks view (engineer or admin's own) ── */}
+      {viewMode==="mine" && <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-4">
 
         {/* ── Left: Task lists ── */}
         <div className="space-y-3 min-w-0">
@@ -728,6 +817,8 @@ export function EngineerWorkspace() {
           </div>
         </div>
       </div>
+
+      </div>} {/* end viewMode==="mine" */}
 
       {showAssign && isAdmin && (
         <QuickAssignModal
