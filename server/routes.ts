@@ -1467,6 +1467,31 @@ r.patch("/notice-board/:engineer/dismiss/:assignmentId", async (req, res) => {
     res.json({ success: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
+// ── ADD TO server/routes.ts before health check ───────────────────────────────
+// Task-level status update within a weekly assignment
+ 
+r.patch("/weekly-assignments/:id/task-status", async (req, res) => {
+  try {
+    const { taskId, status } = req.body;
+    if (!taskId || !status) return res.status(400).json({ error: "taskId and status required" });
+ 
+    const waFile = await readJsonFile<WAFile>("weekly-assignments.json");
+    if (!waFile) return res.status(404).json({ error: "Not found" });
+ 
+    const assignment = waFile.assignments.find((a: any) => a.id === req.params.id);
+    if (!assignment) return res.status(404).json({ error: "Assignment not found" });
+ 
+    const task = (assignment.tasks ?? []).find((t: any) => t.id === taskId);
+    if (!task) return res.status(404).json({ error: "Task not found" });
+ 
+    task.status = status;
+    if (status === "completed") task.completionDate = new Date().toISOString().split("T")[0];
+ 
+    await writeJsonFile("weekly-assignments.json", waFile, `Task update: ${task.taskName}`);
+    res.json({ success: true, task });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+ 
 // ── Health check ─────────────────────────────────────────────────────────────
   r.get("/health", async (_q, res) => {
     
