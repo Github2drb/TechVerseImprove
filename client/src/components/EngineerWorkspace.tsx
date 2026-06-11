@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import {
   CheckCircle2, AlertTriangle, Clock, Calendar, Send,
   Trash2, ChevronDown, ChevronUp, BookOpen, Zap, Target,
-  LayoutDashboard, Loader2, X, Edit2, Users,
+  LayoutDashboard, Loader2, X, Edit2, Users, Plus, Link2,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -255,6 +255,145 @@ function TaskCard({ a, variant, onStatusUpdate, onDismiss }: {
   );
 }
 
+
+// ── Quick Assign modal ────────────────────────────────────────────────────────
+function QuickAssignModal({ onClose, onSaved }: { onClose:()=>void; onSaved:()=>void }) {
+  const { toast } = useToast();
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
+    engineerName:"", projectName:"", currentStatus:"not_started",
+    resourceLockedFrom:"", resourceLockedTill:"",
+    internalTarget:"", customerTarget:"", constraint:"",
+  });
+
+  const { data: masterEngineers = [] } = useQuery<Array<{id:string;name:string;initials:string}>>({
+    queryKey:["/api/engineers-master-list"],
+    queryFn:async()=>{ const r=await fetch("/api/engineers-master-list"); return r.ok?r.json():[]; },
+  });
+  const { data: projectNames = [] } = useQuery<string[]>({
+    queryKey:["/api/project-names"],
+    queryFn:async()=>{ const r=await fetch("/api/project-names"); return r.ok?r.json():[]; },
+  });
+
+  const save = async() => {
+    if(!form.engineerName||!form.projectName){
+      toast({title:"Engineer and Project are required",variant:"destructive"}); return;
+    }
+    setSaving(true);
+    try {
+      const weekStart = new Date();
+      weekStart.setDate(weekStart.getDate()-(weekStart.getDay()===0?6:weekStart.getDay()-1));
+      const r = await apiRequest("POST","/api/weekly-assignments",{
+        ...form,
+        weekStart: weekStart.toISOString().split("T")[0],
+        tasks:[],
+      },true);
+      toast({title:"Assignment added successfully"});
+      onSaved();
+      onClose();
+    } catch(e:any){
+      toast({title:e?.message||"Failed to add assignment",variant:"destructive"});
+    } finally { setSaving(false); }
+  };
+
+  const field = "w-full border rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-primary border-input";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="bg-background border rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-5 py-4 border-b">
+          <div>
+            <h2 className="text-base font-semibold flex items-center gap-2">
+              <Plus className="h-4 w-4 text-primary"/>Assign Task
+            </h2>
+            <p className="text-xs text-muted-foreground mt-0.5">Add a new project assignment to an engineer</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors">
+            <X className="h-4 w-4"/>
+          </button>
+        </div>
+
+        <div className="px-5 py-4 space-y-4">
+          {/* Engineer */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground">Engineer *</label>
+            <select value={form.engineerName} onChange={e=>setForm(f=>({...f,engineerName:e.target.value}))} className={field}>
+              <option value="">Select engineer…</option>
+              {masterEngineers.map(e=>(
+                <option key={e.id} value={e.name}>{e.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Project */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground">Project *</label>
+            <input list="qs-projects" value={form.projectName}
+              onChange={e=>setForm(f=>({...f,projectName:e.target.value}))}
+              placeholder="Type or select project…" className={field}/>
+            <datalist id="qs-projects">
+              {projectNames.map(n=><option key={n} value={n}/>)}
+            </datalist>
+          </div>
+
+          {/* Dates grid */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Locked From</label>
+              <input type="date" value={form.resourceLockedFrom}
+                onChange={e=>setForm(f=>({...f,resourceLockedFrom:e.target.value}))} className={field}/>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Locked Till</label>
+              <input type="date" value={form.resourceLockedTill}
+                onChange={e=>setForm(f=>({...f,resourceLockedTill:e.target.value}))} className={field}/>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Internal Target</label>
+              <input type="date" value={form.internalTarget}
+                onChange={e=>setForm(f=>({...f,internalTarget:e.target.value}))} className={field}/>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Customer Target</label>
+              <input type="date" value={form.customerTarget}
+                onChange={e=>setForm(f=>({...f,customerTarget:e.target.value}))} className={field}/>
+            </div>
+          </div>
+
+          {/* Status */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground">Current Status</label>
+            <select value={form.currentStatus} onChange={e=>setForm(f=>({...f,currentStatus:e.target.value}))} className={field}>
+              {STATUS_GROUPS.map(g=>(
+                <optgroup key={g.group} label={g.group}>
+                  {g.items.map(s=><option key={s.v} value={s.v}>{s.l}</option>)}
+                </optgroup>
+              ))}
+            </select>
+          </div>
+
+          {/* Constraint */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground">Constraints / Notes</label>
+            <textarea value={form.constraint} rows={2}
+              onChange={e=>setForm(f=>({...f,constraint:e.target.value}))}
+              placeholder="Any blockers, dependencies or notes…"
+              className={`${field} resize-none`}/>
+          </div>
+        </div>
+
+        <div className="flex gap-2 px-5 py-4 border-t bg-muted/20">
+          <Button onClick={save} disabled={saving} className="flex-1 gap-2">
+            {saving ? <Loader2 className="h-4 w-4 animate-spin"/> : <Plus className="h-4 w-4"/>}
+            {saving ? "Saving…" : "Add Assignment"}
+          </Button>
+          <Button variant="outline" onClick={onClose} className="flex-1">Cancel</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 export function EngineerWorkspace() {
   const { user, isAdmin } = useAuth();
@@ -269,6 +408,7 @@ export function EngineerWorkspace() {
   const [nbLoaded,     setNbLoaded]     = useState(false);
   const [showAllWeek,  setShowAllWeek]  = useState(false);
   const [updatingIds,  setUpdatingIds]  = useState<Set<string>>(new Set());
+  const [showAssign,   setShowAssign]   = useState(false);
 
   // ── Fetch assignments ──────────────────────────────────────────────────────
   const { data: allAssignments = [], isLoading } = useQuery<WeeklyAssignment[]>({
@@ -411,6 +551,12 @@ export function EngineerWorkspace() {
           {active.length>0 && <span className="px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 font-semibold">{active.length} active</span>}
           {weekTasks.length>0 && <span className="px-2.5 py-1 rounded-full bg-muted text-muted-foreground font-medium">{weekTasks.length} this week</span>}
           {completedCount>0 && <span className="px-2.5 py-1 rounded-full bg-green-500/10 text-green-600 dark:text-green-400 font-medium">{completedCount} done</span>}
+          {isAdmin && (
+            <button onClick={()=>setShowAssign(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-primary text-primary-foreground font-semibold hover:opacity-90 transition-opacity text-xs ml-2">
+              <Plus className="h-3.5 w-3.5"/>Assign Task
+            </button>
+          )}
         </div>
       </div>
 
@@ -587,6 +733,15 @@ export function EngineerWorkspace() {
 
         </div>
       </div>
+    </div>
+
+      {/* Quick assign modal */}
+      {showAssign && isAdmin && (
+        <QuickAssignModal
+          onClose={()=>setShowAssign(false)}
+          onSaved={()=>queryClient.invalidateQueries({queryKey:["/api/weekly-assignments"]})}
+        />
+      )}
     </div>
   );
 }
