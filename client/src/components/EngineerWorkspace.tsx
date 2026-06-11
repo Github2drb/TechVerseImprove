@@ -147,6 +147,53 @@ function TaskStatusPicker({current,onSelect,onClose}:{current:string;onSelect:(v
   );
 }
 
+
+// ── Project status editable badge (admin) ────────────────────────────────────
+function ProjectStatusBadge({assignmentId, currentStatus, onUpdate}:{
+  assignmentId:string; currentStatus:string;
+  onUpdate:(assignmentId:string,taskId:string,status:string)=>void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(()=>{
+    const h=(e:MouseEvent)=>{if(ref.current&&!ref.current.contains(e.target as Node))setOpen(false);};
+    document.addEventListener("mousedown",h);return()=>document.removeEventListener("mousedown",h);
+  },[]);
+
+  return (
+    <div ref={ref} className="relative flex-shrink-0">
+      <button onClick={()=>setOpen(o=>!o)}
+        title="Click to change project phase/status"
+        className="flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full
+          bg-muted text-muted-foreground border border-input
+          hover:bg-primary/10 hover:text-primary hover:border-primary/30 transition-all">
+        <Edit2 className="h-2.5 w-2.5 opacity-60"/>
+        {(currentStatus??"").replace(/_/g," ")}
+      </button>
+      {open && (
+        <div className="absolute right-0 bottom-full mb-1 z-50 bg-background border rounded-xl shadow-2xl p-2 w-52 max-h-72 overflow-y-auto">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground px-2 pb-1.5">
+            Change project status
+          </p>
+          {PHASE_GROUPS.map(g=>(
+            <div key={g.group}>
+              <div className="text-[10px] font-semibold text-muted-foreground bg-muted/50 px-2 py-1">{g.group}</div>
+              {g.items.map(s=>(
+                <button key={s.v} onClick={()=>{ onUpdate(assignmentId,"__project_status__",s.v); setOpen(false); }}
+                  className={`w-full text-left text-xs px-3 py-1.5 rounded-lg hover:bg-muted transition-colors
+                    ${s.v===currentStatus?"bg-primary/10 text-primary font-semibold":"text-foreground"}`}>
+                  {s.l}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Individual task card ──────────────────────────────────────────────────────
 function TaskItem({task, projectName, assignmentId, onUpdate, isUpdating}:{
   task:Task; projectName:string; assignmentId:string;
@@ -237,8 +284,10 @@ function TaskItem({task, projectName, assignmentId, onUpdate, isUpdating}:{
                 Mark Done
               </button>
               <button onClick={()=>setPickerOpen(o=>!o)}
-                className="p-1.5 rounded-lg border border-input hover:bg-muted transition-colors text-muted-foreground">
+                title="Change status"
+                className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg border border-input hover:bg-muted transition-colors text-muted-foreground">
                 <Edit2 className="h-3 w-3"/>
+                <span className="hidden sm:inline">Status</span>
               </button>
             </>
           )}
@@ -580,15 +629,23 @@ export function EngineerWorkspace() {
     })();
   },[engineerName]);
 
-  // Update task status
+  // Update task status OR project-level status
   const handleTaskUpdate=async(assignmentId:string,taskId:string,status:string)=>{
     setUpdatingTask(taskId);
     try {
-      await apiRequest("PATCH",`/api/weekly-assignments/${encodeURIComponent(assignmentId)}/task-status`,
-        {taskId,status},true);
+      if(taskId==="__project_status__") {
+        // Update assignment-level currentStatus
+        await apiRequest("PATCH",`/api/weekly-assignments/${encodeURIComponent(assignmentId)}`,
+          {currentStatus:status},true);
+        toast({title:"Project status updated to: "+status.replace(/_/g," ")});
+      } else {
+        // Update individual task status
+        await apiRequest("PATCH",`/api/weekly-assignments/${encodeURIComponent(assignmentId)}/task-status`,
+          {taskId,status},true);
+        toast({title:status==="completed"?"✓ Task completed!":"Status updated"});
+      }
       queryClient.invalidateQueries({queryKey:["/api/weekly-assignments"]});
-      toast({title:status==="completed"?"✓ Task completed!":"Status updated"});
-    }catch{toast({title:"Update failed",variant:"destructive"});}
+    }catch{toast({title:"Update failed — check server routes",variant:"destructive"});}
     finally{setUpdatingTask(null);}
   };
 
@@ -754,9 +811,11 @@ export function EngineerWorkspace() {
                         <p className="text-xs font-semibold text-foreground line-clamp-1 flex-1" title={a.projectName}>
                           📁 {a.projectName}
                         </p>
-                        <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-muted text-muted-foreground flex-shrink-0">
-                          {(a.currentStatus??"").replace(/_/g," ")}
-                        </span>
+                        <ProjectStatusBadge
+                          assignmentId={a.id}
+                          currentStatus={a.currentStatus??"not_started"}
+                          onUpdate={handleTaskUpdate}
+                        />
                       </div>
                       {(a.tasks??[]).length===0 && (
                         <p className="text-xs text-muted-foreground italic pl-4">No tasks assigned yet</p>
