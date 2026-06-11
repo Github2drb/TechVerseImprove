@@ -1391,6 +1391,82 @@ r.patch("/notifications/:id/ticker", async (req, res) => {
 });
 
 // ── END DAILY REPORT ATTENDANCE ──────────────────────────────────────────────  
+// ─────────────────────────────────────────────────────────────────────────────
+// ADD TO server/routes.ts — paste before the health check route
+// Handles per-engineer notice board comments and acknowledgements
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface NBComment {
+  id: string; text: string; date: string; createdAt: string; type: "note"|"update"|"blocker";
+}
+interface NBEngineer {
+  comments: NBComment[];
+  dismissedMissed: string[]; // assignment IDs dismissed
+}
+interface NBFile {
+  data: Record<string, NBEngineer>; // key = engineerName.toLowerCase()
+  lastUpdated: string;
+}
+
+function nbKey(name: string) { return name.trim().toLowerCase(); }
+
+r.get("/notice-board/:engineer", async (req, res) => {
+  try {
+    const key = nbKey(req.params.engineer);
+    const f   = await readJsonFile<NBFile>("notice-board.json");
+    const eng = f?.data?.[key] ?? { comments: [], dismissedMissed: [] };
+    res.json(eng);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+r.post("/notice-board/:engineer/comment", async (req, res) => {
+  try {
+    const key = nbKey(req.params.engineer);
+    const f   = (await readJsonFile<NBFile>("notice-board.json"))
+      ?? { data: {}, lastUpdated: "" };
+    if (!f.data[key]) f.data[key] = { comments: [], dismissedMissed: [] };
+    const comment: NBComment = {
+      id:        `c-${Date.now()}`,
+      text:      req.body.text ?? "",
+      date:      req.body.date ?? new Date().toISOString().split("T")[0],
+      type:      req.body.type ?? "note",
+      createdAt: new Date().toISOString(),
+    };
+    f.data[key].comments.push(comment);
+    // Keep only last 50 comments per engineer
+    if (f.data[key].comments.length > 50)
+      f.data[key].comments = f.data[key].comments.slice(-50);
+    f.lastUpdated = new Date().toISOString();
+    await writeJsonFile("notice-board.json", f, `NB comment: ${req.params.engineer}`);
+    res.status(201).json(comment);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+r.delete("/notice-board/:engineer/comment/:id", async (req, res) => {
+  try {
+    const key = nbKey(req.params.engineer);
+    const f   = await readJsonFile<NBFile>("notice-board.json");
+    if (!f?.data?.[key]) return res.status(404).json({ message: "Not found" });
+    f.data[key].comments = f.data[key].comments.filter(c => c.id !== req.params.id);
+    f.lastUpdated = new Date().toISOString();
+    await writeJsonFile("notice-board.json", f, `NB delete comment: ${req.params.engineer}`);
+    res.json({ success: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+r.patch("/notice-board/:engineer/dismiss/:assignmentId", async (req, res) => {
+  try {
+    const key = nbKey(req.params.engineer);
+    const f   = (await readJsonFile<NBFile>("notice-board.json"))
+      ?? { data: {}, lastUpdated: "" };
+    if (!f.data[key]) f.data[key] = { comments: [], dismissedMissed: [] };
+    if (!f.data[key].dismissedMissed.includes(req.params.assignmentId))
+      f.data[key].dismissedMissed.push(req.params.assignmentId);
+    f.lastUpdated = new Date().toISOString();
+    await writeJsonFile("notice-board.json", f, `NB dismiss: ${req.params.engineer}`);
+    res.json({ success: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
 // ── Health check ─────────────────────────────────────────────────────────────
   r.get("/health", async (_q, res) => {
     
