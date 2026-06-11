@@ -11,7 +11,7 @@ import { ProjectPreview } from "@/components/project-preview";
 import { WidgetSettings, useWidgetConfig } from "@/components/widget-settings";
 import { WeeklyAssignmentsTable } from "@/components/weekly-assignments-table";
 import { ManagerOverview } from "@/components/manager-overview";
-import { WeeklyScheduleOverview } from "@/components/weekly-schedule-overview";
+import { NoticeBoardWidget } from "@/components/NoticeBoardWidget";
 import { useAuth } from "@/components/auth-provider";
 import { Ticker } from "@/components/Ticker";
 import type { DashboardStats, NavigationCard, TeamMember, Project } from "@shared/schema";
@@ -183,7 +183,7 @@ export default function Dashboard() {
         
         {visibleWidgets.includes("navigation") && renderWidget("navigation")}
 
-        <WeeklyScheduleOverview />
+       <NoticeBoardWidget />
         
         <WeeklyAssignmentsTable teamMembers={teamMembers} />
 
