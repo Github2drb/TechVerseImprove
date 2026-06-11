@@ -195,20 +195,26 @@ function ProjectStatusBadge({assignmentId, currentStatus, onUpdate}:{
 }
 
 // ── Individual task card ──────────────────────────────────────────────────────
-function TaskItem({task, projectName, assignmentId, onUpdate, isUpdating}:{
+function TaskItem({task, projectName, assignmentId, onUpdate, onDelete, isUpdating, isAdmin, pendingStatus}:{
   task:Task; projectName:string; assignmentId:string;
   onUpdate:(assignmentId:string,taskId:string,status:string)=>void;
-  isUpdating:boolean;
+  onDelete?:(assignmentId:string,taskId:string)=>void;
+  isUpdating:boolean; isAdmin?:boolean;
+  pendingStatus?:string;
 }) {
   const [pickerOpen,   setPickerOpen]   = useState(false);
   const [confirmDone,  setConfirmDone]  = useState(false);
-  const st=taskStatus(task.status);
-  const isOverdue=task.assignedDate && task.assignedDate < todayStr() && task.status!=="completed";
+  const [confirmDel,   setConfirmDel]   = useState(false);
+  const effectiveStatus = pendingStatus ?? task.status;
+  const st=taskStatus(effectiveStatus);
+  const isOverdue=task.assignedDate && task.assignedDate < todayStr() && effectiveStatus!=="completed";
   const od=isOverdue?overdueDays(task.assignedDate):0;
+  const isPending=pendingStatus!==undefined && pendingStatus!==task.status;
 
   return (
     <div className={`flex items-start gap-3 px-3 py-2.5 rounded-xl border transition-all
-      ${task.status==="completed"?"border-green-500/20 bg-green-500/5 opacity-70":"border-border bg-card hover:bg-muted/30"}
+      ${effectiveStatus==="completed"?"border-green-500/20 bg-green-500/5 opacity-70":"border-border bg-card hover:bg-muted/30"}
+      ${isPending?"ring-2 ring-primary/40":""}
       ${isOverdue?"border-red-500/30 bg-red-500/5":""}`}>
 
       {/* Status icon */}
@@ -216,19 +222,19 @@ function TaskItem({task, projectName, assignmentId, onUpdate, isUpdating}:{
         className={`mt-0.5 flex-shrink-0 ${isUpdating?"opacity-50":"cursor-pointer hover:opacity-80"}`}
         title="Click to update status">
         <span className={`flex items-center justify-center w-5 h-5 rounded-full border-2 transition-all
-          ${task.status==="completed"?"border-green-500 text-green-500":""}
-          ${task.status==="in_progress"?"border-blue-500 text-blue-500":""}
-          ${task.status==="not_started"?"border-muted-foreground/30 text-muted-foreground/30":""}`}>
-          {task.status==="completed"
+          ${effectiveStatus==="completed"?"border-green-500 text-green-500":""}
+          ${effectiveStatus==="in_progress"?"border-blue-500 text-blue-500":""}
+          ${effectiveStatus==="not_started"?"border-muted-foreground/30 text-muted-foreground/30":""}`}>
+          {effectiveStatus==="completed"
             ? <CheckCircle2 className="h-4 w-4 text-green-500 fill-green-500/20"/>
-            : task.status==="in_progress"
+            : effectiveStatus==="in_progress"
               ? <Clock className="h-3 w-3 text-blue-500"/>
               : <Circle className="h-3 w-3"/>}
         </span>
       </button>
 
       <div className="flex-1 min-w-0">
-        <p className={`text-sm leading-snug ${task.status==="completed"?"line-through text-muted-foreground":"text-foreground"}`}>
+        <p className={`text-sm leading-snug ${effectiveStatus==="completed"?"line-through text-muted-foreground":"text-foreground"}`}>
           {task.taskName}
         </p>
         <div className="flex items-center gap-2 mt-0.5 flex-wrap">
@@ -246,7 +252,7 @@ function TaskItem({task, projectName, assignmentId, onUpdate, isUpdating}:{
       </div>
 
       {/* Quick actions */}
-      {task.status!=="completed" && (
+      {effectiveStatus!=="completed" && (
         <div className="flex items-center gap-1 flex-shrink-0 relative" style={{overflow:"visible"}}>
           {confirmDone ? (
             /* Confirmation inline */
@@ -293,11 +299,38 @@ function TaskItem({task, projectName, assignmentId, onUpdate, isUpdating}:{
           )}
           {pickerOpen && (
             <TaskStatusPicker
-              current={task.status}
+              current={effectiveStatus}
               onSelect={v=>{ onUpdate(assignmentId,task.id,v); setPickerOpen(false); setConfirmDone(false); }}
               onClose={()=>setPickerOpen(false)}
             />
           )}
+        </div>
+      )}
+
+      {/* Pending change indicator */}
+      {isPending && (
+        <span className="flex-shrink-0 text-[10px] font-bold text-primary animate-pulse mt-1">unsaved</span>
+      )}
+
+      {/* Delete button (admin only) */}
+      {isAdmin && !confirmDel && effectiveStatus!=="completed" && (
+        <button onClick={()=>setConfirmDel(true)}
+          title="Delete this task"
+          className="flex-shrink-0 p-1.5 rounded-lg text-muted-foreground/40 hover:text-red-500 hover:bg-red-500/10 transition-colors mt-0.5">
+          <Trash2 className="h-3.5 w-3.5"/>
+        </button>
+      )}
+      {isAdmin && confirmDel && (
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          <span className="text-[11px] text-red-500 font-medium whitespace-nowrap">Delete?</span>
+          <button onClick={()=>{ onDelete&&onDelete(assignmentId,task.id); setConfirmDel(false); }}
+            className="text-[11px] font-semibold px-2 py-0.5 rounded bg-red-600 text-white hover:bg-red-700">
+            Yes
+          </button>
+          <button onClick={()=>setConfirmDel(false)}
+            className="text-[11px] font-medium px-2 py-0.5 rounded bg-muted text-muted-foreground border border-input">
+            No
+          </button>
         </div>
       )}
     </div>
@@ -534,6 +567,9 @@ export function EngineerWorkspace() {
   const [nbLoaded,    setNbLoaded]     = useState(false);
   const [showAssign,        setShowAssign]        = useState(false);
   const [viewMode,          setViewMode]          = useState<"mine"|"all">("mine");
+  const [pendingChanges,    setPendingChanges]     = useState<Record<string,string>>({}); // taskId -> status
+  const [pendingDeletes,    setPendingDeletes]     = useState<Set<string>>(new Set());    // taskIds to delete
+  const [isSavingAll,       setIsSavingAll]        = useState(false);
   const [adminWeekFilter,   setAdminWeekFilter]   = useState(currentWeekStart());
   const [adminStatusFilter, setAdminStatusFilter] = useState("all");
   const [showDone,    setShowDone]     = useState(false);
@@ -629,24 +665,69 @@ export function EngineerWorkspace() {
     })();
   },[engineerName]);
 
-  // Update task status OR project-level status
-  const handleTaskUpdate=async(assignmentId:string,taskId:string,status:string)=>{
-    setUpdatingTask(taskId);
+  // Stage a status change locally (saved on "Save Changes" click)
+  const handleTaskUpdate=(assignmentId:string,taskId:string,status:string)=>{
+    if(taskId==="__project_status__") {
+      // Project-level status: save immediately (different flow)
+      setUpdatingTask(assignmentId);
+      apiRequest("PATCH",`/api/weekly-assignments/${encodeURIComponent(assignmentId)}`,
+        {currentStatus:status},true)
+        .then(()=>{ queryClient.invalidateQueries({queryKey:["/api/weekly-assignments"]}); toast({title:"Project status updated"}); })
+        .catch(()=>toast({title:"Update failed",variant:"destructive"}))
+        .finally(()=>setUpdatingTask(null));
+    } else {
+      // Task status: stage as pending change
+      setPendingChanges(prev=>({...prev,[taskId]:status}));
+    }
+  };
+
+  // Stage a delete locally
+  const handleTaskDelete=(assignmentId:string,taskId:string)=>{
+    setPendingDeletes(prev=>new Set([...prev,taskId]));
+    // Also remove any pending status change for this task
+    setPendingChanges(prev=>{ const n={...prev}; delete n[taskId]; return n; });
+  };
+
+  // Save all pending changes + deletes
+  const saveAllPending=async()=>{
+    const hasChanges=Object.keys(pendingChanges).length>0;
+    const hasDeletes=pendingDeletes.size>0;
+    if(!hasChanges&&!hasDeletes)return;
+    setIsSavingAll(true);
+    let ok=0,fail=0;
     try {
-      if(taskId==="__project_status__") {
-        // Update assignment-level currentStatus
-        await apiRequest("PATCH",`/api/weekly-assignments/${encodeURIComponent(assignmentId)}`,
-          {currentStatus:status},true);
-        toast({title:"Project status updated to: "+status.replace(/_/g," ")});
-      } else {
-        // Update individual task status
-        await apiRequest("PATCH",`/api/weekly-assignments/${encodeURIComponent(assignmentId)}/task-status`,
-          {taskId,status},true);
-        toast({title:status==="completed"?"✓ Task completed!":"Status updated"});
+      // Save status changes
+      for(const [taskId,status] of Object.entries(pendingChanges)){
+        // Find the assignment containing this task
+        const assignment=allAssignments.find(a=>(a.tasks??[]).some((t:any)=>t.id===taskId));
+        if(!assignment)continue;
+        try {
+          await apiRequest("PATCH",`/api/weekly-assignments/${encodeURIComponent(assignment.id)}/task-status`,
+            {taskId,status},true);
+          ok++;
+        }catch{fail++;}
+      }
+      // Delete tasks
+      for(const taskId of Array.from(pendingDeletes)){
+        const assignment=allAssignments.find(a=>(a.tasks??[]).some((t:any)=>t.id===taskId));
+        if(!assignment)continue;
+        try {
+          await apiRequest("DELETE",`/api/weekly-assignments/${encodeURIComponent(assignment.id)}/tasks/${encodeURIComponent(taskId)}`,
+            undefined,true);
+          ok++;
+        }catch{fail++;}
       }
       queryClient.invalidateQueries({queryKey:["/api/weekly-assignments"]});
-    }catch{toast({title:"Update failed — check server routes",variant:"destructive"});}
-    finally{setUpdatingTask(null);}
+      setPendingChanges({});
+      setPendingDeletes(new Set());
+      toast({title:`Saved ${ok} change${ok!==1?"s":""}${fail>0?`, ${fail} failed`:""}`});
+    }catch{toast({title:"Save failed",variant:"destructive"});}
+    finally{setIsSavingAll(false);}
+  };
+
+  const discardPending=()=>{
+    setPendingChanges({});
+    setPendingDeletes(new Set());
   };
 
   const addComment=async()=>{
@@ -766,11 +847,35 @@ export function EngineerWorkspace() {
               ))}
             </div>
             {/* Result count */}
-            <span className="text-xs text-muted-foreground ml-auto flex-shrink-0">
+            <span className="text-xs text-muted-foreground flex-shrink-0">
               {filteredAdminAssignments.length} assignment{filteredAdminAssignments.length!==1?"s":""}
               {" · "}{filteredAdminAssignments.reduce((s,a)=>s+(a.tasks??[]).length,0)} tasks
             </span>
           </div>
+
+          {/* Save/Discard bar — appears when there are pending changes */}
+          {(Object.keys(pendingChanges).length>0 || pendingDeletes.size>0) && (
+            <div className="flex items-center gap-3 px-4 py-3 border rounded-2xl bg-primary/5 border-primary/20">
+              <div className="flex-1 text-xs text-foreground">
+                <span className="font-semibold text-primary">
+                  {Object.keys(pendingChanges).length + pendingDeletes.size} unsaved change{(Object.keys(pendingChanges).length+pendingDeletes.size)!==1?"s":""}
+                </span>
+                {Object.keys(pendingChanges).length>0 && <span className="text-muted-foreground ml-2">· {Object.keys(pendingChanges).length} status update{Object.keys(pendingChanges).length!==1?"s":""}</span>}
+                {pendingDeletes.size>0 && <span className="text-red-500 ml-2">· {pendingDeletes.size} deletion{pendingDeletes.size!==1?"s":""}</span>}
+              </div>
+              <button onClick={discardPending}
+                className="text-xs font-medium px-3 py-1.5 rounded-lg border border-input hover:bg-muted transition-colors text-muted-foreground">
+                Discard
+              </button>
+              <button onClick={saveAllPending} disabled={isSavingAll}
+                className="flex items-center gap-1.5 text-xs font-semibold px-4 py-1.5 rounded-lg
+                  bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-60">
+                {isSavingAll
+                  ? <><Loader2 className="h-3.5 w-3.5 animate-spin"/>Saving…</>
+                  : <><CheckCircle2 className="h-3.5 w-3.5"/>Save Changes</>}
+              </button>
+            </div>
+          )}
 
           {Object.keys(byEngineer).length===0 && (
             <div className="border rounded-2xl p-8 text-center bg-card">
@@ -821,10 +926,18 @@ export function EngineerWorkspace() {
                         <p className="text-xs text-muted-foreground italic pl-4">No tasks assigned yet</p>
                       )}
                       {(a.tasks??[])
-                        .filter((t:any)=>adminStatusFilter==="all"||t.status===adminStatusFilter)
+                        .filter((t:any)=>{
+                          if(pendingDeletes.has(t.id)) return false; // hide pending deletes
+                          const effectiveS = pendingChanges[t.id] ?? t.status;
+                          return adminStatusFilter==="all" || effectiveS===adminStatusFilter;
+                        })
                         .map((t:any)=>(
                           <TaskItem key={t.id} task={t} projectName="" assignmentId={a.id}
-                            onUpdate={handleTaskUpdate} isUpdating={updatingTask===t.id}/>
+                            onUpdate={handleTaskUpdate}
+                            onDelete={handleTaskDelete}
+                            isUpdating={updatingTask===t.id}
+                            isAdmin={true}
+                            pendingStatus={pendingChanges[t.id]}/>
                         ))}
                       {(a.tasks??[]).length>0 &&
                        adminStatusFilter!=="all" &&
@@ -863,7 +976,7 @@ export function EngineerWorkspace() {
               <SectionHead icon={<AlertTriangle className="h-3.5 w-3.5"/>} label="Overdue — take action now" count={overdueTasks.length} variant="red"/>
               {overdueTasks.map(t=>(
                 <TaskItem key={t.id} task={t} projectName={t.projectName} assignmentId={t.assignmentId}
-                  onUpdate={handleTaskUpdate} isUpdating={updatingTask===t.id}/>
+                  onUpdate={handleTaskUpdate} isUpdating={updatingTask===t.id} pendingStatus={pendingChanges[t.id]}/>
               ))}
             </div>
           )}
