@@ -9,7 +9,8 @@ import { NavigationCards } from "@/components/navigation-cards";
 import { TeamSection } from "@/components/team-section";
 import { ProjectPreview } from "@/components/project-preview";
 import { WidgetSettings, useWidgetConfig } from "@/components/widget-settings";
-import { WeeklyAssignmentsTable } from "@/components/weekly-assignments-table";
+/*import { WeeklyAssignmentsTable } from "@/components/weekly-assignments-table";*/
+import { EngineerWorkspace } from "@/components/EngineerWorkspace";
 import { ManagerOverview } from "@/components/manager-overview";
 import { NoticeBoardWidget } from "@/components/NoticeBoardWidget";
 import { useAuth } from "@/components/auth-provider";
@@ -185,7 +186,7 @@ export default function Dashboard() {
 
        <NoticeBoardWidget />
         
-        <WeeklyAssignmentsTable teamMembers={teamMembers} />
+        <EngineerWorkspace />
 
         <TodayActivity />
 
