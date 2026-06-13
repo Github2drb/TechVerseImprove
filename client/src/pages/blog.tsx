@@ -31,7 +31,7 @@ interface BlogPost {
 const EMPTY_POST: Omit<BlogPost, "id"|"createdAt"> = {
   title:"", author:"Admin", date: new Date().toISOString().split("T")[0],
   category:"General", tags:[], coverImage:"", excerpt:"", content:"",
-  isPinned:false, isPublished:false,
+  isPinned:false, isPublished:true,   // default to published so post appears immediately
 };
 
 function getAdminHeader(): string {
@@ -107,7 +107,11 @@ export default function BlogPage() {
   const load = async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch("/api/blog-posts");
+      // Send admin header so backend returns ALL posts (including drafts) for admin
+      const headers: Record<string,string> = {};
+      const ah = getAdminHeader();
+      if (ah) headers["x-admin-auth"] = ah;
+      const r = await fetch("/api/blog-posts", { headers });
       if (!r.ok) throw new Error("HTTP " + r.status);
       setPosts(await r.json());
     } catch(e:any) { setError(e.message); }
@@ -121,7 +125,9 @@ export default function BlogPage() {
     const q = search.toLowerCase();
     const matchQ = !q || p.title.toLowerCase().includes(q) ||
       p.excerpt.toLowerCase().includes(q) || p.tags.some(t => t.toLowerCase().includes(q));
-    return matchCat && matchQ;
+    // Non-admins only see published posts; admins see all
+    const matchPublished = isAdminSession() || p.isPublished;
+    return matchCat && matchQ && matchPublished;
   });
 
   // ── Save post ──────────────────────────────────────────────────────────────
@@ -304,7 +310,7 @@ export default function BlogPage() {
               <Pin className="h-4 w-4 text-amber-500" /> Pin this post
             </label>
             <label className="flex items-center gap-2 cursor-pointer text-sm">
-              <input type="checkbox" checked={draft.isPublished} onChange={e=>setDraft(d=>({...d,isPublished:e.target.checked}))}
+              <input type="checkbox" checked={draft.isPublished ?? true} onChange={e=>setDraft(d=>({...d,isPublished:e.target.checked}))}
                 className="rounded" />
               <Eye className="h-4 w-4 text-green-500" /> Publish (visible to all)
             </label>
