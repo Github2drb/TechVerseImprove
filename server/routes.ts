@@ -1492,7 +1492,7 @@ r.patch("/weekly-assignments/:id/task-status", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-// ── ADD TO server/routes.ts before health check ───────────────────────────────
+// ── ADD TO server/routes.ts before health check ──────────────────────────────
 // Task-level status update within a weekly assignment
 
 r.patch("/weekly-assignments/:id/task-status", async (req, res) => {
