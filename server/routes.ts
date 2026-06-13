@@ -1536,6 +1536,158 @@ r.delete("/weekly-assignments/:id/tasks/:taskId", async (req, res) => {
     res.json({ success: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
+
+// ── ADD TO server/routes.ts before health check ───────────────────────────────
+// Performance evaluation based on: attendance + project activity logs + task completion
+
+r.get("/performance/week", async (req, res) => {
+  try {
+    const weekStart = (req.query.weekStart as string) || (() => {
+      const d=new Date(); d.setHours(0,0,0,0);
+      const day=d.getDay();
+      d.setDate(d.getDate()-(day===0?6:day-1));
+      return d.toISOString().split("T")[0];
+    })();
+
+    // Build week date range (Mon–Fri, 5 working days)
+    const weekDates: string[] = [];
+    const wStart = new Date(weekStart);
+    for(let i=0;i<5;i++){
+      const d=new Date(wStart); d.setDate(wStart.getDate()+i);
+      weekDates.push(d.toISOString().split("T")[0]);
+    }
+
+    // Load all data in parallel
+    const [dailyData, projectActivities, waFile, authFile] = await Promise.all([
+      readJsonFile<any>("daily-activities.json"),
+      readJsonFile<{projectActivities:any[]}>( "project-activities.json"),
+      readJsonFile<{assignments:any[]}>( "weekly-assignments.json"),
+      readJsonFile<{engineers:any[]}>( "engineers_auth.json"),
+    ]);
+
+    // Get engineer list
+    const engineers: string[] = (authFile?.engineers ?? [])
+      .filter((e:any) => e.isActive !== false && e.role !== "admin")
+      .map((e:any) => e.name ?? e.username);
+
+    const results = engineers.map(name => {
+      const nameLower = name.toLowerCase();
+
+      // ── 1. Attendance score (from daily report data) ──────────────────────
+      // daily-activities.json structure: { [date]: { [engineerId]: status } }
+      // OR { engineers: [{name, activities: {date: status}}] }
+      let daysPresent = 0;
+      const totalWorkdays = weekDates.length; // 5
+
+      try {
+        if(dailyData?.engineers) {
+          // Format: { engineers: [{name, activities: {date: status}}] }
+          const engEntry = dailyData.engineers.find((e:any) =>
+            (e.name??e.engineerName??"").toLowerCase() === nameLower);
+          if(engEntry?.activities) {
+            daysPresent = weekDates.filter(d =>
+              engEntry.activities[d] && engEntry.activities[d] !== "" && engEntry.activities[d] !== "—"
+            ).length;
+          }
+        } else if(dailyData?.data) {
+          // Format: { data: { [date]: { [engineerName]: status } } }
+          daysPresent = weekDates.filter(d =>
+            dailyData.data[d]?.[name] || dailyData.data[d]?.[nameLower]
+          ).length;
+        }
+      } catch {}
+
+      const attendanceScore = totalWorkdays > 0
+        ? Math.round((daysPresent / totalWorkdays) * 100)
+        : 0;
+
+      // ── 2. Project activity log score (entries tagged with @name this week) ─
+      let logEntries = 0;
+      try {
+        for(const proj of (projectActivities?.projectActivities ?? [])) {
+          for(const [date, activity] of Object.entries(proj.activities ?? {})) {
+            if(!weekDates.includes(date)) continue;
+            const actStr = (activity as string).toLowerCase();
+            // Check if activity mentions this engineer
+            if(actStr.includes("@"+nameLower.replace(/\s+/g,"")) ||
+               actStr.includes(nameLower) ||
+               actStr.includes(name.toLowerCase().split(" ")[0])) {
+              logEntries++;
+            }
+          }
+        }
+      } catch {}
+
+      // Max expected log entries = 2 per day (morning + evening) × 5 days
+      const logScore = Math.min(Math.round((logEntries / 10) * 100), 100);
+
+      // ── 3. Task completion score (from weekly assignments) ─────────────────
+      const myAssignments = (waFile?.assignments ?? []).filter((a:any) => {
+        const aName = (a.engineerName??"").toLowerCase();
+        return aName === nameLower || aName.includes(nameLower.split(" ")[0]);
+      });
+
+      const allTasks = myAssignments.flatMap((a:any) => a.tasks ?? []);
+      const weekTasks = allTasks.filter((t:any) => {
+        // Include tasks for this week
+        const td = t.assignedDate ?? t.targetDate ?? weekStart;
+        return td >= weekStart && td <= weekDates[4];
+      });
+      const completedTasks = (weekTasks.length > 0 ? weekTasks : allTasks)
+        .filter((t:any) => t.status === "completed").length;
+      const totalTasks = weekTasks.length > 0 ? weekTasks.length : allTasks.length;
+      const taskScore = totalTasks > 0
+        ? Math.round((completedTasks / totalTasks) * 100)
+        : 0;
+
+      // ── Overall score (weighted) ───────────────────────────────────────────
+      // Attendance: 40%, Task completion: 40%, Log activity: 20%
+      const overallScore = Math.round(
+        (attendanceScore * 0.40) + (taskScore * 0.40) + (logScore * 0.20)
+      );
+
+      return {
+        name,
+        overallScore,
+        attendanceScore,
+        taskScore,
+        logScore,
+        daysPresent,
+        totalWorkdays,
+        logEntries,
+        tasksCompleted: completedTasks,
+        totalTasks,
+        level: overallScore>=90?"Expert":overallScore>=75?"Proficient":overallScore>=50?"Developing":"Learning",
+      };
+    });
+
+    // Sort by overall score
+    results.sort((a,b) => b.overallScore - a.overallScore);
+
+    // Assign ranks
+    const ranked = results.map((r,i) => ({ ...r, rank: i+1 }));
+
+    // Star performer = top scorer IF score > 60 (meaningful contribution)
+    const starPerformer = ranked[0]?.overallScore > 60 ? ranked[0] : null;
+
+    // Stats
+    const teamEfficiency = ranked.length > 0
+      ? Math.round(ranked.reduce((s,r)=>s+r.overallScore,0) / ranked.length)
+      : 0;
+
+    res.json({
+      weekStart,
+      weekDates,
+      teamEfficiency,
+      starPerformer,
+      topPerformers: ranked.filter(r=>r.overallScore>=75).length,
+      needsSupport:  ranked.filter(r=>r.overallScore<50).length,
+      engineers: ranked,
+    });
+  } catch(e:any) {
+    res.status(500).json({ error: e.message });
+  }
+});
  
 // ── Health check ─────────────────────────────────────────────────────────────
   r.get("/health", async (_q, res) => {
