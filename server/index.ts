@@ -2,19 +2,21 @@ import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import MemoryStore from "memorystore";
 import { registerRoutes } from "./routes";
-
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import path from "path";
 import { fileURLToPath } from "url";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// ── Serve service worker with correct MIME type ───────────────────────────────
-// Must be registered BEFORE the SPA wildcard so Express doesn't return index.html
-app.get("/sw.js", (req, res) => {
+const app = express();
+const httpServer = createServer(app);
+
+// ── Serve service worker BEFORE SPA wildcard ──────────────────────────────────
+app.get("/sw.js", (_req, res) => {
   res.setHeader("Content-Type", "application/javascript; charset=utf-8");
   res.setHeader("Service-Worker-Allowed", "/");
-  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   res.send(`
 self.addEventListener('push', (event) => {
   if (!event.data) return;
@@ -45,9 +47,6 @@ self.addEventListener('activate', (e) => e.waitUntil(clients.claim()));
   `.trim());
 });
 
-const app = express();
-const httpServer = createServer(app);
-
 const MemoryStoreSession = MemoryStore(session);
 
 declare module "http" {
@@ -56,7 +55,6 @@ declare module "http" {
   }
 }
 
-// Required for Render — trust the reverse proxy so secure cookies work
 app.set("trust proxy", 1);
 
 app.use(
@@ -68,20 +66,19 @@ app.use(
 );
 app.use(express.urlencoded({ extended: false }));
 
-// Session middleware — must be before routes
 app.use(
   session({
     secret: process.env.SESSION_SECRET || "drbtechverse-secret-2024",
     resave: false,
     saveUninitialized: false,
     store: new MemoryStoreSession({
-      checkPeriod: 86400000, // prune expired entries every 24h
+      checkPeriod: 86400000,
     }),
     cookie: {
       secure: process.env.NODE_ENV === "production",
       httpOnly: true,
       sameSite: "lax",
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      maxAge: 24 * 60 * 60 * 1000,
     },
   })
 );
@@ -131,16 +128,12 @@ app.use((req, res, next) => {
     app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
       const status = err.status || err.statusCode || 500;
       const message = err.message || "Internal Server Error";
-      // Log the error but DO NOT re-throw — re-throwing from an Express error
-      // handler becomes an uncaught exception that crashes the whole process,
-      // which on Render triggers a restart (and an empty in-memory cache).
       console.error("[express error handler]", status, message, err?.stack || "");
       if (!res.headersSent) {
         res.status(status).json({ message });
       }
     });
 
-    // Last-resort guards: a single unhandled error must never kill the server.
     process.on("unhandledRejection", (reason) => {
       console.error("[unhandledRejection]", reason);
     });
@@ -157,14 +150,8 @@ app.use((req, res, next) => {
 
     const port = parseInt(process.env.PORT || "5000", 10);
     httpServer.listen(
-      {
-        port,
-        host: "0.0.0.0",
-        reusePort: true,
-      },
-      () => {
-        log(`serving on port ${port}`);
-      },
+      { port, host: "0.0.0.0", reusePort: true },
+      () => { log(`serving on port ${port}`); },
     );
   } catch (err) {
     console.error("=== FATAL STARTUP ERROR ===");
