@@ -588,8 +588,21 @@ app.get("/api/knowledge/isa-101/readers", async (_req, res) => {
       f.assignments.push(a); f.lastUpdated = new Date().toISOString();
       await writeJsonFile("weekly-assignments.json", f, `Add assignment: ${engineerName} – ${projectName}`);
       // Auto-sync to daily activities (non-blocking)
-      syncToDailyActivities(a).catch(err => console.error("syncToDailyActivities:", err));
-      res.json(a);
+      // Auto-sync to daily activities (non-blocking)
+    syncToDailyActivities(a).catch(err => console.error("syncToDailyActivities:", err));
+
+    // Send push notification to each assigned engineer
+    const assignedEngineers = engineerName.split(",").map((n: string) => n.trim()).filter(Boolean);
+    for (const eng of assignedEngineers) {
+      sendPushToEngineer(eng, {
+        title: "New task assigned",
+        body: `You have been assigned to: ${projectName}`,
+        url: "/",
+        tag: "task-assigned",
+      }).catch(() => {});
+    }
+
+    res.json(a);
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
@@ -907,6 +920,15 @@ r.post("/notifications", async (req, res) => {
     f.notifications.push(n);
     f.lastUpdated = new Date().toISOString();
     await writeJsonFile("notifications.json", f, `New notification: ${n.title}`);
+
+    // Broadcast push to all subscribed engineers
+    broadcastPush({
+      title: n.title,
+      body:  n.message,
+      url:   "/notifications",
+      tag:   "notification",
+    }).catch(() => {});
+
     res.status(201).json(n);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
