@@ -1753,7 +1753,165 @@ r.get("/performance/week", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+// ADD TO server/routes.ts — paste before the health check route
+// Requires: npm install web-push
+// ─────────────────────────────────────────────────────────────────────────────
  
+import webpush from 'web-push';
+ 
+// Configure VAPID — reads from Render environment variables
+webpush.setVapidDetails(
+  process.env.VAPID_EMAIL     || 'mailto:admin@drbtechverse.in',
+  process.env.VAPID_PUBLIC_KEY  || '',
+  process.env.VAPID_PRIVATE_KEY || ''
+);
+ 
+// ── Types ─────────────────────────────────────────────────────────────────────
+interface PushSub {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+  engineerName: string;
+  subscribedAt: string;
+}
+interface PushFile { subscriptions: Record<string, PushSub> } // key = engineerName.toLowerCase()
+ 
+function pushKey(name: string) { return name.trim().toLowerCase(); }
+ 
+// ── Serve VAPID public key to frontend ──────────────────────────────────────
+r.get('/push/vapid-public-key', (_req, res) => {
+  res.json({ publicKey: process.env.VAPID_PUBLIC_KEY || '' });
+});
+ 
+// ── Subscribe: engineer registers their device ────────────────────────────────
+r.post('/push/subscribe', async (req, res) => {
+  try {
+    const { subscription, engineerName } = req.body;
+    if (!subscription?.endpoint || !engineerName)
+      return res.status(400).json({ error: 'subscription and engineerName required' });
+ 
+    const f = (await readJsonFile<PushFile>('push-subscriptions.json'))
+      ?? { subscriptions: {} };
+ 
+    const key = pushKey(engineerName);
+    f.subscriptions[key] = {
+      endpoint:     subscription.endpoint,
+      keys:         subscription.keys,
+      engineerName: engineerName.trim(),
+      subscribedAt: new Date().toISOString(),
+    };
+ 
+    await writeJsonFile('push-subscriptions.json', f, `Push subscribe: ${engineerName}`);
+    res.json({ success: true, message: `${engineerName} subscribed to push notifications` });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+ 
+// ── Unsubscribe ───────────────────────────────────────────────────────────────
+r.delete('/push/unsubscribe/:engineer', async (req, res) => {
+  try {
+    const f = await readJsonFile<PushFile>('push-subscriptions.json');
+    if (f?.subscriptions) {
+      delete f.subscriptions[pushKey(req.params.engineer)];
+      await writeJsonFile('push-subscriptions.json', f, `Push unsubscribe: ${req.params.engineer}`);
+    }
+    res.json({ success: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+ 
+// ── Helper: send push to a specific engineer ──────────────────────────────────
+async function sendPushToEngineer(
+  engineerName: string,
+  payload: { title: string; body: string; url?: string; tag?: string }
+): Promise<boolean> {
+  try {
+    const f = await readJsonFile<PushFile>('push-subscriptions.json');
+    const sub = f?.subscriptions?.[pushKey(engineerName)];
+    if (!sub) return false; // engineer not subscribed
+ 
+    await webpush.sendNotification(
+      { endpoint: sub.endpoint, keys: sub.keys },
+      JSON.stringify({ ...payload, icon: '/favicon.ico' })
+    );
+    return true;
+  } catch (e: any) {
+    // If subscription expired/invalid — remove it
+    if (e.statusCode === 410) {
+      const f = await readJsonFile<PushFile>('push-subscriptions.json');
+      if (f?.subscriptions?.[pushKey(engineerName)]) {
+        delete f.subscriptions[pushKey(engineerName)];
+        await writeJsonFile('push-subscriptions.json', f, `Remove stale sub: ${engineerName}`);
+      }
+    }
+    return false;
+  }
+}
+ 
+// ── Helper: broadcast to ALL subscribed engineers ────────────────────────────
+async function broadcastPush(
+  payload: { title: string; body: string; url?: string; tag?: string }
+): Promise<void> {
+  try {
+    const f = await readJsonFile<PushFile>('push-subscriptions.json');
+    if (!f?.subscriptions) return;
+    const sends = Object.values(f.subscriptions).map(sub =>
+      webpush.sendNotification(
+        { endpoint: sub.endpoint, keys: sub.keys },
+        JSON.stringify({ ...payload, icon: '/favicon.ico' })
+      ).catch(() => null) // ignore individual failures
+    );
+    await Promise.allSettled(sends);
+  } catch {}
+}
+ 
+// ── Manual send (admin only) ──────────────────────────────────────────────────
+r.post('/push/send', async (req, res) => {
+  try {
+    const { engineerName, title, body, url } = req.body;
+    if (!title || !body) return res.status(400).json({ error: 'title and body required' });
+ 
+    if (engineerName) {
+      const sent = await sendPushToEngineer(engineerName, { title, body, url: url || '/' });
+      res.json({ success: sent, message: sent ? 'Sent' : 'Engineer not subscribed' });
+    } else {
+      await broadcastPush({ title, body, url: url || '/', tag: 'broadcast' });
+      res.json({ success: true, message: 'Broadcast sent' });
+    }
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+ 
+// ── Check subscription status for an engineer ─────────────────────────────────
+r.get('/push/status/:engineer', async (req, res) => {
+  try {
+    const f = await readJsonFile<PushFile>('push-subscriptions.json');
+    const subscribed = !!f?.subscriptions?.[pushKey(req.params.engineer)];
+    const total = Object.keys(f?.subscriptions ?? {}).length;
+    res.json({ subscribed, total });
+  } catch { res.json({ subscribed: false, total: 0 }); }
+});
+ 
+// ── Export helpers for use in other routes ────────────────────────────────────
+// Call these from your assignment and notification creation routes:
+//
+//  After creating a weekly assignment:
+//    await sendPushToEngineer(engineerName, {
+//      title: 'New task assigned',
+//      body: `${taskName} — ${projectName}`,
+//      url: '/',
+//      tag: 'task-assigned'
+//    });
+//
+//  After creating a notification:
+//    await broadcastPush({
+//      title: notification.title,
+//      body: notification.message,
+//      url: '/notifications',
+//      tag: 'notification'
+//    });
+//
+// Make sendPushToEngineer and broadcastPush available to other route handlers
+// by declaring them before the blog/notification routes in routes.ts
+(global as any)._sendPushToEngineer = sendPushToEngineer;
+(global as any)._broadcastPush      = broadcastPush;
 // ── Health check ─────────────────────────────────────────────────────────────
   r.get("/health", async (_q, res) => {
     
