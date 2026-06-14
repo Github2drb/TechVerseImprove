@@ -2,8 +2,48 @@ import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import MemoryStore from "memorystore";
 import { registerRoutes } from "./routes";
+
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import path from "path";
+import { fileURLToPath } from "url";
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// ── Serve service worker with correct MIME type ───────────────────────────────
+// Must be registered BEFORE the SPA wildcard so Express doesn't return index.html
+app.get("/sw.js", (req, res) => {
+  res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+  res.setHeader("Service-Worker-Allowed", "/");
+  res.setHeader("Cache-Control", "no-cache");
+  res.send(`
+self.addEventListener('push', (event) => {
+  if (!event.data) return;
+  let data = {};
+  try { data = event.data.json(); } catch { data = { title: 'DRB TechVerse', body: event.data.text() }; }
+  event.waitUntil(self.registration.showNotification(data.title || 'DRB TechVerse', {
+    body: data.body || 'You have a new update',
+    icon: data.icon || '/favicon.ico',
+    badge: '/favicon.ico',
+    tag: data.tag || 'drb-notification',
+    data: { url: data.url || '/' },
+  }));
+});
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = event.notification.data?.url || '/';
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      for (const client of list) {
+        if (client.url.includes(self.location.origin) && 'focus' in client) return client.focus();
+      }
+      if (clients.openWindow) return clients.openWindow(url);
+    })
+  );
+});
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (e) => e.waitUntil(clients.claim()));
+  `.trim());
+});
 
 const app = express();
 const httpServer = createServer(app);
