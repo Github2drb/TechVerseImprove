@@ -11,7 +11,16 @@ import {
   validateEngineerName, validateProjectNumber, extractProjectNumber,
   readJsonFile, writeJsonFile,
 } from "./github";
+import webpush from 'web-push'; 
 
+// Configure VAPID at module level (not inside any function)
+if (process.env.VAPID_PUBLIC_KEY) {
+  webpush.setVapidDetails(
+    process.env.VAPID_EMAIL      || 'mailto:admin@drbtechverse.in',
+    process.env.VAPID_PUBLIC_KEY || '',
+    process.env.VAPID_PRIVATE_KEY || ''
+  );
+}
 // ─── Shared types ─────────────────────────────────────────────────────────────
 
 interface EngineerCredential {
@@ -1783,11 +1792,7 @@ r.get("/performance/week", async (req, res) => {
 import webpush from 'web-push';
  
 // Configure VAPID — reads from Render environment variables
-webpush.setVapidDetails(
-  process.env.VAPID_EMAIL     || 'mailto:admin@drbtechverse.in',
-  process.env.VAPID_PUBLIC_KEY  || '',
-  process.env.VAPID_PRIVATE_KEY || ''
-);
+
  
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface PushSub {
