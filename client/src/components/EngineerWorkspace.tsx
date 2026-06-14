@@ -2,7 +2,7 @@
 // Replaces WeeklyScheduleOverview + WeeklyAssignmentsTable in dashboard.tsx
 
 import { useState, useEffect, useMemo, useRef } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/components/auth-provider";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import {
   CheckCircle2, AlertTriangle, Circle, Clock, Calendar,
   Send, Trash2, ChevronDown, ChevronUp, BookOpen, Zap,
-  LayoutDashboard, Loader2, X, Edit2, Plus, Link2,
+  LayoutDashboard, Loader2, X, Edit2, Plus,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -212,19 +212,23 @@ function TaskItem({task, projectName, assignmentId, onUpdate, onDelete, isUpdati
   const isPending=pendingStatus!==undefined && pendingStatus!==task.status;
 
   return (
-    <div className={`flex items-start gap-3 px-3 py-2.5 rounded-xl border transition-all
-      ${effectiveStatus==="completed"?"border-green-500/20 bg-green-500/5 opacity-70":"border-border bg-card hover:bg-muted/30"}
-      ${isPending?"ring-2 ring-primary/40":""}
-      ${isOverdue?"border-red-500/30 bg-red-500/5":""}`}>
+    <div className={[
+      "flex items-start gap-3 px-3 py-2.5 rounded-xl border transition-all",
+      effectiveStatus==="completed" ? "border-green-500/20 bg-green-500/5 opacity-70" : "border-border bg-card hover:bg-muted/30",
+      isPending ? "ring-2 ring-primary/40" : "",
+      isOverdue ? "border-red-500/30 bg-red-500/5" : "",
+    ].filter(Boolean).join(" ")}>
 
       {/* Status icon */}
       <button onClick={()=>!isUpdating&&setPickerOpen(o=>!o)}
         className={`mt-0.5 flex-shrink-0 ${isUpdating?"opacity-50":"cursor-pointer hover:opacity-80"}`}
         title="Click to update status">
-        <span className={`flex items-center justify-center w-5 h-5 rounded-full border-2 transition-all
-          ${effectiveStatus==="completed"?"border-green-500 text-green-500":""}
-          ${effectiveStatus==="in_progress"?"border-blue-500 text-blue-500":""}
-          ${effectiveStatus==="not_started"?"border-muted-foreground/30 text-muted-foreground/30":""}`}>
+        <span className={[
+          "flex items-center justify-center w-5 h-5 rounded-full border-2 transition-all",
+          effectiveStatus==="completed" ? "border-green-500 text-green-500" : "",
+          effectiveStatus==="in_progress" ? "border-blue-500 text-blue-500" : "",
+          effectiveStatus==="not_started" ? "border-muted-foreground/30 text-muted-foreground/30" : "",
+        ].filter(Boolean).join(" ")}>
           {effectiveStatus==="completed"
             ? <CheckCircle2 className="h-4 w-4 text-green-500 fill-green-500/20"/>
             : effectiveStatus==="in_progress"
@@ -253,7 +257,7 @@ function TaskItem({task, projectName, assignmentId, onUpdate, onDelete, isUpdati
 
       {/* Quick actions */}
       {effectiveStatus!=="completed" && (
-        <div className="flex items-center gap-1 flex-shrink-0 relative" style={{overflow:"visible"}}>
+        <div className="flex items-center gap-1 flex-shrink-0 relative overflow-visible">
           {confirmDone ? (
             /* Confirmation inline */
             <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-amber-400/50 bg-amber-500/10">
