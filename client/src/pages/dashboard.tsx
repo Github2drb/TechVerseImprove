@@ -15,6 +15,7 @@ import { ManagerOverview } from "@/components/manager-overview";
 import { NoticeBoardWidget } from "@/components/NoticeBoardWidget";
 import { useAuth } from "@/components/auth-provider";
 import { Ticker } from "@/components/Ticker";
+import { PushNotificationButton } from "@/components/PushNotificationButton";
 import type { DashboardStats, NavigationCard, TeamMember, Project } from "@shared/schema";
 
 const navigationCards: NavigationCard[] = [
@@ -167,7 +168,7 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-background" data-testid="page-dashboard">
       <Header searchQuery={searchQuery} onSearchChange={setSearchQuery} />
-      
+      <PushNotificationButton />
       <HeroSection />
       <Ticker />
       <main className="mx-auto max-w-7xl space-y-12 px-4 py-8 md:px-6 md:py-12">
