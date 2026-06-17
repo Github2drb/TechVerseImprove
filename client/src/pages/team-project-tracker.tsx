@@ -129,6 +129,119 @@ function InfoRow({icon,label,value,accent}:{icon:React.ReactNode;label:string;va
   );
 }
 
+// ── Status select items — TOP LEVEL component ─────────────────────────────────
+// IMPORTANT: this must live outside the main component. If defined inside,
+// React sees a brand-new function reference on every keystroke/re-render,
+// treats it as a different component type, and remounts the whole subtree —
+// which is what causes inputs to lose focus after a single character.
+function StatusSelectItems(){
+  return(
+    <>{STATUS_GROUPS.map(g=>(
+      <div key={g.label}>
+        <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/50">{g.label}</div>
+        {g.items.map(i=><SelectItem key={i.value} value={i.value}>{i.label}</SelectItem>)}
+      </div>
+    ))}</>
+  );
+}
+
+// ── Engineer picker — TOP LEVEL component (same reason as above) ──────────────
+interface EngineerPickerProps {
+  pickerOpen: boolean;
+  setPickerOpen: (v: boolean | ((o:boolean)=>boolean)) => void;
+  engSearch: string;
+  setEngSearch: (v: string) => void;
+  pickerRef: React.RefObject<HTMLDivElement>;
+  selectedEngNames: string[];
+  toggleEng: (name: string) => void;
+  filteredEngineers: Array<{id:string;name:string;initials:string}>;
+}
+function EngineerPicker({
+  pickerOpen, setPickerOpen, engSearch, setEngSearch,
+  pickerRef, selectedEngNames, toggleEng, filteredEngineers,
+}: EngineerPickerProps){
+  return(
+    <div className="relative" ref={pickerRef}>
+      <button type="button" onClick={()=>{setPickerOpen(o=>!o);setEngSearch("");}}
+        className="w-full flex items-center justify-between border rounded-md px-3 py-2 text-sm bg-background hover:bg-muted">
+        <span className="truncate text-left">{selectedEngNames.length===0?"Select engineers...":selectedEngNames.join(", ")}</span>
+        <ChevronDown className="h-4 w-4 ml-2 text-muted-foreground shrink-0"/>
+      </button>
+      {selectedEngNames.length>0&&(
+        <div className="flex flex-wrap gap-1 mt-1">
+          {selectedEngNames.map(n=>(
+            <span key={n} className="inline-flex items-center gap-1 bg-primary/10 text-primary text-xs px-2 py-0.5 rounded-full">
+              {n}<button type="button" onClick={()=>toggleEng(n)}><X className="h-3 w-3"/></button>
+            </span>
+          ))}
+        </div>
+      )}
+      {pickerOpen&&(
+        <div className="absolute z-50 mt-1 w-full bg-popover border rounded-md shadow-lg max-h-56 flex flex-col">
+          <div className="p-2 border-b">
+            <Input placeholder="Search engineers..." value={engSearch} onChange={e=>setEngSearch(e.target.value)} className="h-7 text-xs" autoFocus/>
+          </div>
+          <div className="overflow-y-auto flex-1">
+            {filteredEngineers.map(e=>{
+              const checked=selectedEngNames.includes(e.name);
+              return(
+                <div key={e.id} onClick={()=>toggleEng(e.name)}
+                  className={`flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-muted text-sm ${checked?"bg-primary/5":""}`}>
+                  <div className={`h-4 w-4 rounded border flex items-center justify-center shrink-0 ${checked?"bg-primary border-primary":"border-input"}`}>
+                    {checked&&<span className="text-primary-foreground text-[10px] font-bold">✓</span>}
+                  </div>
+                  <span className="flex-1">{e.name}</span>
+                  <span className="text-xs text-muted-foreground">{e.initials}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Form fields — TOP LEVEL component (same reason as above) ──────────────────
+interface FormFieldsProps {
+  formData: {
+    engineerName:string; projectName:string;
+    resourceLockedFrom:string; resourceLockedTill:string;
+    internalTarget:string; customerTarget:string;
+    currentStatus:string; constraint:string;
+  };
+  setFormData: React.Dispatch<React.SetStateAction<FormFieldsProps["formData"]>>;
+  projectNames: string[];
+  engineerPickerProps: EngineerPickerProps;
+}
+function FormFields({ formData, setFormData, projectNames, engineerPickerProps }: FormFieldsProps){
+  return(
+    <div className="grid gap-4 py-4">
+      <div className="grid gap-2">
+        <Label>Project Name</Label>
+        <Input list="proj-list" value={formData.projectName} onChange={e=>setFormData(p=>({...p,projectName:e.target.value}))} placeholder="Type or select project"/>
+        <datalist id="proj-list">{projectNames.map(n=><option key={n} value={n}/>)}</datalist>
+      </div>
+      <div className="grid gap-2"><Label>Engineer(s)</Label><EngineerPicker {...engineerPickerProps}/></div>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="grid gap-2"><Label>Resource Locked From</Label><Input type="date" value={formData.resourceLockedFrom} onChange={e=>setFormData(p=>({...p,resourceLockedFrom:e.target.value}))}/></div>
+        <div className="grid gap-2"><Label>Resource Locked Till</Label><Input type="date" value={formData.resourceLockedTill} onChange={e=>setFormData(p=>({...p,resourceLockedTill:e.target.value}))}/></div>
+        <div className="grid gap-2"><Label>Internal Target</Label><Input type="date" value={formData.internalTarget} onChange={e=>setFormData(p=>({...p,internalTarget:e.target.value}))}/></div>
+        <div className="grid gap-2"><Label>Customer Target</Label><Input type="date" value={formData.customerTarget} onChange={e=>setFormData(p=>({...p,customerTarget:e.target.value}))}/></div>
+      </div>
+      <div className="grid gap-2">
+        <Label>Current Status</Label>
+        <Select value={formData.currentStatus} onValueChange={v=>setFormData(p=>({...p,currentStatus:v}))}>
+          <SelectTrigger><SelectValue/></SelectTrigger>
+          <SelectContent className="max-h-80 overflow-y-auto"><StatusSelectItems/></SelectContent>
+        </Select>
+      </div>
+      <div className="grid gap-2"><Label>Constraints</Label>
+        <Textarea value={formData.constraint} onChange={e=>setFormData(p=>({...p,constraint:e.target.value}))} placeholder="Any constraints or notes..."/></div>
+    </div>
+  );
+}
+
 export default function TeamProjectTracker() {
   const {toast}   = useToast();
   const {isAdmin} = useAuth();
@@ -239,81 +352,10 @@ export default function TeamProjectTracker() {
     addMutation.mutate({engineerName:formData.engineerName,projectName:formData.projectName,weekStart:format(startOfWeek(new Date(),{weekStartsOn:1}),"yyyy-MM-dd"),resourceLockedFrom:formData.resourceLockedFrom||undefined,resourceLockedTill:formData.resourceLockedTill||undefined,internalTarget:formData.internalTarget||undefined,customerTarget:formData.customerTarget||undefined,currentStatus:formData.currentStatus as any,constraint:formData.constraint||undefined,tasks:[]});
   };
 
-  const StatusSelectItems=()=>(
-    <>{STATUS_GROUPS.map(g=>(
-      <div key={g.label}>
-        <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/50">{g.label}</div>
-        {g.items.map(i=><SelectItem key={i.value} value={i.value}>{i.label}</SelectItem>)}
-      </div>
-    ))}</>
-  );
-
-  const EngineerPicker=()=>(
-    <div className="relative" ref={pickerRef}>
-      <button type="button" onClick={()=>{setPickerOpen(o=>!o);setEngSearch("");}}
-        className="w-full flex items-center justify-between border rounded-md px-3 py-2 text-sm bg-background hover:bg-muted">
-        <span className="truncate text-left">{selectedEngNames.length===0?"Select engineers...":selectedEngNames.join(", ")}</span>
-        <ChevronDown className="h-4 w-4 ml-2 text-muted-foreground shrink-0"/>
-      </button>
-      {selectedEngNames.length>0&&(
-        <div className="flex flex-wrap gap-1 mt-1">
-          {selectedEngNames.map(n=>(
-            <span key={n} className="inline-flex items-center gap-1 bg-primary/10 text-primary text-xs px-2 py-0.5 rounded-full">
-              {n}<button type="button" onClick={()=>toggleEng(n)}><X className="h-3 w-3"/></button>
-            </span>
-          ))}
-        </div>
-      )}
-      {pickerOpen&&(
-        <div className="absolute z-50 mt-1 w-full bg-popover border rounded-md shadow-lg max-h-56 flex flex-col">
-          <div className="p-2 border-b">
-            <Input placeholder="Search engineers..." value={engSearch} onChange={e=>setEngSearch(e.target.value)} className="h-7 text-xs" autoFocus/>
-          </div>
-          <div className="overflow-y-auto flex-1">
-            {filteredEngineers.map(e=>{
-              const checked=selectedEngNames.includes(e.name);
-              return(
-                <div key={e.id} onClick={()=>toggleEng(e.name)}
-                  className={`flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-muted text-sm ${checked?"bg-primary/5":""}`}>
-                  <div className={`h-4 w-4 rounded border flex items-center justify-center shrink-0 ${checked?"bg-primary border-primary":"border-input"}`}>
-                    {checked&&<span className="text-primary-foreground text-[10px] font-bold">✓</span>}
-                  </div>
-                  <span className="flex-1">{e.name}</span>
-                  <span className="text-xs text-muted-foreground">{e.initials}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-
-  const FormFields=()=>(
-    <div className="grid gap-4 py-4">
-      <div className="grid gap-2">
-        <Label>Project Name</Label>
-        <Input list="proj-list" value={formData.projectName} onChange={e=>setFormData(p=>({...p,projectName:e.target.value}))} placeholder="Type or select project"/>
-        <datalist id="proj-list">{projectNames.map(n=><option key={n} value={n}/>)}</datalist>
-      </div>
-      <div className="grid gap-2"><Label>Engineer(s)</Label><EngineerPicker/></div>
-      <div className="grid grid-cols-2 gap-4">
-        <div className="grid gap-2"><Label>Resource Locked From</Label><Input type="date" value={formData.resourceLockedFrom} onChange={e=>setFormData(p=>({...p,resourceLockedFrom:e.target.value}))}/></div>
-        <div className="grid gap-2"><Label>Resource Locked Till</Label><Input type="date" value={formData.resourceLockedTill} onChange={e=>setFormData(p=>({...p,resourceLockedTill:e.target.value}))}/></div>
-        <div className="grid gap-2"><Label>Internal Target</Label><Input type="date" value={formData.internalTarget} onChange={e=>setFormData(p=>({...p,internalTarget:e.target.value}))}/></div>
-        <div className="grid gap-2"><Label>Customer Target</Label><Input type="date" value={formData.customerTarget} onChange={e=>setFormData(p=>({...p,customerTarget:e.target.value}))}/></div>
-      </div>
-      <div className="grid gap-2">
-        <Label>Current Status</Label>
-        <Select value={formData.currentStatus} onValueChange={v=>setFormData(p=>({...p,currentStatus:v}))}>
-          <SelectTrigger><SelectValue/></SelectTrigger>
-          <SelectContent className="max-h-80 overflow-y-auto"><StatusSelectItems/></SelectContent>
-        </Select>
-      </div>
-      <div className="grid gap-2"><Label>Constraints</Label>
-        <Textarea value={formData.constraint} onChange={e=>setFormData(p=>({...p,constraint:e.target.value}))} placeholder="Any constraints or notes..."/></div>
-    </div>
-  );
+  const engineerPickerProps: EngineerPickerProps = {
+    pickerOpen, setPickerOpen, engSearch, setEngSearch,
+    pickerRef, selectedEngNames, toggleEng, filteredEngineers,
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -599,7 +641,7 @@ export default function TeamProjectTracker() {
       {/* Edit Dialog */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="max-w-lg"><DialogHeader><DialogTitle>Edit Assignment</DialogTitle></DialogHeader>
-          <FormFields/>
+          <FormFields formData={formData} setFormData={setFormData} projectNames={projectNames} engineerPickerProps={engineerPickerProps}/>
           <DialogFooter>
             <Button variant="outline" onClick={()=>setEditOpen(false)}>Cancel</Button>
             <Button onClick={handleSaveEdit} disabled={updateMutation.isPending}>{updateMutation.isPending?"Saving…":"Save Changes"}</Button>
@@ -610,7 +652,7 @@ export default function TeamProjectTracker() {
       {/* Add Dialog */}
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="max-w-lg"><DialogHeader><DialogTitle>Add New Assignment</DialogTitle></DialogHeader>
-          <FormFields/>
+          <FormFields formData={formData} setFormData={setFormData} projectNames={projectNames} engineerPickerProps={engineerPickerProps}/>
           <DialogFooter>
             <Button variant="outline" onClick={()=>setAddOpen(false)}>Cancel</Button>
             <Button onClick={handleAdd} disabled={addMutation.isPending}>{addMutation.isPending?"Adding…":"Add Assignment"}</Button>
