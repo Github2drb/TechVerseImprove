@@ -22,6 +22,9 @@ import ISA101Page from "@/pages/ISA101Page";
 import BlogPage          from "@/pages/blog";
 import ProjectRoadmap from "@/pages/project-roadmap";
 import NotificationsPage from "@/pages/notifications";
+import MaterialProcurementTracker from "@/pages/material-procurement-tracker";
+// ...
+<Route path="/material-tracker" component={MaterialProcurementTracker} />
 
 function AppRoutes() {
   const { isAuthenticated, isLoading } = useAuth();
