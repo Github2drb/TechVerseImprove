@@ -74,7 +74,7 @@ const navigationCards: NavigationCard[] = [
     gradient: "bg-gradient-to-br from-emerald-500 to-emerald-600",
   },
 ];
-
+<Link href="/material-tracker">Material Procurement Tracker</Link>
 const adminNavigationCard: NavigationCard = {
   id: "engineer-management",
   title: "Engineer Management",
