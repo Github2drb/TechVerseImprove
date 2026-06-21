@@ -86,21 +86,31 @@ function calcDaysExceeded(till?:string):number {
   const t=new Date(till); t.setHours(0,0,0,0);
   return Math.max(0,Math.ceil((today.getTime()-t.getTime())/864e5));
 }
+function normName(s:string):string{
+  return s.trim().replace(/\s*\([^)]*\)\s*/g,"").trim().toLowerCase();
+}
 function groupByProject(assignments:WeeklyAssignment[]):ProjectRow[] {
   const map:Record<string,ProjectRow>={};
+  const seenNames:Record<string,Set<string>>={}; // projectKey -> set of normalized individual engineer names already shown
+
   assignments.forEach(a=>{
     const k=a.projectName.toLowerCase().trim();
-    if(!map[k])map[k]={projectName:a.projectName,engineers:[]};
-    if(!map[k].engineers.find(e=>e.assignmentId===a.id)){
-      map[k].engineers.push({
-        assignmentId:a.id, name:a.engineerName,
-        resourceLockedFrom:a.resourceLockedFrom, resourceLockedTill:a.resourceLockedTill,
-        resourceLockDays:calcLockDays(a.resourceLockedFrom,a.resourceLockedTill),
-        daysExceeded:calcDaysExceeded(a.resourceLockedTill),
-        internalTarget:a.internalTarget, customerTarget:a.customerTarget,
-        currentStatus:a.currentStatus, constraint:a.constraint,
-      });
-    }
+    if(!map[k]){map[k]={projectName:a.projectName,engineers:[]};seenNames[k]=new Set();}
+    if(map[k].engineers.find(e=>e.assignmentId===a.id)) return; // already added this exact record
+
+    const individualNames=a.engineerName.split(",").map(n=>normName(n)).filter(Boolean);
+    const allAlreadySeen=individualNames.length>0 && individualNames.every(n=>seenNames[k].has(n));
+    if(allAlreadySeen) return; // every person in this record is already represented — skip the duplicate row
+
+    individualNames.forEach(n=>seenNames[k].add(n));
+    map[k].engineers.push({
+      assignmentId:a.id, name:a.engineerName,
+      resourceLockedFrom:a.resourceLockedFrom, resourceLockedTill:a.resourceLockedTill,
+      resourceLockDays:calcLockDays(a.resourceLockedFrom,a.resourceLockedTill),
+      daysExceeded:calcDaysExceeded(a.resourceLockedTill),
+      internalTarget:a.internalTarget, customerTarget:a.customerTarget,
+      currentStatus:a.currentStatus, constraint:a.constraint,
+    });
   });
   return Object.values(map).sort((a,b)=>a.projectName.localeCompare(b.projectName));
 }
