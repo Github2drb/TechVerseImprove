@@ -7,6 +7,8 @@ import { ThemeProvider } from "@/components/theme-provider";
 import Login from "@/pages/login";
 import Dashboard from "@/pages/dashboard";
 import TeamProjectTracker from "@/pages/team-project-tracker";
+import ProjectTracker from "@/pages/team-project-tracker";
+
 import ProjectStatus from "@/pages/project-status";
 import SkillMatrix from "@/pages/skill-matrix";
 import Analytics from "@/pages/analytics";
@@ -22,9 +24,10 @@ import ISA101Page from "@/pages/ISA101Page";
 import BlogPage          from "@/pages/blog";
 import ProjectRoadmap from "@/pages/project-roadmap";
 import NotificationsPage from "@/pages/notifications";
+
 import MaterialProcurementTracker from "@/pages/material-procurement-tracker";
-// ...
 <Route path="/material-tracker" component={MaterialProcurementTracker} />
+<Route path="/project-tracker" component={ProjectTracker} />
 
 function AppRoutes() {
   const { isAuthenticated, isLoading } = useAuth();
