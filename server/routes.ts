@@ -1003,6 +1003,72 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
     try{const f=await readJsonFile<CredFile>("engineers_auth.json");res.json({count:f?.engineers?.length??0,usernames:(f?.engineers??[]).map(e=>e.username)});}catch(e:any){res.status(500).json({error:e.message});}
   });
 
+  // ── ADD TO server/routes.ts — paste before the HEALTH section ────────────────
+// Material Procurement Tracker — BOM/PR/PO/Receipt tracking per project
+
+interface MaterialRow {
+  id: string; name: string; qty: string; unit: string;
+  bomDate?: string; prCreated?: string; prApproved?: string;
+  poCreated?: string; poApproved?: string;
+  targetReceipt?: string; actualReceipt?: string; notes?: string;
+}
+interface ProjectMaterialData {
+  projectName: string; bomPath: string; materials: MaterialRow[];
+}
+interface MaterialTrackerFile {
+  projects: Record<string, ProjectMaterialData>; // key = projectName.toLowerCase().trim()
+  lastUpdated: string;
+}
+function matKey(name: string) { return name.trim().toLowerCase(); }
+
+// List all tracked project names
+r.get("/material-tracker", async (_q, res) => {
+  try {
+    const f = await readJsonFile<MaterialTrackerFile>("material-tracker.json");
+    res.json(Object.values(f?.projects ?? {}).map(p => p.projectName));
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// Get data for one project
+r.get("/material-tracker/:project", async (req, res) => {
+  try {
+    const f = await readJsonFile<MaterialTrackerFile>("material-tracker.json");
+    const data = f?.projects?.[matKey(req.params.project)];
+    if (!data) return res.json({ projectName: req.params.project, bomPath: "", materials: [] });
+    res.json(data);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// Save data for one project
+r.post("/material-tracker/:project", async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+    const f = (await readJsonFile<MaterialTrackerFile>("material-tracker.json")) ?? { projects: {}, lastUpdated: "" };
+    const key = matKey(req.params.project);
+    f.projects[key] = {
+      projectName: req.body.projectName || req.params.project,
+      bomPath: req.body.bomPath || "",
+      materials: Array.isArray(req.body.materials) ? req.body.materials : [],
+    };
+    f.lastUpdated = new Date().toISOString();
+    await writeJsonFile("material-tracker.json", f, `Material tracker update: ${req.params.project}`);
+    res.json({ success: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete a project's material tracking
+r.delete("/material-tracker/:project", async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+    const f = await readJsonFile<MaterialTrackerFile>("material-tracker.json");
+    if (!f) return res.json({ success: true });
+    delete f.projects[matKey(req.params.project)];
+    f.lastUpdated = new Date().toISOString();
+    await writeJsonFile("material-tracker.json", f, `Material tracker delete: ${req.params.project}`);
+    res.json({ success: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
   // ── HEALTH ────────────────────────────────────────────────────────────────
   r.get("/health", async (_q, res) => {
     const token=!!process.env.GITHUB_TOKEN; const data=await readJsonFile("data.json").catch(()=>null);
