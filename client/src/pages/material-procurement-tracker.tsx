@@ -207,6 +207,22 @@ export default function MaterialProcurementTracker() {
   const { isAdmin } = useAuth();
 
   const [selectedProject, setSelectedProject] = useState<string>("");
+  const [pendingProject, setPendingProject] = useState<string | null>(null);
+  const [confirmSwitchOpen, setConfirmSwitchOpen] = useState(false);
+
+  const requestSwitchProject = (next: string) => {
+    if (hasChanges && next !== selectedProject) {
+      setPendingProject(next);
+      setConfirmSwitchOpen(true);
+    } else {
+      setSelectedProject(next);
+    }
+  };
+  const confirmDiscardAndSwitch = () => {
+    if (pendingProject !== null) setSelectedProject(pendingProject);
+    setPendingProject(null);
+    setConfirmSwitchOpen(false);
+  };
   const [bomPath, setBomPath] = useState("");
   const [materials, setMaterials] = useState<MaterialRow[]>([]);
   const [hasChanges, setHasChanges] = useState(false);
@@ -251,6 +267,18 @@ export default function MaterialProcurementTracker() {
       setHasChanges(false);
     }
   }, [projectData, selectedProject]);
+
+  // Warn before closing/refreshing the tab if there are unsaved edits
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (hasChanges) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [hasChanges]);
 
   const saveMutation = useMutation({
     mutationFn: async () => apiRequest("POST", `/api/material-tracker/${encodeURIComponent(selectedProject)}`,
@@ -335,7 +363,7 @@ export default function MaterialProcurementTracker() {
               <div className="grid gap-2">
                 <Label>Project</Label>
                 <div className="flex gap-2">
-                  <Select value={selectedProject} onValueChange={setSelectedProject}>
+                  <Select value={selectedProject} onValueChange={requestSwitchProject}>
                     <SelectTrigger className="flex-1"><SelectValue placeholder="Select a project..."/></SelectTrigger>
                     <SelectContent className="max-h-72 overflow-y-auto">
                       {allProjectOptions.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
@@ -458,6 +486,27 @@ export default function MaterialProcurementTracker() {
           <DialogFooter>
             <Button variant="outline" onClick={()=>setAddProjectOpen(false)}>Cancel</Button>
             <Button onClick={handleAddProject}>Start Tracking</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Unsaved changes confirmation */}
+      <Dialog open={confirmSwitchOpen} onOpenChange={(open)=>{ setConfirmSwitchOpen(open); if(!open) setPendingProject(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-600">
+              <AlertTriangle className="h-5 w-5"/>Unsaved Changes
+            </DialogTitle>
+          </DialogHeader>
+          <div className="py-2">
+            <p className="text-sm text-muted-foreground">
+              You have unsaved changes for <span className="font-medium text-foreground">{selectedProject}</span>.
+              Switching projects now will discard them. Save first, or discard and continue?
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={()=>{ setConfirmSwitchOpen(false); setPendingProject(null); }}>Cancel</Button>
+            <Button variant="destructive" onClick={confirmDiscardAndSwitch}>Discard & Switch</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
