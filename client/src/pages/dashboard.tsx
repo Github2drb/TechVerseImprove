@@ -15,6 +15,7 @@ import { ManagerOverview } from "@/components/manager-overview";
 import { NoticeBoardWidget } from "@/components/NoticeBoardWidget";
 import { useAuth } from "@/components/auth-provider";
 import { Ticker } from "@/components/Ticker";
+import { Link } from "wouter";
 import { PushNotificationButton } from "@/components/PushNotificationButton";
 import type { DashboardStats, NavigationCard, TeamMember, Project } from "@shared/schema";
 
@@ -73,8 +74,17 @@ const navigationCards: NavigationCard[] = [
     status: "active",
     gradient: "bg-gradient-to-br from-emerald-500 to-emerald-600",
   },
+  {
+  id: "material-tracker",
+  title: "Material Procurement Tracker",
+  description: "Track BOM, PR, PO and material receipt timelines with automatic overdue alerts.",
+  icon: "package",
+  href: "/material-tracker",
+  status: "active",
+  gradient: "bg-gradient-to-br from-teal-500 to-teal-600",
+  },
 ];
-<Link href="/material-tracker">Material Procurement Tracker</Link>
+
 const adminNavigationCard: NavigationCard = {
   id: "engineer-management",
   title: "Engineer Management",
