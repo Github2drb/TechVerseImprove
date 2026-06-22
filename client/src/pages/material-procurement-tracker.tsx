@@ -8,13 +8,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import {
   ChevronLeft, Plus, Trash2, AlertTriangle, Package, Link2,
-  Clock, CheckCircle2, FileText, Truck, Bell, Edit2, X,
+  Clock, CheckCircle2, FileText, Truck, Bell, Edit2, X, Upload, Loader2,
 } from "lucide-react";
 import { Link } from "wouter";
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/components/auth-provider";
+import * as XLSX from "xlsx";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface MaterialRow {
@@ -55,6 +56,91 @@ function fmtDate(d?: string) {
   return new Date(d).toLocaleDateString("en-IN", { day:"numeric", month:"short", year:"numeric" });
 }
 function todayStr() { return new Date().toISOString().split("T")[0]; }
+
+// ── Excel import helpers ───────────────────────────────────────────────────────
+// Converts any reasonable date representation from an Excel cell into yyyy-mm-dd.
+// Handles: real Excel date serials, Date objects, and common text formats
+// (yyyy-mm-dd, dd-mm-yyyy, dd/mm/yyyy, mm/dd/yyyy as a fallback).
+function excelCellToDateStr(val: any): string {
+  if (val === null || val === undefined || val === "") return "";
+  if (val instanceof Date) {
+    if (isNaN(val.getTime())) return "";
+    return val.toISOString().split("T")[0];
+  }
+  if (typeof val === "number") {
+    // Excel serial date (days since 1899-12-30)
+    const parsed = XLSX.SSF.parse_date_code(val);
+    if (!parsed) return "";
+    const mm = String(parsed.m).padStart(2, "0");
+    const dd = String(parsed.d).padStart(2, "0");
+    return `${parsed.y}-${mm}-${dd}`;
+  }
+  const s = String(val).trim();
+  if (!s) return "";
+  // yyyy-mm-dd already
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // dd-mm-yyyy or dd/mm/yyyy
+  const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (dmy) {
+    const [, d, m, y] = dmy;
+    return `${y}-${m.padStart(2,"0")}-${d.padStart(2,"0")}`;
+  }
+  const parsedDate = new Date(s);
+  if (!isNaN(parsedDate.getTime())) return parsedDate.toISOString().split("T")[0];
+  return "";
+}
+
+// Maps a header string from the uploaded sheet to our internal field name.
+// Matching is case-insensitive and ignores extra words, so the sample sheet's
+// exact headers (and reasonable variations) both work.
+function matchHeader(header: string): keyof MaterialRow | "skip" {
+  const h = header.toLowerCase().trim();
+  if (h.includes("material") && h.includes("name")) return "name";
+  if (h === "qty" || h.includes("quantity")) return "qty";
+  if (h === "unit") return "unit";
+  if (h.includes("bom")) return "bomDate";
+  if (h.includes("pr") && h.includes("created")) return "prCreated";
+  if (h.includes("pr") && h.includes("approved")) return "prApproved";
+  if (h.includes("po") && h.includes("created")) return "poCreated";
+  if (h.includes("po") && h.includes("approved")) return "poApproved";
+  if (h.includes("target")) return "targetReceipt";
+  if (h.includes("actual")) return "actualReceipt";
+  if (h.includes("note") || h.includes("vendor") || h.includes("remark")) return "notes";
+  return "skip";
+}
+
+function parseExcelToMaterials(buffer: ArrayBuffer): MaterialRow[] {
+  const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+  // Use the first sheet that isn't named "Instructions"
+  const sheetName = workbook.SheetNames.find(n => n.toLowerCase() !== "instructions") || workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: "" });
+  if (rows.length < 2) return [];
+
+  const headerRow = rows[0].map(h => String(h ?? ""));
+  const fieldMap = headerRow.map(h => matchHeader(h));
+
+  const out: MaterialRow[] = [];
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    const isEmpty = row.every(c => c === "" || c === null || c === undefined);
+    if (isEmpty) continue;
+
+    const material: MaterialRow = { id: `mat-${Date.now()}-${i}-${Math.random().toString(36).substr(2,4)}`, name: "", qty: "", unit: "" };
+    fieldMap.forEach((field, colIdx) => {
+      if (field === "skip") return;
+      const raw = row[colIdx];
+      if (raw === "" || raw === null || raw === undefined) return;
+      if (field === "name" || field === "qty" || field === "unit" || field === "notes") {
+        (material as any)[field] = String(raw).trim();
+      } else {
+        (material as any)[field] = excelCellToDateStr(raw);
+      }
+    });
+    if (material.name.trim()) out.push(material);
+  }
+  return out;
+}
 
 // ── Per-material status calculation ────────────────────────────────────────────
 interface MaterialStatus {
@@ -230,6 +316,12 @@ export default function MaterialProcurementTracker() {
   const [newProjectName, setNewProjectName] = useState("");
   const [filterMode, setFilterMode] = useState<"all"|"alerts"|"pending">("all");
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importPreview, setImportPreview] = useState<MaterialRow[] | null>(null);
+  const [importMode, setImportMode] = useState<"replace"|"append">("append");
+  const [importConfirmOpen, setImportConfirmOpen] = useState(false);
+
   const { data: projectNames = [] } = useQuery<string[]>({
     queryKey: ["/api/project-names"],
     queryFn: async () => { const r = await fetch("/api/project-names"); if (!r.ok) throw new Error("failed"); return r.json(); },
@@ -305,6 +397,36 @@ export default function MaterialProcurementTracker() {
   const deleteMaterial = (id: string) => {
     setMaterials(prev => prev.filter(m => m.id !== id));
     setHasChanges(true);
+  };
+
+  // ── Excel import flow ─────────────────────────────────────────────────────────
+  const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsImporting(true);
+    try {
+      const buffer = await file.arrayBuffer();
+      const parsed = parseExcelToMaterials(buffer);
+      if (parsed.length === 0) {
+        toast({ title: "No materials found in this sheet", description: "Check that column headers match the expected names.", variant: "destructive" });
+      } else {
+        setImportPreview(parsed);
+        setImportConfirmOpen(true);
+      }
+    } catch (err: any) {
+      toast({ title: "Could not read this file", description: err?.message || "Make sure it's a valid .xlsx file", variant: "destructive" });
+    } finally {
+      setIsImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+  const confirmImport = () => {
+    if (!importPreview) return;
+    setMaterials(prev => importMode === "replace" ? importPreview : [...prev, ...importPreview]);
+    setHasChanges(true);
+    setImportConfirmOpen(false);
+    setImportPreview(null);
+    toast({ title: `Imported ${importPreview.length} material${importPreview.length!==1?"s":""}`, description: "Click Save Changes to persist this." });
   };
 
   const handleAddProject = () => {
@@ -443,7 +565,14 @@ export default function MaterialProcurementTracker() {
                 ))}
               </div>
               {isAdmin && (
-                <Button size="sm" onClick={addMaterial}><Plus className="h-4 w-4 mr-1"/>Add Material</Button>
+                <div className="flex items-center gap-2">
+                  <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleFileSelected}/>
+                  <Button size="sm" variant="outline" disabled={isImporting} onClick={()=>fileInputRef.current?.click()}>
+                    {isImporting ? <Loader2 className="h-4 w-4 mr-1 animate-spin"/> : <Upload className="h-4 w-4 mr-1"/>}
+                    Import from Excel
+                  </Button>
+                  <Button size="sm" onClick={addMaterial}><Plus className="h-4 w-4 mr-1"/>Add Material</Button>
+                </div>
               )}
             </div>
 
@@ -507,6 +636,68 @@ export default function MaterialProcurementTracker() {
           <DialogFooter>
             <Button variant="outline" onClick={()=>{ setConfirmSwitchOpen(false); setPendingProject(null); }}>Cancel</Button>
             <Button variant="destructive" onClick={confirmDiscardAndSwitch}>Discard & Switch</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Import preview / confirmation */}
+      <Dialog open={importConfirmOpen} onOpenChange={(open)=>{ setImportConfirmOpen(open); if(!open) setImportPreview(null); }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Upload className="h-5 w-5"/>Import Preview — {importPreview?.length ?? 0} material{(importPreview?.length ?? 0)!==1?"s":""} found
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="py-2 max-h-72 overflow-y-auto border rounded-lg">
+            <table className="w-full text-xs">
+              <thead className="bg-muted/50 sticky top-0">
+                <tr>
+                  <th className="text-left px-3 py-2 font-medium">Material</th>
+                  <th className="text-left px-3 py-2 font-medium">Qty</th>
+                  <th className="text-left px-3 py-2 font-medium">Unit</th>
+                  <th className="text-left px-3 py-2 font-medium">BOM</th>
+                  <th className="text-left px-3 py-2 font-medium">PR Created</th>
+                  <th className="text-left px-3 py-2 font-medium">Target Receipt</th>
+                </tr>
+              </thead>
+              <tbody>
+                {importPreview?.map(m => (
+                  <tr key={m.id} className="border-t">
+                    <td className="px-3 py-1.5">{m.name}</td>
+                    <td className="px-3 py-1.5">{m.qty}</td>
+                    <td className="px-3 py-1.5">{m.unit}</td>
+                    <td className="px-3 py-1.5">{fmtDate(m.bomDate)}</td>
+                    <td className="px-3 py-1.5">{fmtDate(m.prCreated)}</td>
+                    <td className="px-3 py-1.5">{fmtDate(m.targetReceipt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex items-center gap-4 pt-2">
+            <Label className="text-sm">If materials already exist for this project:</Label>
+            <div className="flex gap-1">
+              <button onClick={()=>setImportMode("append")}
+                className={`text-xs font-medium px-3 py-1.5 rounded-full border transition-colors ${importMode==="append"?"bg-primary text-primary-foreground border-primary":"bg-muted/50 text-muted-foreground border-transparent hover:bg-muted"}`}>
+                Add to existing
+              </button>
+              <button onClick={()=>setImportMode("replace")}
+                className={`text-xs font-medium px-3 py-1.5 rounded-full border transition-colors ${importMode==="replace"?"bg-red-500 text-white border-red-500":"bg-muted/50 text-muted-foreground border-transparent hover:bg-muted"}`}>
+                Replace all
+              </button>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            This only loads the data into the page — click <strong>Save Changes</strong> afterward to persist it.
+          </p>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={()=>{ setImportConfirmOpen(false); setImportPreview(null); }}>Cancel</Button>
+            <Button onClick={confirmImport}>
+              {importMode === "replace" ? "Replace All Materials" : "Add These Materials"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
