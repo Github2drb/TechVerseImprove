@@ -179,57 +179,118 @@ export default function BlogPage() {
     const div = contentRef.current;
     if (!div) return;
 
-    // Named project fields
-    const fieldLabels: Record<string, string> = {
-      f_projectName:    "Project Name",
-      f_projectCode:    "Project Code",
-      f_client:         "Client/Facility",
-      f_projectManager: "Project Manager",
-      f_startDate:      "Start Date",
-      f_completionDate: "Completion Date",
-      f_budget:         "Budget",
-      f_priority:       "Priority",
-      f_preparedBy:     "Prepared By",
-      f_approvedBy:     "Approved By",
-    };
+    // ── Sheet 1: Project Details ───────────────────────────────────────────
     const details: { Field: string; Value: string }[] = [];
-    for (const [id, label] of Object.entries(fieldLabels)) {
+
+    // Text / date / select fields (by ID)
+    const fieldMap: [string, string][] = [
+      ["f_projectName",    "Project Name"],
+      ["f_projectCode",    "Project Code"],
+      ["f_client",         "Client / Facility"],
+      ["f_projectManager", "Project Manager"],
+      ["f_startDate",      "Start Date"],
+      ["f_completionDate", "Completion Date"],
+      ["f_budget",         "Budget"],
+      ["f_priority",       "Priority"],
+      ["f_preparedBy",     "Prepared By"],
+      ["f_approvedBy",     "Approved By"],
+    ];
+    for (const [id, label] of fieldMap) {
       const el = div.querySelector(`#${id}`) as HTMLInputElement | HTMLSelectElement | null;
-      if (el?.value?.trim()) details.push({ Field: label, Value: el.value });
+      const val = el?.value?.trim() ?? "";
+      if (val && val !== "Select") details.push({ Field: label, Value: val });
     }
 
-    // Checkboxes & radio buttons
-    div.querySelectorAll<HTMLInputElement>("input[type=checkbox]:checked, input[type=radio]:checked")
-      .forEach(cb => { if (cb.value) details.push({ Field: cb.name || "Option", Value: cb.value }); });
+    // Checkbox / radio groups — grouped by name, values joined with ", "
+    const namedGroups: [string, string][] = [
+      ["f_projType", "Project Type"],
+      ["f_safety",   "Safety Classification"],
+      ["f_systems",  "Automation Systems"],
+    ];
+    for (const [name, label] of namedGroups) {
+      const checked = Array.from(
+        div.querySelectorAll<HTMLInputElement>(`input[name="${name}"]:checked`)
+      ).map(cb => cb.value.trim()).filter(Boolean);
+      if (checked.length) details.push({ Field: label, Value: checked.join(", ") });
+    }
 
-    // Team Assignment Matrix — first <table> in the content
-    const team: { Member: string; Role: string; Tasks: string; Hours: string; Start: string; End: string }[] = [];
+    // ── Sheet 2: Team Assignment Matrix (table[0]) ─────────────────────────
+    const team: { "Team Member": string; Role: string; Tasks: string; Hours: string; "Start Date": string; "End Date": string }[] = [];
     const tables = div.querySelectorAll("table");
     if (tables[0]) {
       tables[0].querySelectorAll("tr:not(:first-child)").forEach(tr => {
         const inp = tr.querySelectorAll<HTMLInputElement>("input");
-        if (inp.length >= 6 && Array.from(inp).some(i => i.value.trim())) {
-          team.push({
-            Member: inp[0]?.value || "",
-            Role:   inp[1]?.value || "",
-            Tasks:  inp[2]?.value || "",
-            Hours:  inp[3]?.value || "",
-            Start:  inp[4]?.value || "",
-            End:    inp[5]?.value || "",
-          });
-        }
+        const row = {
+          "Team Member": inp[0]?.value?.trim() || "",
+          "Role":        inp[1]?.value?.trim() || "",
+          "Tasks":       inp[2]?.value?.trim() || "",
+          "Hours":       inp[3]?.value?.trim() || "",
+          "Start Date":  inp[4]?.value?.trim() || "",
+          "End Date":    inp[5]?.value?.trim() || "",
+        };
+        if (Object.values(row).some(v => v)) team.push(row);
       });
     }
 
-    if (details.length === 0 && team.length === 0) {
+    // ── Sheet 3: Skill Requirements (table[1]) ─────────────────────────────
+    const skills: { Certification: string; "Team Member": string; Status: string }[] = [];
+    if (tables[1]) {
+      tables[1].querySelectorAll("tr:not(:first-child)").forEach(tr => {
+        const tds = tr.querySelectorAll("td");
+        if (tds.length < 3) return;
+        const cert    = tds[0]?.textContent?.trim() || "";
+        const member  = (tds[1]?.querySelector("input") as HTMLInputElement | null)?.value?.trim() || "";
+        const checked = (tds[2]?.querySelector("input[type=checkbox]") as HTMLInputElement | null)?.checked;
+        if (cert) skills.push({ Certification: cert, "Team Member": member, Status: checked ? "Verified" : "Pending" });
+      });
+    }
+
+    // ── Sheet 4: Risk Assessment & Mitigation (table[2]) ──────────────────
+    const risks: { "Risk Factor": string; Probability: string; Impact: string; Mitigation: string }[] = [];
+    if (tables[2]) {
+      tables[2].querySelectorAll("tr:not(:first-child)").forEach(tr => {
+        const tds = tr.querySelectorAll("td");
+        if (tds.length < 4) return;
+        const factor = tds[0]?.textContent?.trim() || "";
+
+        // Probability — find which checkbox is checked and read its label text
+        const probLabels: string[] = [];
+        tds[1]?.querySelectorAll<HTMLInputElement>("input[type=checkbox]").forEach(cb => {
+          if (cb.checked) probLabels.push(cb.parentElement?.textContent?.trim() || "");
+        });
+
+        // Impact — same pattern
+        const impactLabels: string[] = [];
+        tds[2]?.querySelectorAll<HTMLInputElement>("input[type=checkbox]").forEach(cb => {
+          if (cb.checked) impactLabels.push(cb.parentElement?.textContent?.trim() || "");
+        });
+
+        const mitigation = (tds[3]?.querySelector("input") as HTMLInputElement | null)?.value?.trim() || "";
+
+        if (factor) risks.push({
+          "Risk Factor": factor,
+          "Probability": probLabels.join(", ") || "",
+          "Impact":      impactLabels.join(", ") || "",
+          "Mitigation":  mitigation,
+        });
+      });
+    }
+
+    const hasData = details.length > 0 || team.length > 0 || skills.some(s => s["Team Member"]) || risks.some(r => r.Probability || r.Mitigation);
+    if (!hasData) {
       alert("Please fill in some data before downloading.");
       return;
     }
 
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(details), "Project Details");
+    if (details.length > 0)
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(details), "Project Details");
     if (team.length > 0)
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(team), "Team Assignment");
+    if (skills.length > 0)
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(skills), "Skill Requirements");
+    if (risks.length > 0)
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(risks), "Risk Assessment");
 
     XLSX.writeFile(wb, (selected?.title || "form").replace(/[^a-zA-Z0-9]/g, "_") + ".xlsx");
   };
