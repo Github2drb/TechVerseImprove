@@ -174,7 +174,10 @@
     @apply font-sans antialiased bg-background text-foreground;
   }
 }
-
+@media print {
+  header, nav, button, .no-print { display: none !important; }
+  body { background: white; }
+}
 /**
  * Using the elevate system.
  * Automatic contrast adjustment.
