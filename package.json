@@ -83,7 +83,8 @@
     "ws": "^8.20.1",
     "xlsx": "^0.18.5",
     "zod": "^3.24.2",
-    "zod-validation-error": "^3.4.0"
+    "zod-validation-error": "^3.4.0",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.15",

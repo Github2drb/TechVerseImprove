@@ -9,10 +9,14 @@ import { NavigationCards } from "@/components/navigation-cards";
 import { TeamSection } from "@/components/team-section";
 import { ProjectPreview } from "@/components/project-preview";
 import { WidgetSettings, useWidgetConfig } from "@/components/widget-settings";
-import { WeeklyAssignmentsTable } from "@/components/weekly-assignments-table";
+/*import { WeeklyAssignmentsTable } from "@/components/weekly-assignments-table";*/
+import { EngineerWorkspace } from "@/components/EngineerWorkspace";
 import { ManagerOverview } from "@/components/manager-overview";
-import { WeeklyScheduleOverview } from "@/components/weekly-schedule-overview";
+import { NoticeBoardWidget } from "@/components/NoticeBoardWidget";
 import { useAuth } from "@/components/auth-provider";
+import { Ticker } from "@/components/Ticker";
+import { Link } from "wouter";
+import { PushNotificationButton } from "@/components/PushNotificationButton";
 import type { DashboardStats, NavigationCard, TeamMember, Project } from "@shared/schema";
 
 const navigationCards: NavigationCard[] = [
@@ -69,6 +73,15 @@ const navigationCards: NavigationCard[] = [
     href: "/teamsheet/",
     status: "active",
     gradient: "bg-gradient-to-br from-emerald-500 to-emerald-600",
+  },
+  {
+  id: "material-tracker",
+  title: "Material Procurement Tracker",
+  description: "Track BOM, PR, PO and material receipt timelines with automatic overdue alerts.",
+  icon: "package",
+  href: "/material-tracker",
+  status: "active",
+  gradient: "bg-gradient-to-br from-teal-500 to-teal-600",
   },
 ];
 
@@ -165,9 +178,9 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-background" data-testid="page-dashboard">
       <Header searchQuery={searchQuery} onSearchChange={setSearchQuery} />
-      
+      <PushNotificationButton />
       <HeroSection />
-      
+      <Ticker />
       <main className="mx-auto max-w-7xl space-y-12 px-4 py-8 md:px-6 md:py-12">
         <div className="flex justify-end">
           <WidgetSettings
@@ -182,9 +195,9 @@ export default function Dashboard() {
         
         {visibleWidgets.includes("navigation") && renderWidget("navigation")}
 
-        <WeeklyScheduleOverview />
+       <NoticeBoardWidget />
         
-        <WeeklyAssignmentsTable teamMembers={teamMembers} />
+        <EngineerWorkspace />
 
         <TodayActivity />
 

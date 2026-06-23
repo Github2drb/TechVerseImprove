@@ -19,8 +19,10 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DailyReport from "@/pages/daily-report";
 import ISA101Page from "@/pages/ISA101Page";
-import BlogPage          from "@/pages/blog";
+import BlogPage from "@/pages/blog";
+import ProjectRoadmap from "@/pages/project-roadmap";
 import NotificationsPage from "@/pages/notifications";
+import MaterialProcurementTracker from "@/pages/material-procurement-tracker";
 
 function AppRoutes() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -31,6 +33,7 @@ function AppRoutes() {
       <Route path="/" component={Dashboard} />
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/project-tracker" component={TeamProjectTracker} />
+      <Route path="/material-tracker" component={MaterialProcurementTracker} />
       <Route path="/project-status" component={ProjectStatus} />
       <Route path="/skill-matrix" component={SkillMatrix} />
       <Route path="/analytics" component={Analytics} />
@@ -38,36 +41,28 @@ function AppRoutes() {
       <Route path="/engineer-management" component={EngineerManagement} />
       <Route path="/project/:id" component={ProjectDetail} />
       <Route path="/teamsheet" component={TeamSheet} />
-      <Route path="/teamsheet" component={TeamSheet} />
-      <Route path="/daily-report" component={DailyReport} />  {/* ← ADD */}
+      <Route path="/daily-report" component={DailyReport} />
       <Route path="/knowledge/isa-101-hmi-standards" component={ISA101Page} />
-      <Route path="/blog"          component={BlogPage} />
+      <Route path="/blog" component={BlogPage} />
       <Route path="/notifications" component={NotificationsPage} />
+      <Route path="/project-roadmap" component={ProjectRoadmap} />
       <Route component={NotFound} />
     </Switch>
   );
 }
-<ThemeProvider>
-  <ErrorBoundary>        {/* ← ADD THIS */}
-    <AuthProvider>
-      <AppRoutes />
-      <Toaster />
-    </AuthProvider>
-  </ErrorBoundary>
-</ThemeProvider>
 
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
-        <TooltipProvider>          {/* ← ADD */}
+        <TooltipProvider>
           <ErrorBoundary>
             <AuthProvider>
               <AppRoutes />
               <Toaster />
             </AuthProvider>
           </ErrorBoundary>
-        </TooltipProvider>         {/* ← ADD */}
+        </TooltipProvider>
       </ThemeProvider>
     </QueryClientProvider>
   );

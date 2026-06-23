@@ -4,9 +4,43 @@ import MemoryStore from "memorystore";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
-
 const app = express();
 const httpServer = createServer(app);
+
+// ── Serve service worker BEFORE SPA wildcard ──────────────────────────────────
+app.get("/sw.js", (_req, res) => {
+  res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+  res.setHeader("Service-Worker-Allowed", "/");
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.send(`
+self.addEventListener('push', (event) => {
+  if (!event.data) return;
+  let data = {};
+  try { data = event.data.json(); } catch { data = { title: 'DRB TechVerse', body: event.data.text() }; }
+  event.waitUntil(self.registration.showNotification(data.title || 'DRB TechVerse', {
+    body: data.body || 'You have a new update',
+    icon: data.icon || '/favicon.ico',
+    badge: '/favicon.ico',
+    tag: data.tag || 'drb-notification',
+    data: { url: data.url || '/' },
+  }));
+});
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = event.notification.data?.url || '/';
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      for (const client of list) {
+        if (client.url.includes(self.location.origin) && 'focus' in client) return client.focus();
+      }
+      if (clients.openWindow) return clients.openWindow(url);
+    })
+  );
+});
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (e) => e.waitUntil(clients.claim()));
+  `.trim());
+});
 
 const MemoryStoreSession = MemoryStore(session);
 
@@ -16,7 +50,6 @@ declare module "http" {
   }
 }
 
-// Required for Render — trust the reverse proxy so secure cookies work
 app.set("trust proxy", 1);
 
 app.use(
@@ -28,20 +61,19 @@ app.use(
 );
 app.use(express.urlencoded({ extended: false }));
 
-// Session middleware — must be before routes
 app.use(
   session({
     secret: process.env.SESSION_SECRET || "drbtechverse-secret-2024",
     resave: false,
     saveUninitialized: false,
     store: new MemoryStoreSession({
-      checkPeriod: 86400000, // prune expired entries every 24h
+      checkPeriod: 86400000,
     }),
     cookie: {
       secure: process.env.NODE_ENV === "production",
       httpOnly: true,
       sameSite: "lax",
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      maxAge: 24 * 60 * 60 * 1000,
     },
   })
 );
@@ -91,16 +123,12 @@ app.use((req, res, next) => {
     app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
       const status = err.status || err.statusCode || 500;
       const message = err.message || "Internal Server Error";
-      // Log the error but DO NOT re-throw — re-throwing from an Express error
-      // handler becomes an uncaught exception that crashes the whole process,
-      // which on Render triggers a restart (and an empty in-memory cache).
       console.error("[express error handler]", status, message, err?.stack || "");
       if (!res.headersSent) {
         res.status(status).json({ message });
       }
     });
 
-    // Last-resort guards: a single unhandled error must never kill the server.
     process.on("unhandledRejection", (reason) => {
       console.error("[unhandledRejection]", reason);
     });
@@ -117,14 +145,8 @@ app.use((req, res, next) => {
 
     const port = parseInt(process.env.PORT || "5000", 10);
     httpServer.listen(
-      {
-        port,
-        host: "0.0.0.0",
-        reusePort: true,
-      },
-      () => {
-        log(`serving on port ${port}`);
-      },
+      { port, host: "0.0.0.0", reusePort: true },
+      () => { log(`serving on port ${port}`); },
     );
   } catch (err) {
     console.error("=== FATAL STARTUP ERROR ===");
