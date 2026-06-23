@@ -1,5 +1,5 @@
 // client/src/pages/blog.tsx
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link } from "wouter";
 import { Header } from "@/components/header";
 import { BlogCard } from "@/components/BlogCard";
@@ -104,6 +104,10 @@ export default function BlogPage() {
     }
   };
 
+  // Ref to the rendered post body. Needed so we can re-activate any <script>
+  // tags inside the post HTML — see effect below.
+  const contentRef = useRef<HTMLDivElement>(null);
+
   const load = async () => {
     setLoading(true); setError(null);
     try {
@@ -118,6 +122,50 @@ export default function BlogPage() {
     finally { setLoading(false); }
   };
   useEffect(() => { load(); }, []);
+
+  // ── Activate inline <script> tags inside post content ───────────────────────
+  // React injects post HTML via dangerouslySetInnerHTML. Browsers treat <script>
+  // tags added through innerHTML as inert — they are parsed but never executed.
+  // That means interactive posts (e.g. the Project Allocation form with its
+  // Download PDF / Save Locally buttons) never define their handler functions,
+  // producing "downloadPDF is not defined" / "saveFormLocal is not defined", etc.
+  // Here we clone every <script> into a fresh element so the browser executes it.
+  // External (src) scripts — jsPDF/html2pdf and friends — are loaded in order and
+  // awaited so that any following inline script can rely on them being ready.
+  useEffect(() => {
+    if (!selected || editing) return;
+    const container = contentRef.current;
+    if (!container) return;
+
+    let cancelled = false;
+    const scripts = Array.from(container.querySelectorAll("script"));
+    if (scripts.length === 0) return;
+
+    const runSequentially = async () => {
+      for (const oldScript of scripts) {
+        if (cancelled) return;
+        await new Promise<void>((resolve) => {
+          const fresh = document.createElement("script");
+          for (const attr of Array.from(oldScript.attributes)) {
+            fresh.setAttribute(attr.name, attr.value);
+          }
+          const hasSrc = !!oldScript.src;
+          if (hasSrc) {
+            fresh.onload = () => resolve();
+            fresh.onerror = () => resolve(); // don't block the rest on a failed CDN
+          } else {
+            fresh.textContent = oldScript.textContent;
+          }
+          oldScript.parentNode?.replaceChild(fresh, oldScript);
+          // Inline scripts run synchronously on insertion; only src scripts await.
+          if (!hasSrc) resolve();
+        });
+      }
+    };
+
+    runSequentially();
+    return () => { cancelled = true; };
+  }, [selected, editing]);
 
   // Filter
   const filtered = posts.filter(p => {
@@ -224,6 +272,7 @@ export default function BlogPage() {
         )}
 
         <div
+          ref={contentRef}
           className="prose prose-sm dark:prose-invert max-w-none"
           dangerouslySetInnerHTML={{ __html: selected.content }}
         />
