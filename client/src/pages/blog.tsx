@@ -580,15 +580,16 @@ export default function BlogPage() {
       ...PC_ITEMS.map(([id, label]) => [label, isChecked(div, id) ? "✔ Done" : "Pending"]),
       [],
       ["TEAM PERFORMANCE REVIEW"],
-      ["Team Member","Contributions","Performance Rating","Key Development Areas"],
-      ...Array.from({ length: 3 }, (_, i) => [v(div.querySelector(`#f_tp${i}_member`)), v(div.querySelector(`#f_tp${i}_contrib`)), radioVal(div, `f_tp${i}_rating`), v(div.querySelector(`#f_tp${i}_areas`))]),
+      ["Team Member","Performance Rating","Key Contributions","Areas for Development","Next Project Suitability"],
+      ...Array.from({ length: 3 }, (_, i) => [v(div.querySelector(`#f_tp${i}_member`)), radioVal(div, `f_tp${i}_rating`), v(div.querySelector(`#f_tp${i}_contrib`)), v(div.querySelector(`#f_tp${i}_areas`)), v(div.querySelector(`#f_tp${i}_suitability`))]),
     ];
     const s11 = XLSX.utils.aoa_to_sheet(s11aoa);
-    s11["!cols"] = [{ wch: 40 }, { wch: 14 }, { wch: 22 }, { wch: 32 }];
+    s11["!cols"] = [{ wch: 26 }, { wch: 20 }, { wch: 28 }, { wch: 28 }, { wch: 24 }];
     s11["!merges"] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: 3 } },
-      { s: { r: 2, c: 0 }, e: { r: 2, c: 3 } },
-      { s: { r: 11, c: 0 }, e: { r: 11, c: 3 } },
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 4 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 4 } },
+      { s: { r: 3, c: 0 }, e: { r: 3, c: 1 } },  // checklist "Item" spans 2 cols
+      { s: { r: 11, c: 0 }, e: { r: 11, c: 4 } },
     ];
     XLSX.utils.book_append_sheet(wb, s11, "11. Project Closure");
 
