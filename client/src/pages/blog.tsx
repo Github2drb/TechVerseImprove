@@ -1,17 +1,14 @@
 // client/src/pages/blog.tsx
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link } from "wouter";
 import { Header } from "@/components/header";
 import { BlogCard } from "@/components/BlogCard";
 import { Button } from "@/components/ui/button";
 import {
-  ArrowLeft, Plus, X, Save, Trash2, Pin, Eye, EyeOff,
-  Search, ChevronLeft, Edit2, Lock, Unlock,
+  ArrowLeft, Plus, X, Save, Trash2, Pin, Eye,
+  Search, ChevronLeft, Edit2, Lock, Unlock, Download,
 } from "lucide-react";
-import { Download } from "lucide-react";
 import * as XLSX from "xlsx";
-import { Download } from "lucide-react";  // add Download to existing lucide import
-import { useRef } from "react";            // add useRef to existing react import
 
 const CATEGORIES = ["All", "PLC", "HMI", "SCADA", "Project Update", "Training", "General"];
 
@@ -35,7 +32,7 @@ interface BlogPost {
 const EMPTY_POST: Omit<BlogPost, "id"|"createdAt"> = {
   title:"", author:"Admin", date: new Date().toISOString().split("T")[0],
   category:"General", tags:[], coverImage:"", excerpt:"", content:"",
-  isPinned:false, isPublished:true,   // default to published so post appears immediately
+  isPinned:false, isPublished:true,
 };
 
 function getAdminHeader(): string {
@@ -62,16 +59,16 @@ function isAdminSession(): boolean {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function BlogPage() {
-  const [posts,    setPosts]    = useState<BlogPost[]>([]);
-  const [loading,  setLoading]  = useState(true);
-  const [error,    setError]    = useState<string|null>(null);
-  const [search,   setSearch]   = useState("");
-  const [category, setCategory] = useState("All");
-  const [selected, setSelected] = useState<BlogPost|null>(null);
-  const [editing,  setEditing]  = useState(false);
-  const [draft,    setDraft]    = useState<typeof EMPTY_POST & { id?:string; createdAt?:string }>(EMPTY_POST);
-  const [saving,   setSaving]   = useState(false);
-  const [tagInput, setTagInput] = useState("");
+  const [posts,        setPosts]        = useState<BlogPost[]>([]);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState<string|null>(null);
+  const [search,       setSearch]       = useState("");
+  const [category,     setCategory]     = useState("All");
+  const [selected,     setSelected]     = useState<BlogPost|null>(null);
+  const [editing,      setEditing]      = useState(false);
+  const [draft,        setDraft]        = useState<typeof EMPTY_POST & { id?:string; createdAt?:string }>(EMPTY_POST);
+  const [saving,       setSaving]       = useState(false);
+  const [tagInput,     setTagInput]     = useState("");
   const [adminMode,    setAdminMode]    = useState(isAdminSession());
   const [showLogin,    setShowLogin]    = useState(false);
   const [loginUser,    setLoginUser]    = useState("");
@@ -79,6 +76,8 @@ export default function BlogPage() {
   const [loginErr,     setLoginErr]     = useState(false);
   const [loginLoading, setLoginLoading] = useState(false);
   const [adminUsers,   setAdminUsers]   = useState<{username:string;password:string;name?:string}[]>([]);
+
+  // ── ref for Excel export ───────────────────────────────────────────────────
   const contentRef = useRef<HTMLDivElement>(null);
 
   const loadAdmins = async () => {
@@ -112,7 +111,6 @@ export default function BlogPage() {
   const load = async () => {
     setLoading(true); setError(null);
     try {
-      // Send admin header so backend returns ALL posts (including drafts) for admin
       const headers: Record<string,string> = {};
       const ah = getAdminHeader();
       if (ah) headers["x-admin-auth"] = ah;
@@ -124,13 +122,11 @@ export default function BlogPage() {
   };
   useEffect(() => { load(); }, []);
 
-  // Filter
   const filtered = posts.filter(p => {
     const matchCat = category === "All" || p.category === category;
     const q = search.toLowerCase();
     const matchQ = !q || p.title.toLowerCase().includes(q) ||
       p.excerpt.toLowerCase().includes(q) || p.tags.some(t => t.toLowerCase().includes(q));
-    // Non-admins only see published posts; admins see all
     const matchPublished = isAdminSession() || p.isPublished;
     return matchCat && matchQ && matchPublished;
   });
@@ -168,10 +164,8 @@ export default function BlogPage() {
   };
 
   // ── Open editor ────────────────────────────────────────────────────────────
-  const openNew = () => { setDraft({ ...EMPTY_POST }); setTagInput(""); setEditing(true); };
-  const openEdit = (p: BlogPost) => {
-    setDraft({ ...p }); setTagInput(p.tags.join(", ")); setEditing(true);
-  };
+  const openNew  = () => { setDraft({ ...EMPTY_POST }); setTagInput(""); setEditing(true); };
+  const openEdit = (p: BlogPost) => { setDraft({ ...p }); setTagInput(p.tags.join(", ")); setEditing(true); };
 
   const addTag = () => {
     const t = tagInput.trim();
@@ -180,53 +174,65 @@ export default function BlogPage() {
     setTagInput("");
   };
 
+  // ── Download Excel ─────────────────────────────────────────────────────────
   const downloadExcel = () => {
-  const div = contentRef.current;
-  if (!div) return;
+    const div = contentRef.current;
+    if (!div) return;
 
-  // Named fields
-  const fieldLabels: Record<string, string> = {
-    f_projectName: "Project Name", f_projectCode: "Project Code",
-    f_client: "Client/Facility", f_projectManager: "Project Manager",
-    f_startDate: "Start Date", f_completionDate: "Completion Date",
-    f_budget: "Budget", f_priority: "Priority",
-    f_preparedBy: "Prepared By", f_approvedBy: "Approved By",
+    // Named project fields
+    const fieldLabels: Record<string, string> = {
+      f_projectName:    "Project Name",
+      f_projectCode:    "Project Code",
+      f_client:         "Client/Facility",
+      f_projectManager: "Project Manager",
+      f_startDate:      "Start Date",
+      f_completionDate: "Completion Date",
+      f_budget:         "Budget",
+      f_priority:       "Priority",
+      f_preparedBy:     "Prepared By",
+      f_approvedBy:     "Approved By",
+    };
+    const details: { Field: string; Value: string }[] = [];
+    for (const [id, label] of Object.entries(fieldLabels)) {
+      const el = div.querySelector(`#${id}`) as HTMLInputElement | HTMLSelectElement | null;
+      if (el?.value?.trim()) details.push({ Field: label, Value: el.value });
+    }
+
+    // Checkboxes & radio buttons
+    div.querySelectorAll<HTMLInputElement>("input[type=checkbox]:checked, input[type=radio]:checked")
+      .forEach(cb => { if (cb.value) details.push({ Field: cb.name || "Option", Value: cb.value }); });
+
+    // Team Assignment Matrix — first <table> in the content
+    const team: { Member: string; Role: string; Tasks: string; Hours: string; Start: string; End: string }[] = [];
+    const tables = div.querySelectorAll("table");
+    if (tables[0]) {
+      tables[0].querySelectorAll("tr:not(:first-child)").forEach(tr => {
+        const inp = tr.querySelectorAll<HTMLInputElement>("input");
+        if (inp.length >= 6 && Array.from(inp).some(i => i.value.trim())) {
+          team.push({
+            Member: inp[0]?.value || "",
+            Role:   inp[1]?.value || "",
+            Tasks:  inp[2]?.value || "",
+            Hours:  inp[3]?.value || "",
+            Start:  inp[4]?.value || "",
+            End:    inp[5]?.value || "",
+          });
+        }
+      });
+    }
+
+    if (details.length === 0 && team.length === 0) {
+      alert("Please fill in some data before downloading.");
+      return;
+    }
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(details), "Project Details");
+    if (team.length > 0)
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(team), "Team Assignment");
+
+    XLSX.writeFile(wb, (selected?.title || "form").replace(/[^a-zA-Z0-9]/g, "_") + ".xlsx");
   };
-  const details: { Field: string; Value: string }[] = [];
-  for (const [id, label] of Object.entries(fieldLabels)) {
-    const el = div.querySelector(`#${id}`) as HTMLInputElement | HTMLSelectElement | null;
-    if (el?.value?.trim()) details.push({ Field: label, Value: el.value });
-  }
-  // Checkboxes / radios
-  div.querySelectorAll<HTMLInputElement>("input[type=checkbox]:checked, input[type=radio]:checked")
-    .forEach(cb => { if (cb.value) details.push({ Field: cb.name || "Option", Value: cb.value }); });
-
-  // Team Assignment Matrix (first table in form)
-  const team: { Member: string; Role: string; Tasks: string; Hours: string; Start: string; End: string }[] = [];
-  const tables = div.querySelectorAll("table");
-  if (tables[0]) {
-    tables[0].querySelectorAll("tr:not(:first-child)").forEach(tr => {
-      const inp = tr.querySelectorAll<HTMLInputElement>("input");
-      if (inp.length >= 6 && Array.from(inp).some(i => i.value.trim())) {
-        team.push({ Member: inp[0]?.value || "", Role: inp[1]?.value || "",
-          Tasks: inp[2]?.value || "", Hours: inp[3]?.value || "",
-          Start: inp[4]?.value || "", End: inp[5]?.value || "" });
-      }
-    });
-  }
-
-  if (details.length === 0 && team.length === 0) {
-    alert("Please fill in some data before downloading.");
-    return;
-  }
-
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(details), "Project Details");
-  if (team.length > 0)
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(team), "Team Assignment");
-
-  XLSX.writeFile(wb, (selected?.title || "form").replace(/[^a-zA-Z0-9]/g, "_") + ".xlsx");
-};
 
   // ── Detail view ────────────────────────────────────────────────────────────
   if (selected && !editing) return (
@@ -237,6 +243,8 @@ export default function BlogPage() {
           <Button variant="outline" size="sm" className="gap-2" onClick={() => setSelected(null)}>
             <ChevronLeft className="h-4 w-4" /> Back
           </Button>
+
+          {/* Admin-only buttons */}
           {adminMode && (
             <>
               <Button variant="outline" size="sm" className="gap-2" onClick={() => openEdit(selected)}>
@@ -245,11 +253,13 @@ export default function BlogPage() {
               <Button variant="destructive" size="sm" className="gap-2" onClick={() => deletePost(selected.id)}>
                 <Trash2 className="h-4 w-4" /> Delete
               </Button>
-              <Button variant="outline" size="sm" className="gap-2" onClick={downloadExcel}>
-                <Download className="h-4 w-4" /> Download Excel
-              </Button>
             </>
           )}
+
+          {/* Download Excel — visible to ALL users */}
+          <Button variant="outline" size="sm" className="gap-2" onClick={downloadExcel}>
+            <Download className="h-4 w-4" /> Download Excel
+          </Button>
         </div>
 
         {selected.coverImage && (
@@ -279,10 +289,7 @@ export default function BlogPage() {
           </div>
         )}
 
-        <div
-          className="prose prose-sm dark:prose-invert max-w-none"
-          dangerouslySetInnerHTML={{ __html: selected.content }}
-        />
+        {/* Single content div with ref — no duplicate */}
         <div
           ref={contentRef}
           className="prose prose-sm dark:prose-invert max-w-none"
