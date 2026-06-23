@@ -8,6 +8,7 @@ import {
   ArrowLeft, Plus, X, Save, Trash2, Pin, Eye, EyeOff,
   Search, ChevronLeft, Edit2, Lock, Unlock,
 } from "lucide-react";
+import { Download } from "lucide-react";
 
 const CATEGORIES = ["All", "PLC", "HMI", "SCADA", "Project Update", "Training", "General"];
 
@@ -191,6 +192,9 @@ export default function BlogPage() {
               </Button>
               <Button variant="destructive" size="sm" className="gap-2" onClick={() => deletePost(selected.id)}>
                 <Trash2 className="h-4 w-4" /> Delete
+              </Button>
+              <Button variant="outline" size="sm" className="gap-2" onClick={() => window.print()}>
+                <Download className="h-4 w-4" /> Download PDF
               </Button>
             </>
           )}
