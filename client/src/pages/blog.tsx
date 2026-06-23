@@ -1,7 +1,4 @@
 // client/src/pages/blog.tsx
-// ─────────────────────────────────────────────────────────────────────────────
-// Run once in your project root before deploying:  npm install exceljs
-// ─────────────────────────────────────────────────────────────────────────────
 import { useState, useEffect, useRef } from "react";
 import { Link } from "wouter";
 import { Header } from "@/components/header";
@@ -12,7 +9,7 @@ import {
   Search, ChevronLeft, Edit2, Lock, Unlock, Download,
   BookOpen, RefreshCw,
 } from "lucide-react";
-import ExcelJS from "exceljs";
+import * as XLSX from "xlsx";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const CATEGORIES = ["All", "PLC", "HMI", "SCADA", "Project Update", "Training", "General"];
@@ -62,75 +59,35 @@ function isAdminSession(): boolean {
   return false;
 }
 
-// ── Excel helpers ─────────────────────────────────────────────────────────────
-const PURPLE  = "FF667EEA";
-const DPURPLE = "FF764BA2";
-const LPURPLE = "FFE8EAF6";
-const NAVY    = "FF003366";
-const WHITE   = "FFFFFFFF";
-const LGRAY   = "FFF5F5F5";
-const MGRAY   = "FFE0E0E0";
-const EVENROW = "FFF5F5FF";
-
-type XlBorder = { style: "thin" };
-const border: XlBorder = { style: "thin" };
-const allBorders = { top: border, left: border, bottom: border, right: border };
-
-function hdrStyle(argb: string) {
-  return {
-    font: { bold: true, color: { argb: WHITE }, size: 10, name: "Arial" },
-    fill: { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb } },
-    border: allBorders,
-    alignment: { vertical: "middle" as const, horizontal: "center" as const, wrapText: true },
-  };
-}
-function sectionStyle() {
-  return {
-    font: { bold: true, color: { argb: NAVY }, size: 11, name: "Arial" },
-    fill: { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: LPURPLE } },
-    border: allBorders,
-    alignment: { vertical: "middle" as const },
-  };
-}
-function labelStyle() {
-  return {
-    font: { bold: true, size: 9, name: "Arial", color: { argb: "FF333333" } },
-    fill: { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: MGRAY } },
-    border: allBorders,
-    alignment: { vertical: "middle" as const, wrapText: true },
-  };
-}
-function dataStyle(even = false) {
-  return {
-    font: { size: 10, name: "Arial" },
-    fill: { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: even ? EVENROW : WHITE } },
-    border: allBorders,
-    alignment: { vertical: "top" as const, wrapText: true },
-  };
-}
-function checkStyle(checked: boolean, even = false) {
-  return {
-    font: { size: 11, name: "Arial", color: { argb: checked ? "FF2E7D32" : "FF999999" } },
-    fill: { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: even ? EVENROW : WHITE } },
-    border: allBorders,
-    alignment: { vertical: "middle" as const, horizontal: "center" as const },
-  };
+// ── Excel helpers (SheetJS / xlsx — already installed, no extra npm needed) ───
+function makeWs(
+  title: string,
+  headers: string[],
+  rows: (string | number | boolean)[][],
+  colWidths: number[]
+): XLSX.WorkSheet {
+  const aoa: (string | number | boolean)[][] = [
+    [title],
+    [],
+    headers,
+    ...rows,
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  // Merge title row across all columns
+  ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }];
+  // Column widths
+  ws["!cols"] = colWidths.map(w => ({ wch: w }));
+  // Freeze header row (row 3 = index 2)
+  ws["!freeze"] = { xSplit: 0, ySplit: 3 };
+  return ws;
 }
 
-function addSectionTitle(ws: ExcelJS.Worksheet, title: string, colSpan: number) {
-  const row = ws.addRow([title]);
-  ws.mergeCells(row.number, 1, row.number, colSpan);
-  const cell = row.getCell(1);
-  Object.assign(cell, { style: sectionStyle() });
-  row.height = 20;
-  return row;
-}
-
-function addTableHeader(ws: ExcelJS.Worksheet, headers: string[]) {
-  const row = ws.addRow(headers);
-  row.eachCell(cell => { Object.assign(cell, { style: hdrStyle(PURPLE) }); });
-  row.height = 22;
-  return row;
+function addSubSection(
+  aoa: (string | number | boolean)[][],
+  headers: string[],
+  rows: (string | number | boolean)[][]
+) {
+  aoa.push([], headers, ...rows);
 }
 
 function v(el: Element | null): string {
@@ -369,121 +326,83 @@ export default function BlogPage() {
     setShowDraftList(true);
   };
 
-  // ── DOWNLOAD EXCEL (ExcelJS — fully formatted) ───────────────────────────────
-  const downloadExcel = async () => {
+  // ── DOWNLOAD EXCEL (SheetJS/xlsx — already installed, no extra dependency) ──
+  const downloadExcel = () => {
     const div = contentRef.current;
     if (!div) return;
 
-    const wb = new ExcelJS.Workbook();
-    wb.creator = "TechVerseImprove";
-    wb.created = new Date();
+    const wb = XLSX.utils.book_new();
 
-    // ── Helper: add a field row (Label | Value) ─────────────────────────────
-    const addField = (ws: ExcelJS.Worksheet, label: string, value: string, even = false) => {
-      const row = ws.addRow([label, value]);
-      row.getCell(1).style = labelStyle();
-      row.getCell(2).style = dataStyle(even);
-      row.height = 18;
-    };
+    // ── Sheet 1: Project Overview ─────────────────────────────────────────
+    const s1 = makeWs(
+      "CONTROLS PROJECT ALLOCATION & ASSIGNMENT",
+      ["Field", "Value"],
+      [
+        ["Project Name",          v(div.querySelector("#f_projectName"))],
+        ["Project Code",          v(div.querySelector("#f_projectCode"))],
+        ["Client / Facility",     v(div.querySelector("#f_client"))],
+        ["Project Manager",       v(div.querySelector("#f_projectManager"))],
+        ["Start Date",            v(div.querySelector("#f_startDate"))],
+        ["Target Completion",     v(div.querySelector("#f_completionDate"))],
+        ["Budget Allocation",     v(div.querySelector("#f_budget"))],
+        ["Prepared By",           v(div.querySelector("#f_preparedBy"))],
+        ["Approved By",           v(div.querySelector("#f_approvedBy"))],
+        ["Document Date",         v(div.querySelector("#f_docDate"))],
+        ["Project Type",          checkboxGroup(div, "f_projType")],
+        ["Priority Level",        radioVal(div, "f_priority")],
+        ["Safety Classification", radioVal(div, "f_safety")],
+      ],
+      [30, 55]
+    );
+    XLSX.utils.book_append_sheet(wb, s1, "1. Project Overview");
 
-    // ── SHEET 1: Project Overview ───────────────────────────────────────────
-    const ws1 = wb.addWorksheet("1. Project Overview");
-    ws1.columns = [{ width: 28 }, { width: 50 }];
-
-    // Title banner
-    ws1.addRow(["Controls Project Allocation & Assignment"]);
-    ws1.mergeCells(1, 1, 1, 2);
-    const titleCell = ws1.getCell(1, 1);
-    titleCell.style = {
-      font: { bold: true, size: 14, color: { argb: WHITE }, name: "Arial" },
-      fill: { type: "pattern", pattern: "solid", fgColor: { argb: DPURPLE } },
-      alignment: { horizontal: "center", vertical: "middle" },
-    };
-    ws1.getRow(1).height = 30;
-
-    addSectionTitle(ws1, "PROJECT OVERVIEW", 2);
-
-    const projFields: [string, string][] = [
-      ["Project Name",     v(div.querySelector("#f_projectName"))],
-      ["Project Code",     v(div.querySelector("#f_projectCode"))],
-      ["Client / Facility",v(div.querySelector("#f_client"))],
-      ["Project Manager",  v(div.querySelector("#f_projectManager"))],
-      ["Start Date",       v(div.querySelector("#f_startDate"))],
-      ["Target Completion",v(div.querySelector("#f_completionDate"))],
-      ["Budget Allocation",v(div.querySelector("#f_budget"))],
-      ["Prepared By",      v(div.querySelector("#f_preparedBy"))],
-      ["Approved By",      v(div.querySelector("#f_approvedBy"))],
-      ["Document Date",    v(div.querySelector("#f_docDate"))],
-      ["Project Type",     checkboxGroup(div, "f_projType")],
-      ["Priority Level",   radioVal(div, "f_priority")],
-      ["Safety Classification", radioVal(div, "f_safety")],
-    ];
-    projFields.forEach(([label, val], i) => addField(ws1, label, val, i % 2 === 1));
-
-    // ── SHEET 2: Scope & Systems ───────────────────────────────────────────
-    const ws2 = wb.addWorksheet("2. Scope & Systems");
-    ws2.columns = [{ width: 6 }, { width: 32 }, { width: 12 }, { width: 40 }, { width: 30 }];
-
-    addSectionTitle(ws2, "PROJECT SCOPE & TECHNICAL REQUIREMENTS", 5);
-
-    // Automation systems sub-table
-    ws2.addRow(["AUTOMATION SYSTEMS INVOLVED"]);
-    ws2.mergeCells(ws2.rowCount, 1, ws2.rowCount, 5);
-    ws2.getRow(ws2.rowCount).getCell(1).style = {
-      font: { bold: true, size: 10, color: { argb: NAVY }, name: "Arial" },
-      fill: { type: "pattern", pattern: "solid", fgColor: { argb: LGRAY } },
-      border: allBorders,
-    };
-
-    addTableHeader(ws2, ["#", "System / Scope", "Included", "Brand / Standard / Details"]);
-
+    // ── Sheet 2: Scope & Systems ──────────────────────────────────────────
     const SYSTEMS: [string, string, string][] = [
-      ["f_sys_plc", "PLC Programming",          "f_sys_plc_note"],
-      ["f_sys_hmi", "HMI / SCADA Development",  "f_sys_hmi_note"],
-      ["f_sys_mcs", "Motor Control Systems",     "f_sys_mcs_note"],
-      ["f_sys_ins", "Instrumentation & Sensors", "f_sys_ins_note"],
-      ["f_sys_net", "Industrial Networks",        "f_sys_net_note"],
-      ["f_sys_saf", "Safety Systems (SIL)",      "f_sys_saf_note"],
-      ["f_sys_pcs", "Process Control Systems",   "f_sys_pcs_note"],
-      ["f_sys_rob", "Robotics Integration",      "f_sys_rob_note"],
-      ["f_sys_vis", "Vision Systems",            "f_sys_vis_note"],
-      ["f_sys_drv", "Drive Systems (VFDs/Servo)","f_sys_drv_note"],
+      ["f_sys_plc","PLC Programming",           "f_sys_plc_note"],
+      ["f_sys_hmi","HMI / SCADA Development",   "f_sys_hmi_note"],
+      ["f_sys_mcs","Motor Control Systems",      "f_sys_mcs_note"],
+      ["f_sys_ins","Instrumentation & Sensors",  "f_sys_ins_note"],
+      ["f_sys_net","Industrial Networks",         "f_sys_net_note"],
+      ["f_sys_saf","Safety Systems (SIL Rated)", "f_sys_saf_note"],
+      ["f_sys_pcs","Process Control Systems",    "f_sys_pcs_note"],
+      ["f_sys_rob","Robotics Integration",       "f_sys_rob_note"],
+      ["f_sys_vis","Vision Systems",             "f_sys_vis_note"],
+      ["f_sys_drv","Drive Systems (VFDs/Servo)", "f_sys_drv_note"],
     ];
-    SYSTEMS.forEach(([cbId, label, noteId], i) => {
-      const checked = div.querySelector<HTMLInputElement>(`#${cbId}`)?.checked ?? false;
-      const note    = v(div.querySelector(`#${noteId}`));
-      const even    = i % 2 === 1;
-      const row     = ws2.addRow([i + 1, label, checked ? "✔ Yes" : "—", note]);
-      row.getCell(1).style = { ...labelStyle(), alignment: { horizontal: "center", vertical: "middle" } };
-      row.getCell(2).style = labelStyle();
-      row.getCell(3).style = checkStyle(checked, even);
-      row.getCell(4).style = dataStyle(even);
-      row.height = 16;
-    });
+    const sysRows = SYSTEMS.map(([cbId, label, noteId], i) => [
+      i + 1,
+      label,
+      div.querySelector<HTMLInputElement>(`#${cbId}`)?.checked ? "Yes" : "No",
+      v(div.querySelector(`#${noteId}`)),
+    ]);
+    const delRows: (string | number)[][] = [];
+    for (let i = 1; i <= 5; i++) delRows.push([i, v(div.querySelector(`#f_del${i}`))]);
 
-    // Key Deliverables
-    ws2.addRow([]);
-    ws2.addRow(["KEY DELIVERABLES"]);
-    ws2.mergeCells(ws2.rowCount, 1, ws2.rowCount, 5);
-    ws2.getRow(ws2.rowCount).getCell(1).style = labelStyle();
+    const s2aoa: (string | number)[][] = [
+      ["PROJECT SCOPE & TECHNICAL REQUIREMENTS"],
+      [],
+      ["AUTOMATION SYSTEMS INVOLVED"],
+      ["#", "System / Scope", "Included", "Brand / Standard / Details"],
+      ...sysRows,
+      [],
+      ["KEY DELIVERABLES"],
+      ["#", "Description"],
+      ...delRows,
+    ];
+    const s2 = XLSX.utils.aoa_to_sheet(s2aoa);
+    s2["!cols"] = [{ wch: 6 }, { wch: 34 }, { wch: 10 }, { wch: 45 }];
+    s2["!merges"] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 3 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 3 } },
+      { s: { r: 14, c: 0 }, e: { r: 14, c: 3 } },
+    ];
+    XLSX.utils.book_append_sheet(wb, s2, "2. Scope & Systems");
 
-    for (let i = 1; i <= 5; i++) {
-      const val = v(div.querySelector(`#f_del${i}`));
-      const row = ws2.addRow([`${i}.`, val]);
-      ws2.mergeCells(row.number, 2, row.number, 5);
-      row.getCell(1).style = { ...labelStyle(), alignment: { horizontal: "center", vertical: "middle" } };
-      row.getCell(2).style = dataStyle(i % 2 === 1);
-      row.height = 18;
-    }
-
-    // ── SHEET 3: Team Assignment ───────────────────────────────────────────
-    const ws3 = wb.addWorksheet("3. Team Assignment");
-    ws3.columns = [{ width: 22 }, { width: 24 }, { width: 28 }, { width: 8 }, { width: 12 }, { width: 12 }, { width: 26 }];
-    addSectionTitle(ws3, "TEAM ASSIGNMENT MATRIX", 7);
-    addTableHeader(ws3, ["Team Member", "Role / Specialization", "Primary Tasks", "Hours", "Start Date", "End Date", "Dependencies"]);
-    for (let i = 0; i < 6; i++) {
-      const even = i % 2 === 1;
-      const row = ws3.addRow([
+    // ── Sheet 3: Team Assignment ──────────────────────────────────────────
+    const s3 = makeWs(
+      "TEAM ASSIGNMENT MATRIX",
+      ["Team Member","Role / Specialization","Primary Tasks","Hours","Start Date","End Date","Dependencies"],
+      Array.from({ length: 6 }, (_, i) => [
         v(div.querySelector(`#f_tm${i}_name`)),
         v(div.querySelector(`#f_tm${i}_role`)),
         v(div.querySelector(`#f_tm${i}_tasks`)),
@@ -491,230 +410,159 @@ export default function BlogPage() {
         v(div.querySelector(`#f_tm${i}_start`)),
         v(div.querySelector(`#f_tm${i}_end`)),
         v(div.querySelector(`#f_tm${i}_dep`)),
-      ]);
-      row.eachCell(cell => { cell.style = dataStyle(even); });
-      row.height = 20;
-    }
+      ]),
+      [22, 24, 28, 8, 12, 12, 26]
+    );
+    XLSX.utils.book_append_sheet(wb, s3, "3. Team Assignment");
 
-    // ── SHEET 4: Skill Requirements ────────────────────────────────────────
-    const ws4 = wb.addWorksheet("4. Skill Requirements");
-    ws4.columns = [{ width: 36 }, { width: 22 }, { width: 22 }, { width: 30 }];
-    addSectionTitle(ws4, "SKILL REQUIREMENTS & CERTIFICATIONS", 4);
-    addTableHeader(ws4, ["Certification", "Assigned Team Member", "Status", "Notes"]);
+    // ── Sheet 4: Skill Requirements ───────────────────────────────────────
     const SKILLS = [
-      "PLC Programming (Brand Specific)",
-      "HMI Development",
-      "Industrial Safety Certification",
-      "Electrical Installation",
-      "Instrumentation Calibration",
-      "Network Configuration",
-      "Client Site Access / Clearance",
+      "PLC Programming (Brand Specific)","HMI Development",
+      "Industrial Safety Certification","Electrical Installation",
+      "Instrumentation Calibration","Network Configuration","Client Site Access / Clearance",
     ];
-    SKILLS.forEach((skill, i) => {
-      const even = i % 2 === 1;
-      const row = ws4.addRow([
-        skill,
+    const s4 = makeWs(
+      "SKILL REQUIREMENTS & CERTIFICATIONS",
+      ["Certification","Assigned Team Member","Status","Notes"],
+      SKILLS.map((sk, i) => [
+        sk,
         v(div.querySelector(`#f_sk${i}_member`)),
         radioVal(div, `f_sk${i}_status`),
         v(div.querySelector(`#f_sk${i}_notes`)),
-      ]);
-      row.getCell(1).style = labelStyle();
-      row.getCell(2).style = dataStyle(even);
-      row.getCell(3).style = {
-        ...dataStyle(even),
-        font: { size: 10, name: "Arial", bold: true,
-          color: { argb: radioVal(div, `f_sk${i}_status`) === "Verified" ? "FF2E7D32" : "FFE65100" } },
-      };
-      row.getCell(4).style = dataStyle(even);
-      row.height = 18;
-    });
+      ]),
+      [36, 24, 20, 32]
+    );
+    XLSX.utils.book_append_sheet(wb, s4, "4. Skill Requirements");
 
-    // ── SHEET 5: Project Phases ────────────────────────────────────────────
-    const ws5 = wb.addWorksheet("5. Project Phases");
-    ws5.columns = [{ width: 30 }, { width: 20 }, { width: 10 }, { width: 12 }, { width: 12 }, { width: 18 }, { width: 28 }];
-    addSectionTitle(ws5, "PROJECT PHASES & MILESTONES", 7);
-
-    const phaseHdr = (label: string) => {
-      const row = ws5.addRow([label]);
-      ws5.mergeCells(row.number, 1, row.number, 7);
-      row.getCell(1).style = hdrStyle(DPURPLE);
-      row.height = 20;
-    };
-
-    const addPhaseRows = (tasks: [string, string, string, string, string, string, string][]) => {
-      addTableHeader(ws5, ["Task", "Assigned To", "Duration", "Start Date", "End Date", "Status", "Notes"]);
-      tasks.forEach(([task, to, dur, start, end, status, notes], i) => {
-        const even = i % 2 === 1;
-        const row = ws5.addRow([task, to, dur, start, end, status, notes]);
-        row.getCell(1).style = labelStyle();
-        for (let c = 2; c <= 7; c++) {
-          row.getCell(c).style = dataStyle(even);
-        }
-        // Status color
-        const stColor = status === "Complete" ? "FF2E7D32" : status === "In Progress" ? "FF1565C0" : "FF666666";
-        row.getCell(6).style = { ...dataStyle(even), font: { bold: true, size: 10, name: "Arial", color: { argb: stColor } } };
-        row.height = 18;
-      });
-    };
-
-    phaseHdr("PHASE 1: DESIGN & ENGINEERING");
-    addPhaseRows([
+    // ── Sheet 5: Project Phases ───────────────────────────────────────────
+    const phaseHdr = ["Task","Assigned To","Duration","Start Date","End Date","Status","Notes"];
+    const p1rows = [
       ["System Architecture Design", v(div.querySelector("#f_p1_arch_to")), v(div.querySelector("#f_p1_arch_dur")), v(div.querySelector("#f_p1_arch_start")), v(div.querySelector("#f_p1_arch_end")), radioVal(div,"f_p1_arch_st"), v(div.querySelector("#f_p1_arch_notes"))],
       ["I/O List Development",        v(div.querySelector("#f_p1_io_to")),   v(div.querySelector("#f_p1_io_dur")),   v(div.querySelector("#f_p1_io_start")),   v(div.querySelector("#f_p1_io_end")),   radioVal(div,"f_p1_io_st"),   v(div.querySelector("#f_p1_io_notes"))],
       ["Control Logic Design",         v(div.querySelector("#f_p1_ctrl_to")),v(div.querySelector("#f_p1_ctrl_dur")),v(div.querySelector("#f_p1_ctrl_start")),v(div.querySelector("#f_p1_ctrl_end")),radioVal(div,"f_p1_ctrl_st"),v(div.querySelector("#f_p1_ctrl_notes"))],
       ["HMI Screen Design",            v(div.querySelector("#f_p1_hmi_to")), v(div.querySelector("#f_p1_hmi_dur")), v(div.querySelector("#f_p1_hmi_start")), v(div.querySelector("#f_p1_hmi_end")), radioVal(div,"f_p1_hmi_st"), v(div.querySelector("#f_p1_hmi_notes"))],
       ["Safety System Design",         v(div.querySelector("#f_p1_saf_to")), v(div.querySelector("#f_p1_saf_dur")), v(div.querySelector("#f_p1_saf_start")), v(div.querySelector("#f_p1_saf_end")), radioVal(div,"f_p1_saf_st"), v(div.querySelector("#f_p1_saf_notes"))],
-    ]);
-
-    ws5.addRow([]);
-    phaseHdr("PHASE 2: DEVELOPMENT & TESTING");
-    addPhaseRows([
+    ];
+    const p2rows = [
       ["PLC Program Development", v(div.querySelector("#f_p2_plc_to")),v(div.querySelector("#f_p2_plc_dur")),v(div.querySelector("#f_p2_plc_start")),v(div.querySelector("#f_p2_plc_end")),radioVal(div,"f_p2_plc_st"),v(div.querySelector("#f_p2_plc_notes"))],
       ["HMI Development",          v(div.querySelector("#f_p2_hmi_to")),v(div.querySelector("#f_p2_hmi_dur")),v(div.querySelector("#f_p2_hmi_start")),v(div.querySelector("#f_p2_hmi_end")),radioVal(div,"f_p2_hmi_st"),v(div.querySelector("#f_p2_hmi_notes"))],
       ["Simulation Testing",        v(div.querySelector("#f_p2_sim_to")),v(div.querySelector("#f_p2_sim_dur")),v(div.querySelector("#f_p2_sim_start")),v(div.querySelector("#f_p2_sim_end")),radioVal(div,"f_p2_sim_st"),v(div.querySelector("#f_p2_sim_notes"))],
       ["FAT Preparation",           v(div.querySelector("#f_p2_fat_to")),v(div.querySelector("#f_p2_fat_dur")),v(div.querySelector("#f_p2_fat_start")),v(div.querySelector("#f_p2_fat_end")),radioVal(div,"f_p2_fat_st"),v(div.querySelector("#f_p2_fat_notes"))],
       ["Documentation Creation",    v(div.querySelector("#f_p2_doc_to")),v(div.querySelector("#f_p2_doc_dur")),v(div.querySelector("#f_p2_doc_start")),v(div.querySelector("#f_p2_doc_end")),radioVal(div,"f_p2_doc_st"),v(div.querySelector("#f_p2_doc_notes"))],
-    ]);
-
-    ws5.addRow([]);
-    phaseHdr("PHASE 3: INSTALLATION & COMMISSIONING");
-    addPhaseRows([
+    ];
+    const p3rows = [
       ["Hardware Installation",      v(div.querySelector("#f_p3_hw_to")), v(div.querySelector("#f_p3_hw_dur")), v(div.querySelector("#f_p3_hw_start")), v(div.querySelector("#f_p3_hw_end")), radioVal(div,"f_p3_hw_st"), v(div.querySelector("#f_p3_hw_notes"))],
       ["System Wiring",              v(div.querySelector("#f_p3_wir_to")),v(div.querySelector("#f_p3_wir_dur")),v(div.querySelector("#f_p3_wir_start")),v(div.querySelector("#f_p3_wir_end")),radioVal(div,"f_p3_wir_st"),v(div.querySelector("#f_p3_wir_notes"))],
       ["Software Download & Config", v(div.querySelector("#f_p3_sw_to")), v(div.querySelector("#f_p3_sw_dur")), v(div.querySelector("#f_p3_sw_start")), v(div.querySelector("#f_p3_sw_end")), radioVal(div,"f_p3_sw_st"), v(div.querySelector("#f_p3_sw_notes"))],
       ["System Integration Testing", v(div.querySelector("#f_p3_sit_to")),v(div.querySelector("#f_p3_sit_dur")),v(div.querySelector("#f_p3_sit_start")),v(div.querySelector("#f_p3_sit_end")),radioVal(div,"f_p3_sit_st"),v(div.querySelector("#f_p3_sit_notes"))],
       ["Operator Training",          v(div.querySelector("#f_p3_trn_to")),v(div.querySelector("#f_p3_trn_dur")),v(div.querySelector("#f_p3_trn_start")),v(div.querySelector("#f_p3_trn_end")),radioVal(div,"f_p3_trn_st"),v(div.querySelector("#f_p3_trn_notes"))],
       ["System Handover",            v(div.querySelector("#f_p3_hnd_to")),v(div.querySelector("#f_p3_hnd_dur")),v(div.querySelector("#f_p3_hnd_start")),v(div.querySelector("#f_p3_hnd_end")),radioVal(div,"f_p3_hnd_st"),v(div.querySelector("#f_p3_hnd_notes"))],
-    ]);
+    ];
+    const s5aoa = [
+      ["PROJECT PHASES & MILESTONES"],
+      [],
+      ["▶ PHASE 1: DESIGN & ENGINEERING"],
+      phaseHdr, ...p1rows,
+      [],
+      ["▶ PHASE 2: DEVELOPMENT & TESTING"],
+      phaseHdr, ...p2rows,
+      [],
+      ["▶ PHASE 3: INSTALLATION & COMMISSIONING"],
+      phaseHdr, ...p3rows,
+    ];
+    const s5 = XLSX.utils.aoa_to_sheet(s5aoa);
+    s5["!cols"] = [{ wch: 30 }, { wch: 20 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 28 }];
+    s5["!merges"] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 6 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 6 } },
+      { s: { r: 9, c: 0 }, e: { r: 9, c: 6 } },
+      { s: { r: 16, c: 0 }, e: { r: 16, c: 6 } },
+    ];
+    XLSX.utils.book_append_sheet(wb, s5, "5. Project Phases");
 
-    // ── SHEET 6: Resources ────────────────────────────────────────────────
-    const ws6 = wb.addWorksheet("6. Resources");
-    ws6.columns = [{ width: 32 }, { width: 8 }, { width: 22 }, { width: 14 }, { width: 18 }];
-    addSectionTitle(ws6, "RESOURCE REQUIREMENTS — EQUIPMENT & TOOLS", 5);
-    addTableHeader(ws6, ["Item", "Qty", "Assigned To", "Required Date", "Status"]);
-    const EQ_ITEMS = ["Laptop / Programming Software", "PLC Hardware", "Test Equipment (Multimeter etc.)", "Safety Equipment (PPE)", "Vehicle / Transportation"];
-    EQ_ITEMS.forEach((item, i) => {
-      const even = i % 2 === 1;
-      const row = ws6.addRow([item, v(div.querySelector(`#f_eq${i}_qty`)), v(div.querySelector(`#f_eq${i}_to`)), v(div.querySelector(`#f_eq${i}_reqdate`)), radioVal(div, `f_eq${i}_st`)]);
-      row.getCell(1).style = labelStyle();
-      for (let c = 2; c <= 5; c++) row.getCell(c).style = dataStyle(even);
-      row.height = 18;
-    });
+    // ── Sheet 6: Resources ────────────────────────────────────────────────
+    const EQ_NAMES = ["Laptop / Programming Software","PLC Hardware","Test Equipment (Multimeter etc.)","Safety Equipment (PPE)","Vehicle / Transportation"];
+    const s6aoa = [
+      ["RESOURCE REQUIREMENTS"],
+      [],
+      ["EQUIPMENT & TOOLS"],
+      ["Item","Qty","Assigned To","Required Date","Status"],
+      ...EQ_NAMES.map((name, i) => [name, v(div.querySelector(`#f_eq${i}_qty`)), v(div.querySelector(`#f_eq${i}_to`)), v(div.querySelector(`#f_eq${i}_reqdate`)), radioVal(div, `f_eq${i}_st`)]),
+      [],
+      ["SOFTWARE LICENSES"],
+      ["Software","Version","Assigned User","License Status","Expiry Date"],
+      ...Array.from({ length: 3 }, (_, i) => [v(div.querySelector(`#f_sw${i}_name`)), v(div.querySelector(`#f_sw${i}_ver`)), v(div.querySelector(`#f_sw${i}_user`)), radioVal(div, `f_sw${i}_st`), v(div.querySelector(`#f_sw${i}_expiry`))]),
+    ];
+    const s6 = XLSX.utils.aoa_to_sheet(s6aoa);
+    s6["!cols"] = [{ wch: 34 }, { wch: 8 }, { wch: 22 }, { wch: 14 }, { wch: 18 }];
+    s6["!merges"] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 4 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 4 } },
+      { s: { r: 9, c: 0 }, e: { r: 9, c: 4 } },
+    ];
+    XLSX.utils.book_append_sheet(wb, s6, "6. Resources");
 
-    ws6.addRow([]);
-    ws6.columns = [{ width: 32 }, { width: 14 }, { width: 22 }, { width: 18 }, { width: 14 }];
-    addSectionTitle(ws6, "SOFTWARE LICENSES", 5);
-    addTableHeader(ws6, ["Software", "Version", "Assigned User", "License Status", "Expiry Date"]);
-    for (let i = 0; i < 3; i++) {
-      const even = i % 2 === 1;
-      const row = ws6.addRow([v(div.querySelector(`#f_sw${i}_name`)), v(div.querySelector(`#f_sw${i}_ver`)), v(div.querySelector(`#f_sw${i}_user`)), radioVal(div, `f_sw${i}_st`), v(div.querySelector(`#f_sw${i}_expiry`))]);
-      row.eachCell(cell => { cell.style = dataStyle(even); });
-      row.height = 18;
-    }
+    // ── Sheet 7: Communication ────────────────────────────────────────────
+    const STAKEHOLDERS = ["Client Project Manager","Site Supervisor","Operations Manager","Maintenance Team Lead"];
+    const s7 = makeWs(
+      "COMMUNICATION PLAN",
+      ["Stakeholder","Role","Contact Method","Frequency","Assigned Team Member"],
+      STAKEHOLDERS.map((sh, i) => [sh, v(div.querySelector(`#f_comm${i}_role`)), v(div.querySelector(`#f_comm${i}_contact`)), v(div.querySelector(`#f_comm${i}_freq`)), v(div.querySelector(`#f_comm${i}_member`))]),
+      [28, 22, 24, 16, 26]
+    );
+    XLSX.utils.book_append_sheet(wb, s7, "7. Communication");
 
-    // ── SHEET 7: Communication Plan ───────────────────────────────────────
-    const ws7 = wb.addWorksheet("7. Communication");
-    ws7.columns = [{ width: 28 }, { width: 22 }, { width: 24 }, { width: 16 }, { width: 24 }];
-    addSectionTitle(ws7, "COMMUNICATION PLAN", 5);
-    addTableHeader(ws7, ["Stakeholder", "Role", "Contact Method", "Frequency", "Assigned Team Member"]);
-    const STAKEHOLDERS = ["Client Project Manager", "Site Supervisor", "Operations Manager", "Maintenance Team Lead"];
-    STAKEHOLDERS.forEach((sh, i) => {
-      const even = i % 2 === 1;
-      const row = ws7.addRow([sh, v(div.querySelector(`#f_comm${i}_role`)), v(div.querySelector(`#f_comm${i}_contact`)), v(div.querySelector(`#f_comm${i}_freq`)), v(div.querySelector(`#f_comm${i}_member`))]);
-      row.getCell(1).style = labelStyle();
-      for (let c = 2; c <= 5; c++) row.getCell(c).style = dataStyle(even);
-      row.height = 18;
-    });
+    // ── Sheet 8: Risk Assessment ──────────────────────────────────────────
+    const RISKS = ["Equipment Delivery Delays","Site Access Restrictions","Technical Skill Gaps","Safety Incidents"];
+    const s8 = makeWs(
+      "RISK ASSESSMENT & MITIGATION",
+      ["Risk Factor","Probability","Impact","Mitigation Strategy","Responsible Person"],
+      RISKS.map((r, i) => [r, radioVal(div, `f_risk${i}_prob`), radioVal(div, `f_risk${i}_impact`), v(div.querySelector(`#f_risk${i}_mit`)), v(div.querySelector(`#f_risk${i}_resp`))]),
+      [30, 14, 14, 36, 24]
+    );
+    XLSX.utils.book_append_sheet(wb, s8, "8. Risk Assessment");
 
-    // ── SHEET 8: Risk Assessment ──────────────────────────────────────────
-    const ws8 = wb.addWorksheet("8. Risk Assessment");
-    ws8.columns = [{ width: 30 }, { width: 14 }, { width: 14 }, { width: 32 }, { width: 22 }];
-    addSectionTitle(ws8, "RISK ASSESSMENT & MITIGATION", 5);
-    addTableHeader(ws8, ["Risk Factor", "Probability", "Impact", "Mitigation Strategy", "Responsible Person"]);
-    const RISKS = ["Equipment Delivery Delays", "Site Access Restrictions", "Technical Skill Gaps", "Safety Incidents"];
-    RISKS.forEach((risk, i) => {
-      const even = i % 2 === 1;
-      const prob   = radioVal(div, `f_risk${i}_prob`);
-      const impact = radioVal(div, `f_risk${i}_impact`);
-      const probColor   = prob   === "High" ? "FFB71C1C" : prob   === "Medium" ? "FFE65100" : "FF2E7D32";
-      const impactColor = impact === "High" ? "FFB71C1C" : impact === "Medium" ? "FFE65100" : "FF2E7D32";
-      const row = ws8.addRow([risk, prob, impact, v(div.querySelector(`#f_risk${i}_mit`)), v(div.querySelector(`#f_risk${i}_resp`))]);
-      row.getCell(1).style = labelStyle();
-      row.getCell(2).style = { ...dataStyle(even), font: { bold: true, size: 10, name: "Arial", color: { argb: prob ? probColor : "FF999999" } }, alignment: { horizontal: "center", vertical: "middle" } };
-      row.getCell(3).style = { ...dataStyle(even), font: { bold: true, size: 10, name: "Arial", color: { argb: impact ? impactColor : "FF999999" } }, alignment: { horizontal: "center", vertical: "middle" } };
-      row.getCell(4).style = dataStyle(even);
-      row.getCell(5).style = dataStyle(even);
-      row.height = 20;
-    });
-
-    // ── SHEET 9: QA Checklist ─────────────────────────────────────────────
-    const ws9 = wb.addWorksheet("9. QA Checklist");
-    ws9.columns = [{ width: 34 }, { width: 14 }, { width: 34 }, { width: 14 }, { width: 34 }, { width: 14 }];
-    addSectionTitle(ws9, "QUALITY ASSURANCE CHECKLIST", 6);
-
-    // Three-column header
-    const qaHdrRow = ws9.addRow(["Design Review", "", "Testing & Validation", "", "Documentation", ""]);
-    [1, 3, 5].forEach(c => {
-      ws9.mergeCells(qaHdrRow.number, c, qaHdrRow.number, c + 1);
-      qaHdrRow.getCell(c).style = hdrStyle(DPURPLE);
-    });
-    qaHdrRow.height = 20;
-
+    // ── Sheet 9: QA Checklist ─────────────────────────────────────────────
     const DR  = ["System architecture reviewed and approved","Safety systems validated","Client requirements verified","Code standards compliance checked"];
     const TV  = ["Unit testing completed","Integration testing passed","FAT successfully conducted","Performance benchmarks met"];
     const DC  = ["As-built drawings updated","Operation manuals completed","Maintenance procedures documented","Training materials prepared"];
-    const DR_IDS = ["f_qa_dr0","f_qa_dr1","f_qa_dr2","f_qa_dr3"];
-    const TV_IDS = ["f_qa_tv0","f_qa_tv1","f_qa_tv2","f_qa_tv3"];
-    const DC_IDS = ["f_qa_dc0","f_qa_dc1","f_qa_dc2","f_qa_dc3"];
+    const s9aoa = [
+      ["QUALITY ASSURANCE CHECKLIST"],
+      [],
+      ["Design Review","Status","Testing & Validation","Status","Documentation","Status"],
+      ...DR.map((item, i) => [
+        item, isChecked(div, `f_qa_dr${i}`) ? "✔ Done" : "Pending",
+        TV[i], isChecked(div, `f_qa_tv${i}`) ? "✔ Done" : "Pending",
+        DC[i], isChecked(div, `f_qa_dc${i}`) ? "✔ Done" : "Pending",
+      ]),
+    ];
+    const s9 = XLSX.utils.aoa_to_sheet(s9aoa);
+    s9["!cols"] = [{ wch: 36 }, { wch: 12 }, { wch: 36 }, { wch: 12 }, { wch: 36 }, { wch: 12 }];
+    s9["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }];
+    XLSX.utils.book_append_sheet(wb, s9, "9. QA Checklist");
 
-    DR.forEach((item, i) => {
-      const c1 = isChecked(div, DR_IDS[i]);
-      const c2 = isChecked(div, TV_IDS[i]);
-      const c3 = isChecked(div, DC_IDS[i]);
-      const even = i % 2 === 1;
-      const row = ws9.addRow([item, c1 ? "✔" : "☐", TV[i], c2 ? "✔" : "☐", DC[i], c3 ? "✔" : "☐"]);
-      row.getCell(1).style = dataStyle(even);
-      row.getCell(2).style = checkStyle(c1, even);
-      row.getCell(3).style = dataStyle(even);
-      row.getCell(4).style = checkStyle(c2, even);
-      row.getCell(5).style = dataStyle(even);
-      row.getCell(6).style = checkStyle(c3, even);
-      row.height = 18;
-    });
+    // ── Sheet 10: Project Status ──────────────────────────────────────────
+    const s10aoa = [
+      ["PROJECT STATUS TRACKING"],
+      [],
+      ["WEEKLY PROGRESS REPORT"],
+      ["Week Ending","Progress %","Issues / Blockers","Next Week Priorities","Team Member Updates"],
+      ...Array.from({ length: 3 }, (_, i) => [v(div.querySelector(`#f_wk${i}_end`)), v(div.querySelector(`#f_wk${i}_pct`)), v(div.querySelector(`#f_wk${i}_issues`)), v(div.querySelector(`#f_wk${i}_pri`)), v(div.querySelector(`#f_wk${i}_updates`))]),
+      [],
+      ["CHANGE MANAGEMENT"],
+      ["CR #","Date","Requested By","Description","Impact Assessment","Approval Status","Impl. Date"],
+      ...Array.from({ length: 3 }, (_, i) => [v(div.querySelector(`#f_cr${i}_num`)), v(div.querySelector(`#f_cr${i}_date`)), v(div.querySelector(`#f_cr${i}_by`)), v(div.querySelector(`#f_cr${i}_desc`)), v(div.querySelector(`#f_cr${i}_impact`)), radioVal(div, `f_cr${i}_st`), v(div.querySelector(`#f_cr${i}_impl`))]),
+    ];
+    const s10 = XLSX.utils.aoa_to_sheet(s10aoa);
+    s10["!cols"] = [{ wch: 14 }, { wch: 12 }, { wch: 28 }, { wch: 28 }, { wch: 28 }, { wch: 16 }, { wch: 12 }];
+    s10["!merges"] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 6 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 6 } },
+      { s: { r: 7, c: 0 }, e: { r: 7, c: 6 } },
+    ];
+    XLSX.utils.book_append_sheet(wb, s10, "10. Project Status");
 
-    // ── SHEET 10: Project Status ──────────────────────────────────────────
-    const ws10 = wb.addWorksheet("10. Project Status");
-    ws10.columns = [{ width: 14 }, { width: 12 }, { width: 28 }, { width: 28 }, { width: 28 }];
-    addSectionTitle(ws10, "PROJECT STATUS TRACKING — WEEKLY PROGRESS", 5);
-    addTableHeader(ws10, ["Week Ending", "Progress %", "Issues / Blockers", "Next Week Priorities", "Team Member Updates"]);
-    for (let i = 0; i < 3; i++) {
-      const even = i % 2 === 1;
-      const row = ws10.addRow([v(div.querySelector(`#f_wk${i}_end`)), v(div.querySelector(`#f_wk${i}_pct`)), v(div.querySelector(`#f_wk${i}_issues`)), v(div.querySelector(`#f_wk${i}_pri`)), v(div.querySelector(`#f_wk${i}_updates`))]);
-      row.eachCell(cell => { cell.style = dataStyle(even); });
-      row.height = 22;
-    }
-
-    ws10.addRow([]);
-    ws10.columns = [{ width: 10 }, { width: 12 }, { width: 18 }, { width: 28 }, { width: 24 }, { width: 16 }, { width: 12 }];
-    addSectionTitle(ws10, "CHANGE MANAGEMENT", 7);
-    addTableHeader(ws10, ["CR #", "Date", "Requested By", "Description", "Impact Assessment", "Approval Status", "Impl. Date"]);
-    for (let i = 0; i < 3; i++) {
-      const even = i % 2 === 1;
-      const row = ws10.addRow([v(div.querySelector(`#f_cr${i}_num`)), v(div.querySelector(`#f_cr${i}_date`)), v(div.querySelector(`#f_cr${i}_by`)), v(div.querySelector(`#f_cr${i}_desc`)), v(div.querySelector(`#f_cr${i}_impact`)), radioVal(div, `f_cr${i}_st`), v(div.querySelector(`#f_cr${i}_impl`))]);
-      row.eachCell(cell => { cell.style = dataStyle(even); });
-      row.height = 20;
-    }
-
-    // ── SHEET 11: Project Closure ─────────────────────────────────────────
-    const ws11 = wb.addWorksheet("11. Project Closure");
-    ws11.columns = [{ width: 38 }, { width: 12 }, { width: 24 }, { width: 28 }, { width: 30 }, { width: 28 }];
-    addSectionTitle(ws11, "PROJECT CLOSURE", 6);
-
-    // Final deliverables checklist
-    ws11.addRow(["FINAL DELIVERABLES CHECKLIST"]);
-    ws11.mergeCells(ws11.rowCount, 1, ws11.rowCount, 6);
-    ws11.getRow(ws11.rowCount).getCell(1).style = labelStyle();
-
+    // ── Sheet 11: Project Closure ─────────────────────────────────────────
     const PC_ITEMS = [
       ["f_pc0","All systems tested and operational"],
       ["f_pc1","Client training completed"],
@@ -724,45 +572,28 @@ export default function BlogPage() {
       ["f_pc5","Project retrospective conducted"],
       ["f_pc6","Lessons learned documented"],
     ];
-    PC_ITEMS.forEach(([id, label], i) => {
-      const checked = isChecked(div, id);
-      const even = i % 2 === 1;
-      const row = ws11.addRow([label, checked ? "✔ Done" : "Pending"]);
-      ws11.mergeCells(row.number, 1, row.number, 5);
-      row.getCell(1).style = dataStyle(even);
-      row.getCell(2).style = checkStyle(checked, even);
-      row.height = 18;
-    });
+    const s11aoa = [
+      ["PROJECT CLOSURE"],
+      [],
+      ["FINAL DELIVERABLES CHECKLIST"],
+      ["Item","Status"],
+      ...PC_ITEMS.map(([id, label]) => [label, isChecked(div, id) ? "✔ Done" : "Pending"]),
+      [],
+      ["TEAM PERFORMANCE REVIEW"],
+      ["Team Member","Contributions","Performance Rating","Key Development Areas"],
+      ...Array.from({ length: 3 }, (_, i) => [v(div.querySelector(`#f_tp${i}_member`)), v(div.querySelector(`#f_tp${i}_contrib`)), radioVal(div, `f_tp${i}_rating`), v(div.querySelector(`#f_tp${i}_areas`))]),
+    ];
+    const s11 = XLSX.utils.aoa_to_sheet(s11aoa);
+    s11["!cols"] = [{ wch: 40 }, { wch: 14 }, { wch: 22 }, { wch: 32 }];
+    s11["!merges"] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 3 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 3 } },
+      { s: { r: 11, c: 0 }, e: { r: 11, c: 3 } },
+    ];
+    XLSX.utils.book_append_sheet(wb, s11, "11. Project Closure");
 
-    ws11.addRow([]);
-    ws11.addRow(["TEAM PERFORMANCE REVIEW"]);
-    ws11.mergeCells(ws11.rowCount, 1, ws11.rowCount, 6);
-    ws11.getRow(ws11.rowCount).getCell(1).style = labelStyle();
-    addTableHeader(ws11, ["Team Member", "Contributions", "Performance Rating", "Key Development Areas", "Next Project Suitability", ""]);
-    for (let i = 0; i < 3; i++) {
-      const even = i % 2 === 1;
-      const row = ws11.addRow([
-        v(div.querySelector(`#f_tp${i}_member`)),
-        v(div.querySelector(`#f_tp${i}_contrib`)),
-        radioVal(div, `f_tp${i}_rating`),
-        v(div.querySelector(`#f_tp${i}_areas`)),
-        "", "",
-      ]);
-      row.eachCell(cell => { cell.style = dataStyle(even); });
-      row.height = 22;
-    }
-
-    // ── Write & download ───────────────────────────────────────────────────
-    const buffer = await wb.xlsx.writeBuffer();
-    const blob   = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-    const url    = URL.createObjectURL(blob);
-    const a      = document.createElement("a");
-    a.href       = url;
-    a.download   = (selected?.title || "project").replace(/[^a-zA-Z0-9]/g, "_") + ".xlsx";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    // ── Write & trigger download ──────────────────────────────────────────
+    XLSX.writeFile(wb, (selected?.title || "project").replace(/[^a-zA-Z0-9]/g, "_") + ".xlsx");
   };
 
   // ── Detail view ─────────────────────────────────────────────────────────────
