@@ -9,6 +9,9 @@ import {
   Search, ChevronLeft, Edit2, Lock, Unlock,
 } from "lucide-react";
 import { Download } from "lucide-react";
+import * as XLSX from "xlsx";
+import { Download } from "lucide-react";  // add Download to existing lucide import
+import { useRef } from "react";            // add useRef to existing react import
 
 const CATEGORIES = ["All", "PLC", "HMI", "SCADA", "Project Update", "Training", "General"];
 
@@ -76,6 +79,7 @@ export default function BlogPage() {
   const [loginErr,     setLoginErr]     = useState(false);
   const [loginLoading, setLoginLoading] = useState(false);
   const [adminUsers,   setAdminUsers]   = useState<{username:string;password:string;name?:string}[]>([]);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   const loadAdmins = async () => {
     setLoginLoading(true);
@@ -176,6 +180,54 @@ export default function BlogPage() {
     setTagInput("");
   };
 
+  const downloadExcel = () => {
+  const div = contentRef.current;
+  if (!div) return;
+
+  // Named fields
+  const fieldLabels: Record<string, string> = {
+    f_projectName: "Project Name", f_projectCode: "Project Code",
+    f_client: "Client/Facility", f_projectManager: "Project Manager",
+    f_startDate: "Start Date", f_completionDate: "Completion Date",
+    f_budget: "Budget", f_priority: "Priority",
+    f_preparedBy: "Prepared By", f_approvedBy: "Approved By",
+  };
+  const details: { Field: string; Value: string }[] = [];
+  for (const [id, label] of Object.entries(fieldLabels)) {
+    const el = div.querySelector(`#${id}`) as HTMLInputElement | HTMLSelectElement | null;
+    if (el?.value?.trim()) details.push({ Field: label, Value: el.value });
+  }
+  // Checkboxes / radios
+  div.querySelectorAll<HTMLInputElement>("input[type=checkbox]:checked, input[type=radio]:checked")
+    .forEach(cb => { if (cb.value) details.push({ Field: cb.name || "Option", Value: cb.value }); });
+
+  // Team Assignment Matrix (first table in form)
+  const team: { Member: string; Role: string; Tasks: string; Hours: string; Start: string; End: string }[] = [];
+  const tables = div.querySelectorAll("table");
+  if (tables[0]) {
+    tables[0].querySelectorAll("tr:not(:first-child)").forEach(tr => {
+      const inp = tr.querySelectorAll<HTMLInputElement>("input");
+      if (inp.length >= 6 && Array.from(inp).some(i => i.value.trim())) {
+        team.push({ Member: inp[0]?.value || "", Role: inp[1]?.value || "",
+          Tasks: inp[2]?.value || "", Hours: inp[3]?.value || "",
+          Start: inp[4]?.value || "", End: inp[5]?.value || "" });
+      }
+    });
+  }
+
+  if (details.length === 0 && team.length === 0) {
+    alert("Please fill in some data before downloading.");
+    return;
+  }
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(details), "Project Details");
+  if (team.length > 0)
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(team), "Team Assignment");
+
+  XLSX.writeFile(wb, (selected?.title || "form").replace(/[^a-zA-Z0-9]/g, "_") + ".xlsx");
+};
+
   // ── Detail view ────────────────────────────────────────────────────────────
   if (selected && !editing) return (
     <>
@@ -193,8 +245,8 @@ export default function BlogPage() {
               <Button variant="destructive" size="sm" className="gap-2" onClick={() => deletePost(selected.id)}>
                 <Trash2 className="h-4 w-4" /> Delete
               </Button>
-              <Button variant="outline" size="sm" className="gap-2" onClick={() => window.print()}>
-                <Download className="h-4 w-4" /> Download PDF
+              <Button variant="outline" size="sm" className="gap-2" onClick={downloadExcel}>
+                <Download className="h-4 w-4" /> Download Excel
               </Button>
             </>
           )}
@@ -228,6 +280,11 @@ export default function BlogPage() {
         )}
 
         <div
+          className="prose prose-sm dark:prose-invert max-w-none"
+          dangerouslySetInnerHTML={{ __html: selected.content }}
+        />
+        <div
+          ref={contentRef}
           className="prose prose-sm dark:prose-invert max-w-none"
           dangerouslySetInnerHTML={{ __html: selected.content }}
         />
