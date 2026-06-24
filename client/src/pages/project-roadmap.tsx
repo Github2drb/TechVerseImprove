@@ -482,7 +482,7 @@ export default function ProjectRoadmap() {
 
   const offlineStatusMutation = useMutation({
     mutationFn: async (data: { projectName:string; offlineStatus:string }) =>
-      apiRequest("POST", "/api/project-activities/offline-status", data),
+      apiRequest("POST", "/api/project-activities/offline-status", data, true),
   });
 
   const handleOfflineChange = async (name: string, status: string) => {
