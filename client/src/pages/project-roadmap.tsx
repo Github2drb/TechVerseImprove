@@ -29,6 +29,9 @@ const PHASES = [
   { key:"Electrical Design",         label:"Elec. Design",    short:"ELD",  group:"Design",      color:"#6366f1" },
   { key:"Procurement Stage",         label:"Procurement",     short:"PRO",  group:"Procurement", color:"#f59e0b" },
   { key:"Waiting for Materials",     label:"Waiting Mats.",   short:"WFM",  group:"Procurement", color:"#f97316" },
+  { key:"Offline PLC Logic",         label:"Offline PLC",     short:"OPL",  group:"Offline Logic", color:"#eab308" },
+  { key:"Offline HMI Screen",        label:"Offline HMI",     short:"OHM",  group:"Offline Logic", color:"#f59e0b" },
+  { key:"Offline Robotic Logics",    label:"Offline Robotic", short:"ORB",  group:"Offline Logic", color:"#fb923c" },
   { key:"Mechanical Assembly Stage", label:"Mech. Assembly",  short:"MAS",  group:"Assembly",    color:"#3b82f6" },
   { key:"Electrical Assembly Stage", label:"Elec. Assembly",  short:"EAS",  group:"Assembly",    color:"#06b6d4" },
   { key:"Installation Pending",      label:"Install Pending", short:"INP",  group:"Assembly",    color:"#f43f5e" },
@@ -42,11 +45,12 @@ const PHASES = [
   { key:"Dispatch Stage",            label:"Dispatch",        short:"DSP",  group:"Done",        color:"#10b981" },
 ];
 
-const PHASE_GROUPS = ["Design","Procurement","Assembly","Testing","Done"];
+const PHASE_GROUPS = ["Design","Procurement","Offline Logic","Assembly","Testing","Done"];
 
 const GROUP_COLORS: Record<string,string> = {
   Design:      "#7c3aed",
   Procurement: "#f59e0b",
+  "Offline Logic": "#eab308",
   Assembly:    "#3b82f6",
   Testing:     "#14b8a6",
   Done:        "#22c55e",

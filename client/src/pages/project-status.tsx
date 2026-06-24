@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import {
   ArrowLeft, Calendar, RefreshCw, Save, Plus,
   CheckCircle, Clock, AlertTriangle,
-  ChevronLeft, ChevronRight, CalendarDays, Map,
+  ChevronLeft, ChevronRight, CalendarDays,
 } from "lucide-react";
 import { Link } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -32,6 +32,10 @@ const STATUS_OPTIONS = [
   { value:"Electrical Design",        label:"Electrical Design",        icon:Clock,        color:"bg-indigo-500/20 text-indigo-700 dark:text-indigo-300"  },
   { value:"Procurement Stage",        label:"Procurement Stage",        icon:Clock,        color:"bg-orange-500/20 text-orange-700 dark:text-orange-300"  },
   { value:"Waiting for Materials",    label:"Waiting for Materials",    icon:Clock,        color:"bg-amber-500/20 text-amber-700 dark:text-amber-300"     },
+  // Offline Logic Development
+  { value:"Offline PLC Logic",        label:"Offline PLC Logic",        icon:Clock,        color:"bg-yellow-500/20 text-yellow-800 dark:text-yellow-200"  },
+  { value:"Offline HMI Screen",       label:"Offline HMI Screen",       icon:Clock,        color:"bg-amber-500/20 text-amber-800 dark:text-amber-200"     },
+  { value:"Offline Robotic Logics",   label:"Offline Robotic Logics",   icon:Clock,        color:"bg-orange-500/20 text-orange-800 dark:text-orange-200"  },
   // Assembly & Installation
   { value:"Mechanical Assembly Stage",label:"Mechanical Assembly",      icon:Clock,        color:"bg-blue-500/20 text-blue-700 dark:text-blue-300"        },
   { value:"Electrical Assembly Stage",label:"Electrical Assembly",      icon:Clock,        color:"bg-cyan-500/20 text-cyan-700 dark:text-cyan-300"        },
@@ -51,6 +55,7 @@ const STATUS_OPTIONS = [
 // Group labels for visual separation in dropdown
 const STATUS_GROUPS = [
   { label:"Design & Procurement",       from:"Design Stage",              to:"Waiting for Materials"      },
+  { label:"Offline Logic Development",  from:"Offline PLC Logic",         to:"Offline Robotic Logics"     },
   { label:"Assembly & Installation",    from:"Mechanical Assembly Stage",  to:"Installation in Progress"   },
   { label:"Testing & Commissioning",    from:"PLC Power Up Stage",         to:"S.A.T"                      },
   { label:"Completion",                 from:"Completed",                  to:"Dispatch Stage"             },
@@ -314,11 +319,6 @@ export default function ProjectStatus() {
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-4">
             <Link href="/"><Button variant="ghost" size="sm"><ArrowLeft className="h-4 w-4 mr-2"/>Back</Button></Link>
-            <Link href="/project-roadmap">
-              <Button variant="outline" size="sm" className="gap-2">
-                <Map className="h-4 w-4" /> Roadmap
-              </Button>
-            </Link>
             <div>
               <h1 className="text-2xl font-bold flex items-center gap-2">
                 <Calendar className="h-6 w-6 text-primary"/>Project Activity Tracking
