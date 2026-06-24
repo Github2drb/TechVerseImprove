@@ -1069,7 +1069,43 @@ r.delete("/material-tracker/:project", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-  // ── HEALTH ────────────────────────────────────────────────────────────────
+ // ── ADD TO server/routes.ts — paste before the HEALTH section ────────────────
+// Offline software track (PLC/HMI/Logic Test) — independent status per project,
+// parallel to the main 15-phase roadmap. Persists to project-offline-status.json.
+
+interface OfflineStatusFile {
+  statuses: Record<string, string>; // key = projectName.toLowerCase().trim()
+  lastUpdated: string;
+}
+function offKey(name: string) { return name.trim().toLowerCase(); }
+
+r.get("/project-activities/offline-status", async (_q, res) => {
+  try {
+    const f = await readJsonFile<OfflineStatusFile>("project-offline-status.json");
+    // Return keyed by the ORIGINAL project name casing where possible isn't tracked,
+    // so the frontend matches by its own projectName strings — we store lowercase
+    // keys, and the frontend looks up by its own projectName too, so we return a
+    // map using the same lowercase keys; the frontend's lookup uses projectName as-is,
+    // so to keep this simple we store and return using the exact projectName string
+    // the frontend sent at save time (see POST handler below).
+    res.json(f?.statuses ?? {});
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+r.post("/project-activities/offline-status", async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+    const { projectName, offlineStatus } = req.body;
+    if (!projectName || !offlineStatus) return res.status(400).json({ message: "projectName and offlineStatus required" });
+    const f = (await readJsonFile<OfflineStatusFile>("project-offline-status.json")) ?? { statuses: {}, lastUpdated: "" };
+    f.statuses[projectName] = offlineStatus; // keyed by exact projectName string used by frontend
+    f.lastUpdated = new Date().toISOString();
+    await writeJsonFile("project-offline-status.json", f, `Offline status: ${projectName} -> ${offlineStatus}`);
+    res.json({ success: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+    // ── HEALTH ────────────────────────────────────────────────────────────────
   r.get("/health", async (_q, res) => {
     const token=!!process.env.GITHUB_TOKEN; const data=await readJsonFile("data.json").catch(()=>null);
     res.json({ok:true,githubToken:token,dataReadable:data!==null,ts:new Date().toISOString()});
