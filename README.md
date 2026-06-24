@@ -113,8 +113,8 @@ TechVerseImprove/
 
 | Username | Password | Role |
 |---|---|---|
-| `admin` | `admin@drb` | Admin |
-| *(engineer name)* | `drb@123` | Engineer |
+| `` | `` | Admin |
+| *(engineer name)* | `` | Engineer |
 
 Change these after first login via the Engineer Management page.
 
