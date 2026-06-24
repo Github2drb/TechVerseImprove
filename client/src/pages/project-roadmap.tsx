@@ -4,7 +4,7 @@
 //   <Route path="/project-roadmap" component={ProjectRoadmap} />
 // Add link from project-status.tsx header or dashboard nav
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -51,6 +51,26 @@ const GROUP_COLORS: Record<string,string> = {
   Testing:     "#14b8a6",
   Done:        "#22c55e",
 };
+
+// ── Offline software track — runs parallel to the main hardware roadmap ───────
+// Software/logic work (PLC programming, HMI screens, logic testing) often
+// happens alongside mechanical/electrical assembly rather than after it, so
+// it's tracked as its own independent mini-timeline rather than slotted into
+// the main 15-phase sequence.
+const OFFLINE_PHASES = [
+  { key:"plc_logic",   label:"Offline PLC Logic",   short:"PLC", color:"#f97316" },
+  { key:"hmi_screens",  label:"Offline HMI Screens", short:"HMI", color:"#fb923c" },
+  { key:"logic_test",   label:"Offline Logic Test",  short:"LGT", color:"#fbbf24" },
+];
+const OFFLINE_NOT_STARTED = "not_started";
+const OFFLINE_DONE = "offline_done";
+
+function getOfflineIndex(status?: string): number {
+  if (!status || status === OFFLINE_NOT_STARTED) return -1;
+  if (status === OFFLINE_DONE) return OFFLINE_PHASES.length;
+  const idx = OFFLINE_PHASES.findIndex(p => p.key === status);
+  return idx === -1 ? -1 : idx;
+}
 
 function getPhaseIndex(status: string): number {
   const idx = PHASES.findIndex(p => p.key === status);
@@ -132,13 +152,59 @@ function PhaseNode({
   );
 }
 
+// ── Offline phase node — slightly smaller, used for the parallel software track ─
+function OfflinePhaseNode({
+  phase, state, isLast,
+}: {
+  phase: typeof OFFLINE_PHASES[0];
+  state: "done" | "current" | "pending";
+  isLast: boolean;
+}) {
+  const isDone    = state === "done";
+  const isCurrent = state === "current";
+
+  return (
+    <div className="flex items-center">
+      <div className="flex flex-col items-center relative">
+        <div
+          className={`w-7 h-7 rounded-full flex items-center justify-center
+            text-[9px] font-bold border-2 transition-all duration-300
+            ${isDone    ? "text-white border-transparent shadow-sm" : ""}
+            ${isCurrent ? "text-white border-transparent shadow-lg ring-3 ring-offset-1" : ""}
+            ${state === "pending" ? "bg-muted border-muted-foreground/20 text-muted-foreground/40" : ""}`}
+          style={{
+            backgroundColor: isDone || isCurrent ? phase.color : undefined,
+            boxShadow:        isCurrent ? `0 0 10px ${phase.color}80` : undefined,
+          }}
+          title={phase.label}
+        >
+          {isDone ? <CheckCircle2 className="h-3.5 w-3.5"/> : <span className="text-[8px]">{phase.short}</span>}
+        </div>
+        <span
+          className={`mt-1 text-[8px] font-medium text-center leading-tight max-w-[58px] whitespace-nowrap
+            ${state === "pending" ? "text-muted-foreground/40" : ""}`}
+          style={{ color: isDone || isCurrent ? phase.color : undefined }}
+        >
+          {phase.label}
+        </span>
+      </div>
+      {!isLast && (
+        <div className={`h-0.5 w-5 mx-0.5 flex-shrink-0 rounded-full transition-colors mb-3
+          ${isDone ? "bg-orange-300" : "bg-muted-foreground/15"}`}/>
+      )}
+    </div>
+  );
+}
+
 // ── Project roadmap card ──────────────────────────────────────────────────────
 function ProjectCard({
-  project, isAdmin, onStatusChange,
+  project, isAdmin, onStatusChange, offlineStatus, onOfflineChange,
 }: {
   project: ProjectActivity;
   isAdmin: boolean;
   onStatusChange: (name: string, status: string) => void;
+  offlineStatus: string;
+  onOfflineChange: (name: string, status: string) => void;
 }) {
   const currentIdx = getPhaseIndex(project.currentStatus);
   const progress   = getProgress(project.currentStatus);
@@ -204,6 +270,40 @@ function ProjectCard({
           <div className="h-2 bg-muted rounded-full overflow-hidden">
             <div className="h-full rounded-full transition-all duration-700"
               style={{ width:`${progress}%`, backgroundColor: phase?.color }}/>
+          </div>
+        </div>
+
+        {/* Offline software track — parallel to main roadmap, sits right under % line */}
+        <div className="rounded-lg border border-orange-500/20 bg-orange-500/5 px-2.5 py-2">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[10px] font-semibold uppercase tracking-widest text-orange-500/80">
+              Offline Software Track
+            </span>
+            {isAdmin && (
+              <Select value={offlineStatus || OFFLINE_NOT_STARTED} onValueChange={v => onOfflineChange(project.projectName, v)}>
+                <SelectTrigger className="h-6 text-[10px] w-auto min-w-[120px] flex-shrink-0 border-orange-500/30 text-orange-600 dark:text-orange-400">
+                  <SelectValue/>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={OFFLINE_NOT_STARTED}><span className="text-xs">Not Started</span></SelectItem>
+                  {OFFLINE_PHASES.map(p => (
+                    <SelectItem key={p.key} value={p.key}><span className="text-xs">{p.label}</span></SelectItem>
+                  ))}
+                  <SelectItem value={OFFLINE_DONE}><span className="text-xs">Offline Complete</span></SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+          <div className="overflow-x-auto pb-1">
+            <div className="flex items-start min-w-max">
+              {OFFLINE_PHASES.map((p, i) => {
+                const offIdx = getOfflineIndex(offlineStatus);
+                const state = offIdx === OFFLINE_PHASES.length || i < offIdx ? "done" : i === offIdx ? "current" : "pending";
+                return (
+                  <OfflinePhaseNode key={p.key} phase={p} state={state} isLast={i === OFFLINE_PHASES.length - 1}/>
+                );
+              })}
+            </div>
           </div>
         </div>
 
@@ -298,6 +398,10 @@ export default function ProjectRoadmap() {
   const [savedStatuses, setSavedStatuses] = useState<Record<string,string>>(() => {
     try { return JSON.parse(localStorage.getItem("drb_project_statuses") ?? "{}"); } catch { return {}; }
   });
+  // Offline software track — its own independent status per project
+  const [offlineStatuses, setOfflineStatuses] = useState<Record<string,string>>(() => {
+    try { return JSON.parse(localStorage.getItem("drb_offline_statuses") ?? "{}"); } catch { return {}; }
+  });
 
   const { data: rawProjects = [], isLoading, refetch } = useQuery<ProjectActivity[]>({
     queryKey: ["/api/project-activities"],
@@ -309,6 +413,16 @@ export default function ProjectRoadmap() {
     queryKey: ["/api/weekly-assignments"],
     staleTime: 30000,
   });
+
+  const { data: offlineStatusData } = useQuery<Record<string,string>>({
+    queryKey: ["/api/project-activities/offline-status"],
+    staleTime: 30000,
+  });
+  useEffect(() => {
+    if (offlineStatusData) {
+      setOfflineStatuses(prev => ({ ...offlineStatusData, ...prev }));
+    }
+  }, [offlineStatusData]);
 
   // Merge engineer names + apply savedStatuses overrides
   const projects = useMemo(() => {
@@ -345,6 +459,26 @@ export default function ProjectRoadmap() {
     mutationFn: async (data: { projectName:string; status:string }) =>
       apiRequest("POST", "/api/project-activities/status", data),
   });
+
+  const offlineStatusMutation = useMutation({
+    mutationFn: async (data: { projectName:string; offlineStatus:string }) =>
+      apiRequest("POST", "/api/project-activities/offline-status", data),
+  });
+
+  const handleOfflineChange = async (name: string, status: string) => {
+    // Optimistic local + localStorage update so it survives refresh even if the save fails
+    setOfflineStatuses(prev => {
+      const next = { ...prev, [name]: status };
+      try { localStorage.setItem("drb_offline_statuses", JSON.stringify(next)); } catch {}
+      return next;
+    });
+    try {
+      await offlineStatusMutation.mutateAsync({ projectName: name, offlineStatus: status });
+      queryClient.invalidateQueries({ queryKey: ["/api/project-activities/offline-status"] });
+    } catch {
+      toast({ title: "Saved locally — sync failed, will retry on next save", variant: "destructive" });
+    }
+  };
 
   const handleStatusChange = (name: string, status: string) => {
     setPending(prev => ({ ...prev, [name]: status }));
@@ -508,6 +642,8 @@ export default function ProjectRoadmap() {
                 project={project}
                 isAdmin={isAdmin}
                 onStatusChange={handleStatusChange}
+                offlineStatus={offlineStatuses[project.projectName] ?? OFFLINE_NOT_STARTED}
+                onOfflineChange={handleOfflineChange}
               />
             ))}
           </div>
