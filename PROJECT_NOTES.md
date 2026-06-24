@@ -44,61 +44,79 @@ engineer's password directly in the app if needed.
 
 ---
 
-## ✅ Recently completed
+✅ Recently completed (add to top of this section)
 
-- **Material Procurement Tracker** built — BOM/PR/PO/Receipt dates, automatic
-  red overdue alerts (PR >3 days after BOM, PO >3 days after PR approval,
-  Target Receipt passed without Actual Receipt), Excel import with preview,
-  unsaved-changes warning when switching projects or closing tab
-- **Web push notifications** set up — VAPID keys configured in Render,
-  `sw.js` served inline from `server/index.ts` (not a static file, to avoid
-  MIME-type issues), "Enable Notifications" button on dashboard
-- **Team Project Tracker redesigned** — master-detail split panel (no more
-  horizontal scroll), fixed duplicate engineer names showing on same project
-- **Project Roadmap — Offline Software Track (parallel, not sequential)**:
-  - PLC Logic and HMI Screens are simultaneous toggle circles (not one-after-another)
-  - Offline Testing only enables once BOTH PLC and HMI are marked done
-  - Whole track stays grayed out until main roadmap reaches "Electrical Design"
-  - Shows "✓ Merged at Power-Up" badge once main timeline reaches "PLC Power Up Stage"
-  - **Important: this is a SEPARATE parallel track, NOT part of the main
-    sequential status dropdown** — do not re-insert Offline statuses into
-    the main STATUS_GROUPS/PHASES list (tried this once, reverted — see below)
-  - Fixed: save mutation was missing admin auth header, causing
-    "Saved locally — sync failed" toast on every save
-  - By design: ALL logged-in users (admin + engineers) can VIEW the offline
-    track and main status on the Roadmap page — only admins can EDIT
-    (toggle circles are disabled for non-admins). This matches how the main
-    project status already works. If view-restriction is ever wanted, the
-    offline-status GET route currently has no isAdmin check.
-- **Roadmap link** restored in Project Activity Tracking page header
-- Blog post embedding (iframes) supported, cover image generation workflow established
-- `PROJECT_NOTES.md` workflow established (this file!)
 
-## 🚧 Pending / To-Do
-- [ ] Continue uploading filled Material Tracker BOM sheets to GitHub as they come in (ongoing habit, no code needed)
-- [ ] No other open code tasks right now — check back here before starting new work
+New roles: HR, Project In-Charge (PIC), SCM — added alongside Admin/Engineer
+in Engineer Management.
 
-## ❌ Decided against (don't redo these)
-- Adding "Project In-charge", "SCM", "HR" roles to Engineer Management — declined, keeping just Admin/Engineer
-- Putting Offline PLC/HMI/Robotic Logic into the main sequential status dropdown — tried once, reverted; the PARALLEL track on the Roadmap page is the correct, permanent design
+These three roles get full read access everywhere in the app — same as
+Admin sees, just view-only (Engineer Management page now shows for them
+instead of "Access Denied", but Add/Edit/Delete/Sync buttons stay
+Admin-only).
+Exception: Material Procurement Tracker — HR/PIC/SCM (and Admin) CAN
+edit here. This is the one place they're allowed to write data.
+Implementation: x-admin-auth header now carries the real role for every
+logged-in user (previously it was only sent for Admin — a latent bug
+where non-admins were silently treated as logged out on protected
+calls). Server has two new helper checks: isFullAccessViewer() (read
+gate) and canEditMaterials() (write gate for the tracker), separate
+from the strict isAdmin() used everywhere else.
+Decided against (superseded): the old note above about declining
+"Project In-charge / SCM / HR roles" — that decision is now reversed
+per explicit request. Don't revert this without checking with the user.
 
-## ⚠️ Known issues / things to watch
-- **Stray JSX outside a function = blank page.** Happened twice (dashboard.tsx,
-  App.tsx) when a `<Route>` or `<Link>` line got pasted at the top level of a
-  file instead of inside the component's return statement. Always check that
-  every JSX tag is inside a `return (...)`.
-- **Components defined INSIDE other components break inputs.** If a helper
-  function/component is declared inside the main component's body, React
-  recreates it every render and remounts it — inputs lose focus after 1
-  character. Always define helper components at the top level of the file.
-- **`package.json` JSON syntax errors** (missing/extra commas) caused 2 build
-  failures. Double-check JSON validity after any manual edit.
-- **`import.meta.url` crashes in CJS bundles.** Don't use
-  `fileURLToPath(import.meta.url)` / `__dirname` patterns in `server/index.ts`
-  — the server builds as `.cjs` and this throws at runtime.
-- GitHub token for `Controls_Team_Tracker` needs **Contents: Read and write**
-  permission (classic token with full `repo` scope is safest) — has expired
-  before, causing 503 "GitHub token invalid" errors on save.
+
+
+Material Procurement Tracker — overdue visibility
+
+Each material's Target Receipt now shows a live "X days left" / "Overdue
+by X days" / "Due today" label, not just a red border.
+Added a dedicated "Materials Overdue for Receipt" table (name, qty,
+target date, days overdue, notes) that appears under the alert summary
+whenever the selected project has overdue items. Scoped per-project,
+matching the page's existing one-project-at-a-time design — switching
+the project selector switches this table too.
+
+
+
+Engineer Daily Reports — clearer pending tasks
+
+Target Tasks are now split into two visually distinct groups: Pending —
+To Be Done (red, shown first) and Target Tasks — Done (struck
+through), instead of one flat list with no done/pending signal.
+"Done" is inferred by fuzzy-matching each target task's text against
+that engineer's Completed Activities for the day (the two lists aren't
+linked by id in the data, so this is a best-effort match, not a stored
+field).
+Added a page-level banner: "X tasks pending across the team today" (or
+a "All target tasks done 🎉" message when there's nothing outstanding).
+
+
+
+Fixed a pre-existing build-breaking bug in
+client/src/components/ui/sidebar.tsx — a stray, orphaned object literal
+(looked like an accidentally pasted nav-link snippet) was sitting outside
+any function and breaking tsc/npm run check for the entire repo.
+Removed it; unrelated to anything in this session's work but worth noting
+in case anyone wonders why a sidebar file changed.
+
+
+⚠️ Known issues / things to watch (add to this section)
+
+
+HR/PIC/SCM "done" tasks in Engineer Daily Reports are inferred by text
+matching, not a real per-task status field. If task wording in
+"Completed Activities" doesn't resemble the "Target Tasks" wording, a
+finished task may still show as Pending. A more durable fix would be
+adding a done: boolean field directly on each target task (set via a
+checkbox where Admin enters them) instead of inferring it — flagged here
+in case this becomes annoying in practice.
+The "Materials Overdue for Receipt" table only covers the currently
+selected project (matches the page's existing per-project view). If a
+combined "overdue across ALL projects at once" view is ever wanted, that
+needs a new endpoint that loads every tracked project's materials in one
+call — the current architecture lazy-loads one project at a time.
 
 ---
 
