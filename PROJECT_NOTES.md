@@ -34,7 +34,13 @@ and engineers. Lives at: **drbtechverse.in**
 
 ---
 
-
+## Credentials
+⚠️ **Do not store actual passwords in this file or any committed file** —
+this notebook lives in a GitHub repo and gets read by Claude in plain text,
+so anything written here is permanently visible in commit history even if
+deleted later. Keep real login credentials in a password manager or a
+private note instead. Engineer Management page lets admins reset any
+engineer's password directly in the app if needed.
 
 ---
 
@@ -57,6 +63,13 @@ and engineers. Lives at: **drbtechverse.in**
   - **Important: this is a SEPARATE parallel track, NOT part of the main
     sequential status dropdown** — do not re-insert Offline statuses into
     the main STATUS_GROUPS/PHASES list (tried this once, reverted — see below)
+  - Fixed: save mutation was missing admin auth header, causing
+    "Saved locally — sync failed" toast on every save
+  - By design: ALL logged-in users (admin + engineers) can VIEW the offline
+    track and main status on the Roadmap page — only admins can EDIT
+    (toggle circles are disabled for non-admins). This matches how the main
+    project status already works. If view-restriction is ever wanted, the
+    offline-status GET route currently has no isAdmin check.
 - **Roadmap link** restored in Project Activity Tracking page header
 - Blog post embedding (iframes) supported, cover image generation workflow established
 - `PROJECT_NOTES.md` workflow established (this file!)
@@ -97,4 +110,4 @@ and engineers. Lives at: **drbtechverse.in**
 
 ---
 
-*Last updated: 2026-06-25*
+*Last updated: 2026-06-25 (v2 — removed plaintext password, fixed offline-status save auth bug)*
