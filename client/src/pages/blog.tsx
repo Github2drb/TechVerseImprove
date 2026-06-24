@@ -597,6 +597,43 @@ export default function BlogPage() {
     XLSX.writeFile(wb, (selected?.title || "project").replace(/[^a-zA-Z0-9]/g, "_") + ".xlsx");
   };
 
+  // ── DOWNLOAD PDF (using jsPDF + html2canvas) ──────────────────────────
+const downloadPDF = async () => {
+  const projectCode = (contentRef.current?.querySelector<HTMLInputElement>("#f_projectCode"))?.value?.trim() || "Project";
+  
+  if (!projectCode) {
+    setDraftStatus("❌ Please enter Project Code");
+    setTimeout(() => setDraftStatus(""), 3500);
+    return;
+  }
+
+  try {
+    setDraftStatus("⏳ Generating PDF...");
+    
+    // Dynamic import to avoid breaking if library isn't installed yet
+    const { default: html2pdf } = await import("html2pdf.js");
+    
+    const element = contentRef.current;
+    const opt = {
+      margin: 10,
+      filename: `${projectCode.replace(/\s/g, "_")}_${new Date().toLocaleDateString().replace(/\//g, "-")}.pdf`,
+      image: { type: "jpeg", quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true, allowTaint: true },
+      jsPDF: { orientation: "portrait", unit: "mm", format: "a4" },
+    };
+
+    html2pdf().set(opt).from(element).save();
+    
+    setTimeout(() => {
+      setDraftStatus("✅ PDF downloaded successfully");
+      setTimeout(() => setDraftStatus(""), 3500);
+    }, 1500);
+  } catch (err: any) {
+    setDraftStatus(`❌ PDF error: ${err.message || "Download failed"}`);
+    setTimeout(() => setDraftStatus(""), 4000);
+  }
+};
+  
   // ── Detail view ─────────────────────────────────────────────────────────────
   if (selected && !editing) return (
     <>
@@ -617,7 +654,6 @@ export default function BlogPage() {
               </Button>
             </>
           )}
-          {/* Save / Load draft — available to all */}
           <Button variant="outline" size="sm" className="gap-2" onClick={saveDraft}>
             <Save className="h-4 w-4" /> Save Draft
           </Button>
@@ -627,7 +663,10 @@ export default function BlogPage() {
           <Button variant="outline" size="sm" className="gap-2" onClick={downloadExcel}>
             <Download className="h-4 w-4" /> Download Excel
           </Button>
-        </div>
+          <Button variant="outline" size="sm" className="gap-2" onClick={downloadPDF}>
+            <Download className="h-4 w-4" /> Download PDF
+        </Button>
+      </div>
 
         {/* Draft status toast */}
         {draftStatus && (
