@@ -29,9 +29,6 @@ const PHASES = [
   { key:"Electrical Design",         label:"Elec. Design",    short:"ELD",  group:"Design",      color:"#6366f1" },
   { key:"Procurement Stage",         label:"Procurement",     short:"PRO",  group:"Procurement", color:"#f59e0b" },
   { key:"Waiting for Materials",     label:"Waiting Mats.",   short:"WFM",  group:"Procurement", color:"#f97316" },
-  { key:"Offline PLC Logic",         label:"Offline PLC",     short:"OPL",  group:"Offline Logic", color:"#eab308" },
-  { key:"Offline HMI Screen",        label:"Offline HMI",     short:"OHM",  group:"Offline Logic", color:"#f59e0b" },
-  { key:"Offline Robotic Logics",    label:"Offline Robotic", short:"ORB",  group:"Offline Logic", color:"#fb923c" },
   { key:"Mechanical Assembly Stage", label:"Mech. Assembly",  short:"MAS",  group:"Assembly",    color:"#3b82f6" },
   { key:"Electrical Assembly Stage", label:"Elec. Assembly",  short:"EAS",  group:"Assembly",    color:"#06b6d4" },
   { key:"Installation Pending",      label:"Install Pending", short:"INP",  group:"Assembly",    color:"#f43f5e" },
@@ -45,36 +42,44 @@ const PHASES = [
   { key:"Dispatch Stage",            label:"Dispatch",        short:"DSP",  group:"Done",        color:"#10b981" },
 ];
 
-const PHASE_GROUPS = ["Design","Procurement","Offline Logic","Assembly","Testing","Done"];
+const PHASE_GROUPS = ["Design","Procurement","Assembly","Testing","Done"];
 
 const GROUP_COLORS: Record<string,string> = {
   Design:      "#7c3aed",
   Procurement: "#f59e0b",
-  "Offline Logic": "#eab308",
   Assembly:    "#3b82f6",
   Testing:     "#14b8a6",
   Done:        "#22c55e",
 };
 
-// ── Offline software track — runs parallel to the main hardware roadmap ───────
-// Software/logic work (PLC programming, HMI screens, logic testing) often
-// happens alongside mechanical/electrical assembly rather than after it, so
-// it's tracked as its own independent mini-timeline rather than slotted into
-// the main 15-phase sequence.
-const OFFLINE_PHASES = [
-  { key:"plc_logic",   label:"Offline PLC Logic",   short:"PLC", color:"#f97316" },
-  { key:"hmi_screens",  label:"Offline HMI Screens", short:"HMI", color:"#fb923c" },
-  { key:"logic_test",   label:"Offline Logic Test",  short:"LGT", color:"#fbbf24" },
-];
-const OFFLINE_NOT_STARTED = "not_started";
-const OFFLINE_DONE = "offline_done";
-
-function getOfflineIndex(status?: string): number {
-  if (!status || status === OFFLINE_NOT_STARTED) return -1;
-  if (status === OFFLINE_DONE) return OFFLINE_PHASES.length;
-  const idx = OFFLINE_PHASES.findIndex(p => p.key === status);
-  return idx === -1 ? -1 : idx;
+// ── Offline software track — runs PARALLEL to the main hardware roadmap ───────
+// Real workflow: PLC programming and HMI screen design happen SIMULTANEOUSLY
+// (not one after another) — both usually start once Electrical Design is
+// complete. Offline Testing can only begin once both PLC and HMI are done.
+// The offline track then merges back into the main roadmap at the
+// "PLC Power Up Stage" (Equipment Power-Up) step.
+interface OfflineState {
+  plc: boolean;
+  hmi: boolean;
+  testing: "not_started" | "in_progress" | "done";
 }
+const DEFAULT_OFFLINE_STATE: OfflineState = { plc: false, hmi: false, testing: "not_started" };
+
+function parseOfflineState(raw?: string): OfflineState {
+  if (!raw) return DEFAULT_OFFLINE_STATE;
+  try {
+    const o = JSON.parse(raw);
+    return {
+      plc: !!o.plc,
+      hmi: !!o.hmi,
+      testing: o.testing === "in_progress" || o.testing === "done" ? o.testing : "not_started",
+    };
+  } catch { return DEFAULT_OFFLINE_STATE; }
+}
+function serializeOfflineState(s: OfflineState): string { return JSON.stringify(s); }
+
+const ELECTRICAL_DESIGN_IDX = PHASES.findIndex(p => p.key === "Electrical Design");
+const PLC_POWER_UP_IDX = PHASES.findIndex(p => p.key === "PLC Power Up Stage");
 
 function getPhaseIndex(status: string): number {
   const idx = PHASES.findIndex(p => p.key === status);
@@ -156,47 +161,41 @@ function PhaseNode({
   );
 }
 
-// ── Offline phase node — slightly smaller, used for the parallel software track ─
-function OfflinePhaseNode({
-  phase, state, isLast,
+// ── Offline track toggle circle ────────────────────────────────────────────────
+function OfflineToggleCircle({
+  label, color, state, disabled, onClick,
 }: {
-  phase: typeof OFFLINE_PHASES[0];
+  label: string;
+  color: string;
   state: "done" | "current" | "pending";
-  isLast: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
 }) {
   const isDone    = state === "done";
   const isCurrent = state === "current";
-
   return (
-    <div className="flex items-center">
-      <div className="flex flex-col items-center relative">
-        <div
-          className={`w-7 h-7 rounded-full flex items-center justify-center
-            text-[9px] font-bold border-2 transition-all duration-300
-            ${isDone    ? "text-white border-transparent shadow-sm" : ""}
-            ${isCurrent ? "text-white border-transparent shadow-lg ring-3 ring-offset-1" : ""}
-            ${state === "pending" ? "bg-muted border-muted-foreground/20 text-muted-foreground/40" : ""}`}
-          style={{
-            backgroundColor: isDone || isCurrent ? phase.color : undefined,
-            boxShadow:        isCurrent ? `0 0 10px ${phase.color}80` : undefined,
-          }}
-          title={phase.label}
-        >
-          {isDone ? <CheckCircle2 className="h-3.5 w-3.5"/> : <span className="text-[8px]">{phase.short}</span>}
-        </div>
-        <span
-          className={`mt-1 text-[8px] font-medium text-center leading-tight max-w-[58px] whitespace-nowrap
-            ${state === "pending" ? "text-muted-foreground/40" : ""}`}
-          style={{ color: isDone || isCurrent ? phase.color : undefined }}
-        >
-          {phase.label}
-        </span>
-      </div>
-      {!isLast && (
-        <div className={`h-0.5 w-5 mx-0.5 flex-shrink-0 rounded-full transition-colors mb-3
-          ${isDone ? "bg-orange-300" : "bg-muted-foreground/15"}`}/>
-      )}
-    </div>
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      title={label}
+      className={`flex items-center gap-1.5 ${disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}
+    >
+      <span
+        className={`w-6 h-6 rounded-full flex items-center justify-center border-2 transition-all flex-shrink-0
+          ${isDone    ? "text-white border-transparent" : ""}
+          ${isCurrent ? "text-white border-transparent" : ""}
+          ${state === "pending" ? "bg-muted border-muted-foreground/20" : ""}`}
+        style={{ backgroundColor: isDone || isCurrent ? color : undefined }}
+      >
+        {isDone && <CheckCircle2 className="h-3.5 w-3.5"/>}
+        {isCurrent && <Clock4 className="h-3 w-3 animate-pulse"/>}
+      </span>
+      <span className={`text-[10px] font-medium ${state==="pending"?"text-muted-foreground/50":""}`}
+        style={{ color: isDone || isCurrent ? color : undefined }}>
+        {label}
+      </span>
+    </button>
   );
 }
 
@@ -277,39 +276,56 @@ function ProjectCard({
           </div>
         </div>
 
-        {/* Offline software track — parallel to main roadmap, sits right under % line */}
-        <div className="rounded-lg border border-orange-500/20 bg-orange-500/5 px-2.5 py-2">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[10px] font-semibold uppercase tracking-widest text-orange-500/80">
-              Offline Software Track
-            </span>
-            {isAdmin && (
-              <Select value={offlineStatus || OFFLINE_NOT_STARTED} onValueChange={v => onOfflineChange(project.projectName, v)}>
-                <SelectTrigger className="h-6 text-[10px] w-auto min-w-[120px] flex-shrink-0 border-orange-500/30 text-orange-600 dark:text-orange-400">
-                  <SelectValue/>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={OFFLINE_NOT_STARTED}><span className="text-xs">Not Started</span></SelectItem>
-                  {OFFLINE_PHASES.map(p => (
-                    <SelectItem key={p.key} value={p.key}><span className="text-xs">{p.label}</span></SelectItem>
-                  ))}
-                  <SelectItem value={OFFLINE_DONE}><span className="text-xs">Offline Complete</span></SelectItem>
-                </SelectContent>
-              </Select>
-            )}
-          </div>
-          <div className="overflow-x-auto pb-1">
-            <div className="flex items-start min-w-max">
-              {OFFLINE_PHASES.map((p, i) => {
-                const offIdx = getOfflineIndex(offlineStatus);
-                const state = offIdx === OFFLINE_PHASES.length || i < offIdx ? "done" : i === offIdx ? "current" : "pending";
-                return (
-                  <OfflinePhaseNode key={p.key} phase={p} state={state} isLast={i === OFFLINE_PHASES.length - 1}/>
-                );
-              })}
+        {/* Offline software track — runs PARALLEL to main roadmap, starts after Electrical Design */}
+        {(() => {
+          const off = parseOfflineState(offlineStatus);
+          const canStart = currentIdx >= ELECTRICAL_DESIGN_IDX && ELECTRICAL_DESIGN_IDX !== -1;
+          const bothDone = off.plc && off.hmi;
+          const hasMerged = currentIdx >= PLC_POWER_UP_IDX && PLC_POWER_UP_IDX !== -1;
+
+          const togglePlc = () => { if (!canStart) return; onOfflineChange(project.projectName, serializeOfflineState({ ...off, plc: !off.plc })); };
+          const toggleHmi = () => { if (!canStart) return; onOfflineChange(project.projectName, serializeOfflineState({ ...off, hmi: !off.hmi })); };
+          const cycleTesting = () => {
+            if (!canStart || !bothDone) return;
+            const next = off.testing === "not_started" ? "in_progress" : off.testing === "in_progress" ? "done" : "not_started";
+            onOfflineChange(project.projectName, serializeOfflineState({ ...off, testing: next }));
+          };
+
+          return (
+            <div className={`rounded-lg border px-2.5 py-2 ${canStart ? "border-orange-500/20 bg-orange-500/5" : "border-muted-foreground/10 bg-muted/20"}`}>
+              <div className="flex items-center justify-between mb-2">
+                <span className={`text-[10px] font-semibold uppercase tracking-widest ${canStart ? "text-orange-500/80" : "text-muted-foreground/50"}`}>
+                  Offline Software Track
+                </span>
+                {hasMerged && (
+                  <Badge className="bg-green-500 text-white text-[9px] h-5">✓ Merged at Power-Up</Badge>
+                )}
+              </div>
+
+              {!canStart ? (
+                <p className="text-[10px] text-muted-foreground/70 italic">Starts once Electrical Design is reached</p>
+              ) : (
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* PLC + HMI run simultaneously — grouped together, same level */}
+                  <div className="flex flex-col gap-1.5 border-r border-orange-500/20 pr-2.5">
+                    <OfflineToggleCircle label="PLC Logic"  color="#f97316" state={off.plc ? "done" : "pending"} disabled={!isAdmin} onClick={togglePlc}/>
+                    <OfflineToggleCircle label="HMI Screens" color="#fb923c" state={off.hmi ? "done" : "pending"} disabled={!isAdmin} onClick={toggleHmi}/>
+                  </div>
+                  <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/40 flex-shrink-0"/>
+                  {/* Testing — only enabled once both PLC and HMI are done */}
+                  <OfflineToggleCircle
+                    label="Offline Testing"
+                    color="#fbbf24"
+                    state={off.testing === "done" ? "done" : off.testing === "in_progress" ? "current" : "pending"}
+                    disabled={!isAdmin || !bothDone}
+                    onClick={cycleTesting}
+                  />
+                  <span className="text-[9px] text-muted-foreground/60 italic ml-1">→ merges at Equipment Power-Up</span>
+                </div>
+              )}
             </div>
-          </div>
-        </div>
+          );
+        })()}
 
         {/* Phase timeline */}
         <div className="overflow-x-auto pb-2">
@@ -646,7 +662,7 @@ export default function ProjectRoadmap() {
                 project={project}
                 isAdmin={isAdmin}
                 onStatusChange={handleStatusChange}
-                offlineStatus={offlineStatuses[project.projectName] ?? OFFLINE_NOT_STARTED}
+                offlineStatus={offlineStatuses[project.projectName] ?? ""}
                 onOfflineChange={handleOfflineChange}
               />
             ))}
