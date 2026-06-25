@@ -73,11 +73,8 @@ function makeWs(
     ...rows,
   ];
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  // Merge title row across all columns
   ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }];
-  // Column widths
   ws["!cols"] = colWidths.map(w => ({ wch: w }));
-  // Freeze header row (row 3 = index 2)
   ws["!freeze"] = { xSplit: 0, ySplit: 3 };
   return ws;
 }
@@ -105,6 +102,42 @@ function isChecked(div: HTMLDivElement, id: string): boolean {
   return (div.querySelector<HTMLInputElement>(`#${id}`)?.checked ?? false);
 }
 
+// ── PDF print helpers ───────────────────────────────────────────────────────────
+// These build a CLEAN, STATIC, off-screen HTML summary of the filled form
+// (instead of screenshotting the live interactive inputs). This guarantees
+// nothing gets clipped, text stays solid/readable, and rows don't get cut
+// across page breaks.
+function esc(s: string): string {
+  return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function fieldRow(label: string, value: string): string {
+  return `<div style="display:flex;gap:10px;margin-bottom:7px;page-break-inside:avoid">
+    <span style="font-weight:600;color:#475569;min-width:180px;font-size:11px;flex-shrink:0">${esc(label)}:</span>
+    <span style="flex:1;font-size:11px;color:#0f172a;word-break:break-word">${esc(value) || "—"}</span>
+  </div>`;
+}
+function printSection(title: string, innerHtml: string): string {
+  return `<div style="page-break-inside:avoid;margin-bottom:16px;break-inside:avoid">
+    <div style="background:#0f172a;color:#fff;padding:9px 14px;font-size:13px;font-weight:700;border-radius:5px 5px 0 0">${esc(title)}</div>
+    <div style="border:1px solid #cbd5e1;border-top:none;padding:14px;border-radius:0 0 5px 5px;background:#fff">${innerHtml}</div>
+  </div>`;
+}
+function printTable(headers: string[], rows: string[][]): string {
+  const thead = headers.map(h =>
+    `<th style="background:#1e293b;color:#fff;padding:7px 8px;border:1px solid #334155;font-size:10px;text-align:left;white-space:nowrap">${esc(h)}</th>`
+  ).join("");
+  const tbody = rows.map(r =>
+    `<tr style="page-break-inside:avoid;break-inside:avoid">${r.map(c =>
+      `<td style="padding:6px 8px;border:1px solid #cbd5e1;font-size:10px;color:#0f172a;vertical-align:top;word-break:break-word">${esc(c) || "—"}</td>`
+    ).join("")}</tr>`
+  ).join("");
+  return `<table style="width:100%;border-collapse:collapse;margin:8px 0 14px;font-size:10px">
+    <tr>${thead}</tr>${tbody}</table>`;
+}
+function printSubhead(label: string): string {
+  return `<div style="font-size:11px;font-weight:700;color:#0369a1;margin:12px 0 6px;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px dashed #bae6fd;padding-bottom:4px">${esc(label)}</div>`;
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function BlogPage() {
   const [posts,        setPosts]        = useState<BlogPost[]>([]);
@@ -125,15 +158,12 @@ export default function BlogPage() {
   const [loginLoading, setLoginLoading] = useState(false);
   const [adminUsers,   setAdminUsers]   = useState<{ username: string; password: string; name?: string }[]>([]);
 
-  // Draft save / load
   const [draftStatus,   setDraftStatus]   = useState("");
   const [showDraftList, setShowDraftList] = useState(false);
   const [draftList,     setDraftList]     = useState<DraftMeta[]>([]);
 
-  // Ref for form interactions
   const contentRef = useRef<HTMLDivElement>(null);
 
-  // ── Load auth list ──────────────────────────────────────────────────────────
   const loadAdmins = async () => {
     setLoginLoading(true);
     try {
@@ -181,7 +211,6 @@ export default function BlogPage() {
     return matchCat && matchQ && matchPublished;
   });
 
-  // ── Save post ───────────────────────────────────────────────────────────────
   const savePost = async () => {
     if (!draft.title.trim()) return alert("Title is required");
     setSaving(true);
@@ -216,26 +245,22 @@ export default function BlogPage() {
     setTagInput("");
   };
 
-  // ── DRAFT SAVE ──────────────────────────────────────────────────────────────
   const saveDraft = () => {
     const div = contentRef.current;
     if (!div) return;
 
     const data: Record<string, any> = {};
 
-    // All inputs with IDs (text, date, number, select, textarea — not checkboxes/radios)
     div.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
       "input:not([type=checkbox]):not([type=radio]), select, textarea"
     ).forEach(el => { if (el.id) data[el.id] = el.value; });
 
-    // Named checkbox groups (multi-select)
     ["f_projType", "f_systems"].forEach(name => {
       data[`_chk_${name}`] = Array.from(
         div.querySelectorAll<HTMLInputElement>(`[name="${name}"]:checked`)
       ).map(el => el.value);
     });
 
-    // All named radio groups
     const radioNames = new Set<string>();
     div.querySelectorAll<HTMLInputElement>("input[type=radio]").forEach(el => { if (el.name) radioNames.add(el.name); });
     radioNames.forEach(name => {
@@ -243,7 +268,6 @@ export default function BlogPage() {
       if (checked) data[`_radio_${name}`] = checked.value;
     });
 
-    // Individual checkboxes with IDs (QA, closure)
     div.querySelectorAll<HTMLInputElement>("input[type=checkbox][id]").forEach(el => {
       data[`_bool_${el.id}`] = el.checked;
     });
@@ -255,7 +279,6 @@ export default function BlogPage() {
     const draftObj = { code: projectCode, name: projectName, savedAt: new Date().toISOString(), data };
     localStorage.setItem(draftKey, JSON.stringify(draftObj));
 
-    // Update index
     const index: string[] = JSON.parse(localStorage.getItem("cpf_draft_index") || "[]");
     if (!index.includes(draftKey)) { index.push(draftKey); localStorage.setItem("cpf_draft_index", JSON.stringify(index)); }
 
@@ -263,7 +286,6 @@ export default function BlogPage() {
     setTimeout(() => setDraftStatus(""), 3500);
   };
 
-  // ── DRAFT LOAD ──────────────────────────────────────────────────────────────
   const loadDraft = (draftKey: string) => {
     const div = contentRef.current;
     if (!div) return;
@@ -272,20 +294,17 @@ export default function BlogPage() {
     const draftObj = JSON.parse(raw);
     const data: Record<string, any> = draftObj.data;
 
-    // Text / select / number fields
     Object.entries(data).forEach(([key, val]) => {
       if (key.startsWith("_")) return;
       const el = div.querySelector<HTMLInputElement | HTMLSelectElement>(`#${key}`);
       if (el && val !== undefined) (el as any).value = val;
     });
 
-    // Named checkbox groups
     ["f_projType", "f_systems"].forEach(name => {
       const vals: string[] = data[`_chk_${name}`] || [];
       div.querySelectorAll<HTMLInputElement>(`[name="${name}"]`).forEach(el => { el.checked = vals.includes(el.value); });
     });
 
-    // Named radio groups
     Object.entries(data).forEach(([key, val]) => {
       if (!key.startsWith("_radio_")) return;
       const name = key.replace("_radio_", "");
@@ -293,7 +312,6 @@ export default function BlogPage() {
       if (el) el.checked = true;
     });
 
-    // Individual checkboxes
     Object.entries(data).forEach(([key, val]) => {
       if (!key.startsWith("_bool_")) return;
       const id = key.replace("_bool_", "");
@@ -306,7 +324,6 @@ export default function BlogPage() {
     setTimeout(() => setDraftStatus(""), 3500);
   };
 
-  // ── DELETE DRAFT ────────────────────────────────────────────────────────────
   const deleteDraft = (draftKey: string) => {
     localStorage.removeItem(draftKey);
     const index: string[] = JSON.parse(localStorage.getItem("cpf_draft_index") || "[]");
@@ -326,14 +343,12 @@ export default function BlogPage() {
     setShowDraftList(true);
   };
 
-  // ── DOWNLOAD EXCEL (SheetJS/xlsx — already installed, no extra dependency) ──
   const downloadExcel = () => {
     const div = contentRef.current;
     if (!div) return;
 
     const wb = XLSX.utils.book_new();
 
-    // ── Sheet 1: Project Overview ─────────────────────────────────────────
     const s1 = makeWs(
       "CONTROLS PROJECT ALLOCATION & ASSIGNMENT",
       ["Field", "Value"],
@@ -356,7 +371,6 @@ export default function BlogPage() {
     );
     XLSX.utils.book_append_sheet(wb, s1, "1. Project Overview");
 
-    // ── Sheet 2: Scope & Systems ──────────────────────────────────────────
     const SYSTEMS: [string, string, string][] = [
       ["f_sys_plc","PLC Programming",           "f_sys_plc_note"],
       ["f_sys_hmi","HMI / SCADA Development",   "f_sys_hmi_note"],
@@ -398,7 +412,6 @@ export default function BlogPage() {
     ];
     XLSX.utils.book_append_sheet(wb, s2, "2. Scope & Systems");
 
-    // ── Sheet 3: Team Assignment ──────────────────────────────────────────
     const s3 = makeWs(
       "TEAM ASSIGNMENT MATRIX",
       ["Team Member","Role / Specialization","Primary Tasks","Hours","Start Date","End Date","Dependencies"],
@@ -415,7 +428,6 @@ export default function BlogPage() {
     );
     XLSX.utils.book_append_sheet(wb, s3, "3. Team Assignment");
 
-    // ── Sheet 4: Skill Requirements ───────────────────────────────────────
     const SKILLS = [
       "PLC Programming (Brand Specific)","HMI Development",
       "Industrial Safety Certification","Electrical Installation",
@@ -434,7 +446,6 @@ export default function BlogPage() {
     );
     XLSX.utils.book_append_sheet(wb, s4, "4. Skill Requirements");
 
-    // ── Sheet 5: Project Phases ───────────────────────────────────────────
     const phaseHdr = ["Task","Assigned To","Duration","Start Date","End Date","Status","Notes"];
     const p1rows = [
       ["System Architecture Design", v(div.querySelector("#f_p1_arch_to")), v(div.querySelector("#f_p1_arch_dur")), v(div.querySelector("#f_p1_arch_start")), v(div.querySelector("#f_p1_arch_end")), radioVal(div,"f_p1_arch_st"), v(div.querySelector("#f_p1_arch_notes"))],
@@ -480,7 +491,6 @@ export default function BlogPage() {
     ];
     XLSX.utils.book_append_sheet(wb, s5, "5. Project Phases");
 
-    // ── Sheet 6: Resources ────────────────────────────────────────────────
     const EQ_NAMES = ["Laptop / Programming Software","PLC Hardware","Test Equipment (Multimeter etc.)","Safety Equipment (PPE)","Vehicle / Transportation"];
     const s6aoa = [
       ["RESOURCE REQUIREMENTS"],
@@ -502,7 +512,6 @@ export default function BlogPage() {
     ];
     XLSX.utils.book_append_sheet(wb, s6, "6. Resources");
 
-    // ── Sheet 7: Communication ────────────────────────────────────────────
     const STAKEHOLDERS = ["Client Project Manager","Site Supervisor","Operations Manager","Maintenance Team Lead"];
     const s7 = makeWs(
       "COMMUNICATION PLAN",
@@ -512,7 +521,6 @@ export default function BlogPage() {
     );
     XLSX.utils.book_append_sheet(wb, s7, "7. Communication");
 
-    // ── Sheet 8: Risk Assessment ──────────────────────────────────────────
     const RISKS = ["Equipment Delivery Delays","Site Access Restrictions","Technical Skill Gaps","Safety Incidents"];
     const s8 = makeWs(
       "RISK ASSESSMENT & MITIGATION",
@@ -522,7 +530,6 @@ export default function BlogPage() {
     );
     XLSX.utils.book_append_sheet(wb, s8, "8. Risk Assessment");
 
-    // ── Sheet 9: QA Checklist ─────────────────────────────────────────────
     const DR  = ["System architecture reviewed and approved","Safety systems validated","Client requirements verified","Code standards compliance checked"];
     const TV  = ["Unit testing completed","Integration testing passed","FAT successfully conducted","Performance benchmarks met"];
     const DC  = ["As-built drawings updated","Operation manuals completed","Maintenance procedures documented","Training materials prepared"];
@@ -541,7 +548,6 @@ export default function BlogPage() {
     s9["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }];
     XLSX.utils.book_append_sheet(wb, s9, "9. QA Checklist");
 
-    // ── Sheet 10: Project Status ──────────────────────────────────────────
     const s10aoa = [
       ["PROJECT STATUS TRACKING"],
       [],
@@ -562,7 +568,6 @@ export default function BlogPage() {
     ];
     XLSX.utils.book_append_sheet(wb, s10, "10. Project Status");
 
-    // ── Sheet 11: Project Closure ─────────────────────────────────────────
     const PC_ITEMS = [
       ["f_pc0","All systems tested and operational"],
       ["f_pc1","Client training completed"],
@@ -588,58 +593,188 @@ export default function BlogPage() {
     s11["!merges"] = [
       { s: { r: 0, c: 0 }, e: { r: 0, c: 4 } },
       { s: { r: 2, c: 0 }, e: { r: 2, c: 4 } },
-      { s: { r: 3, c: 0 }, e: { r: 3, c: 1 } },  // checklist "Item" spans 2 cols
+      { s: { r: 3, c: 0 }, e: { r: 3, c: 1 } },
       { s: { r: 11, c: 0 }, e: { r: 11, c: 4 } },
     ];
     XLSX.utils.book_append_sheet(wb, s11, "11. Project Closure");
 
-    // ── Write & trigger download ──────────────────────────────────────────
     XLSX.writeFile(wb, (selected?.title || "project").replace(/[^a-zA-Z0-9]/g, "_") + ".xlsx");
   };
 
-  // ── DOWNLOAD PDF (using jsPDF + html2canvas) ──────────────────────────
-const downloadPDF = async () => {
-  const projectCode = (contentRef.current?.querySelector<HTMLInputElement>("#f_projectCode"))?.value?.trim() || "Project";
-  
-  if (!projectCode) {
-    setDraftStatus("❌ Please enter Project Code");
-    setTimeout(() => setDraftStatus(""), 3500);
-    return;
-  }
+  // ── DOWNLOAD PDF — builds a clean, static print summary (no clipped inputs) ──
+  const downloadPDF = async () => {
+    const div = contentRef.current;
+    if (!div) return;
+    const projectCode = v(div.querySelector("#f_projectCode")) || "Project";
+    const projectName = v(div.querySelector("#f_projectName")) || "Unnamed Project";
 
-  try {
-    setDraftStatus("⏳ Generating PDF...");
-    
-    // Dynamic import to avoid breaking if library isn't installed yet
-    const { default: html2pdf } = await import("html2pdf.js");
-    
-    const element = contentRef.current;
-    const opt = {
-      margin: 10,
-      filename: `${projectCode.replace(/\s/g, "_")}_${new Date().toLocaleDateString().replace(/\//g, "-")}.pdf`,
-      image: { type: "jpeg", quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, allowTaint: true },
-      jsPDF: { orientation: "portrait", unit: "mm", format: "a4" },
-    };
+    try {
+      setDraftStatus("⏳ Generating PDF...");
+      const { default: html2pdf } = await import("html2pdf.js");
 
-    html2pdf().set(opt).from(element).save();
-    
-    setTimeout(() => {
+      let html = printSection("1. Project Overview",
+        fieldRow("Project Name", v(div.querySelector("#f_projectName"))) +
+        fieldRow("Project Code", v(div.querySelector("#f_projectCode"))) +
+        fieldRow("Client / Facility", v(div.querySelector("#f_client"))) +
+        fieldRow("Project Manager", v(div.querySelector("#f_projectManager"))) +
+        fieldRow("Start Date", v(div.querySelector("#f_startDate"))) +
+        fieldRow("Target Completion", v(div.querySelector("#f_completionDate"))) +
+        fieldRow("Budget Allocation", v(div.querySelector("#f_budget"))) +
+        fieldRow("Prepared By", v(div.querySelector("#f_preparedBy"))) +
+        fieldRow("Approved By", v(div.querySelector("#f_approvedBy"))) +
+        fieldRow("Document Date", v(div.querySelector("#f_docDate"))) +
+        fieldRow("Project Type", checkboxGroup(div, "f_projType")) +
+        fieldRow("Priority Level", radioVal(div, "f_priority")) +
+        fieldRow("Safety Classification", radioVal(div, "f_safety"))
+      );
+
+      const SYSTEMS: [string, string, string][] = [
+        ["f_sys_plc","PLC Programming","f_sys_plc_note"],
+        ["f_sys_hmi","HMI / SCADA Development","f_sys_hmi_note"],
+        ["f_sys_mcs","Motor Control Systems","f_sys_mcs_note"],
+        ["f_sys_ins","Instrumentation & Sensors","f_sys_ins_note"],
+        ["f_sys_net","Industrial Networks","f_sys_net_note"],
+        ["f_sys_saf","Safety Systems (SIL Rated)","f_sys_saf_note"],
+        ["f_sys_pcs","Process Control Systems","f_sys_pcs_note"],
+        ["f_sys_rob","Robotics Integration","f_sys_rob_note"],
+        ["f_sys_vis","Vision Systems","f_sys_vis_note"],
+        ["f_sys_drv","Drive Systems (VFDs, Servo)","f_sys_drv_note"],
+      ];
+      const sysRows = SYSTEMS.map(([cbId, label, noteId]) => [
+        label,
+        div.querySelector<HTMLInputElement>(`#${cbId}`)?.checked ? "Yes" : "No",
+        v(div.querySelector(`#${noteId}`)),
+      ]);
+      const delItems = [1,2,3,4,5].map(i => v(div.querySelector(`#f_del${i}`))).filter(Boolean);
+      html += printSection("2. Project Scope & Technical Requirements",
+        printSubhead("Automation Systems Involved") +
+        printTable(["System / Scope","Included","Brand / Standard / Details"], sysRows) +
+        printSubhead("Key Deliverables") +
+        (delItems.length ? `<ol style="margin:0;padding-left:18px;font-size:11px;color:#0f172a">${delItems.map(d=>`<li style="margin-bottom:4px">${esc(d)}</li>`).join("")}</ol>` : `<p style="font-size:11px;color:#94a3b8">—</p>`)
+      );
+
+      const teamRows = Array.from({length:6}, (_,i) => [
+        v(div.querySelector(`#f_tm${i}_name`)), v(div.querySelector(`#f_tm${i}_role`)),
+        v(div.querySelector(`#f_tm${i}_tasks`)), v(div.querySelector(`#f_tm${i}_hrs`)),
+        v(div.querySelector(`#f_tm${i}_start`)), v(div.querySelector(`#f_tm${i}_end`)),
+        v(div.querySelector(`#f_tm${i}_dep`)),
+      ]).filter(r => r.some(c => c));
+      html += printSection("3. Team Assignment Matrix",
+        teamRows.length
+          ? printTable(["Team Member","Role","Primary Tasks","Hours","Start","End","Dependencies"], teamRows)
+          : `<p style="font-size:11px;color:#94a3b8">Not yet filled by assigned engineers.</p>`
+      );
+
+      const SKILLS2 = ["PLC Programming (Brand Specific)","HMI Development","Industrial Safety Certification",
+        "Electrical Installation","Instrumentation Calibration","Network Configuration","Client Site Access / Clearance"];
+      const skillRows = SKILLS2.map((sk,i) => [sk, v(div.querySelector(`#f_sk${i}_member`)), radioVal(div,`f_sk${i}_status`), v(div.querySelector(`#f_sk${i}_notes`))]);
+      html += printSection("4. Skill Requirements & Certifications",
+        printTable(["Skill / Certification","Assigned Member","Status","Notes"], skillRows)
+      );
+
+      const phaseHdr2 = ["Task","Assigned To","Duration","Start","End","Status","Notes"];
+      const mkPhase = (id: string, label: string) => [
+        label, v(div.querySelector(`#f_${id}_to`)), v(div.querySelector(`#f_${id}_dur`)),
+        v(div.querySelector(`#f_${id}_start`)), v(div.querySelector(`#f_${id}_end`)),
+        radioVal(div, `f_${id}_st`), v(div.querySelector(`#f_${id}_notes`)),
+      ];
+      const p1b = [["p1_arch","System Architecture Design"],["p1_io","I/O List Development"],["p1_ctrl","Control Logic Design"],["p1_hmi","HMI Screen Design"],["p1_saf","Safety System Design"]].map(([id,l])=>mkPhase(id,l));
+      const p2b = [["p2_plc","PLC Program Development"],["p2_hmi","HMI Development"],["p2_sim","Simulation Testing"],["p2_fat","FAT Preparation"],["p2_doc","Documentation Creation"]].map(([id,l])=>mkPhase(id,l));
+      const p3b = [["p3_hw","Hardware Installation"],["p3_wir","System Wiring"],["p3_sw","Software Download & Config"],["p3_sit","System Integration Testing"],["p3_trn","Operator Training"],["p3_hnd","System Handover"]].map(([id,l])=>mkPhase(id,l));
+      html += printSection("5. Project Phases & Milestones",
+        printSubhead("Phase 1: Design & Engineering") + printTable(phaseHdr2, p1b) +
+        printSubhead("Phase 2: Development & Testing") + printTable(phaseHdr2, p2b) +
+        printSubhead("Phase 3: Installation & Commissioning") + printTable(phaseHdr2, p3b)
+      );
+
+      const EQ2 = ["Laptop / Programming Software","PLC Hardware","Test Equipment (Multimeter etc.)","Safety Equipment (PPE)","Vehicle / Transportation"];
+      const eqRows = EQ2.map((name,i) => [name, v(div.querySelector(`#f_eq${i}_qty`)), v(div.querySelector(`#f_eq${i}_to`)), v(div.querySelector(`#f_eq${i}_reqdate`)), radioVal(div,`f_eq${i}_st`)]);
+      const swRows = Array.from({length:3}, (_,i) => [v(div.querySelector(`#f_sw${i}_name`)), v(div.querySelector(`#f_sw${i}_ver`)), v(div.querySelector(`#f_sw${i}_user`)), radioVal(div,`f_sw${i}_st`), v(div.querySelector(`#f_sw${i}_expiry`))]).filter(r=>r.some(c=>c));
+      html += printSection("6. Resource Requirements",
+        printSubhead("Equipment & Tools") + printTable(["Item","Qty","Assigned To","Required Date","Status"], eqRows) +
+        (swRows.length ? printSubhead("Software Licenses") + printTable(["Software","Version","Assigned User","Status","Expiry"], swRows) : "")
+      );
+
+      const STK2 = ["Client Project Manager","Site Supervisor","Operations Manager","Maintenance Team Lead"];
+      const commRows = STK2.map((sh,i) => [sh, v(div.querySelector(`#f_comm${i}_role`)), v(div.querySelector(`#f_comm${i}_contact`)), v(div.querySelector(`#f_comm${i}_freq`)), v(div.querySelector(`#f_comm${i}_member`))]);
+      html += printSection("7. Communication Plan",
+        printTable(["Stakeholder","Role","Contact Method","Frequency","Assigned Member"], commRows)
+      );
+
+      const RISKS2 = ["Equipment Delivery Delays","Site Access Restrictions","Technical Skill Gaps","Safety Incidents"];
+      const riskRows = RISKS2.map((r,i) => [r, radioVal(div,`f_risk${i}_prob`), radioVal(div,`f_risk${i}_impact`), v(div.querySelector(`#f_risk${i}_mit`)), v(div.querySelector(`#f_risk${i}_resp`))]);
+      html += printSection("8. Risk Assessment & Mitigation",
+        printTable(["Risk Factor","Probability","Impact","Mitigation Strategy","Responsible"], riskRows)
+      );
+
+      const DR2=["System architecture reviewed and approved","Safety systems validated","Client requirements verified","Code standards compliance checked"];
+      const TV2=["Unit testing completed","Integration testing passed","FAT successfully conducted","Performance benchmarks met"];
+      const DC2=["As-built drawings updated","Operation manuals completed","Maintenance procedures documented","Training materials prepared"];
+      const qaCol = (items: string[], ids: string[]) => `<div>${items.map((it,i)=>`<div style="font-size:10px;margin-bottom:5px">${isChecked(div,ids[i])?"☑":"☐"} ${esc(it)}</div>`).join("")}</div>`;
+      html += printSection("9. Quality Assurance Checklist",
+        `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
+          <div>${printSubhead("Design Review")}${qaCol(DR2,["f_qa_dr0","f_qa_dr1","f_qa_dr2","f_qa_dr3"])}</div>
+          <div>${printSubhead("Testing & Validation")}${qaCol(TV2,["f_qa_tv0","f_qa_tv1","f_qa_tv2","f_qa_tv3"])}</div>
+          <div>${printSubhead("Documentation")}${qaCol(DC2,["f_qa_dc0","f_qa_dc1","f_qa_dc2","f_qa_dc3"])}</div>
+        </div>`
+      );
+
+      const wkRows = Array.from({length:3},(_,i)=>[v(div.querySelector(`#f_wk${i}_end`)), v(div.querySelector(`#f_wk${i}_pct`)), v(div.querySelector(`#f_wk${i}_issues`)), v(div.querySelector(`#f_wk${i}_pri`)), v(div.querySelector(`#f_wk${i}_updates`))]).filter(r=>r.some(c=>c));
+      const crRows = Array.from({length:3},(_,i)=>[v(div.querySelector(`#f_cr${i}_num`)), v(div.querySelector(`#f_cr${i}_date`)), v(div.querySelector(`#f_cr${i}_by`)), v(div.querySelector(`#f_cr${i}_desc`)), v(div.querySelector(`#f_cr${i}_impact`)), radioVal(div,`f_cr${i}_st`), v(div.querySelector(`#f_cr${i}_impl`))]).filter(r=>r.some(c=>c));
+      html += printSection("10. Project Status Tracking",
+        printSubhead("Weekly Progress Report") + (wkRows.length ? printTable(["Week Ending","Progress %","Issues/Blockers","Next Priorities","Updates"], wkRows) : `<p style="font-size:11px;color:#94a3b8">No entries yet.</p>`) +
+        printSubhead("Change Management") + (crRows.length ? printTable(["CR #","Date","Requested By","Description","Impact","Status","Impl. Date"], crRows) : `<p style="font-size:11px;color:#94a3b8">No entries yet.</p>`)
+      );
+
+      const PC2 = [["f_pc0","All systems tested and operational"],["f_pc1","Client training completed"],["f_pc2","Documentation handed over"],["f_pc3","Warranty terms explained"],["f_pc4","Support procedures established"],["f_pc5","Project retrospective conducted"],["f_pc6","Lessons learned documented"]];
+      const tpRows = Array.from({length:3},(_,i)=>[v(div.querySelector(`#f_tp${i}_member`)), radioVal(div,`f_tp${i}_rating`), v(div.querySelector(`#f_tp${i}_contrib`)), v(div.querySelector(`#f_tp${i}_areas`)), v(div.querySelector(`#f_tp${i}_suitability`))]).filter(r=>r.some(c=>c));
+      html += printSection("11. Project Closure",
+        printSubhead("Final Deliverables Checklist") +
+        `<div>${PC2.map(([id,label])=>`<div style="font-size:10px;margin-bottom:5px">${isChecked(div,id)?"☑":"☐"} ${esc(label)}</div>`).join("")}</div>` +
+        (tpRows.length ? printSubhead("Team Performance Review") + printTable(["Team Member","Rating","Key Contributions","Areas for Dev.","Next Suitability"], tpRows) : "")
+      );
+
+      const printRoot = document.createElement("div");
+      printRoot.style.position = "fixed";
+      printRoot.style.left = "-99999px";
+      printRoot.style.top = "0";
+      printRoot.style.width = "1050px";
+      printRoot.style.background = "#fff";
+      printRoot.style.padding = "20px";
+      printRoot.style.fontFamily = "'Segoe UI',Arial,sans-serif";
+      printRoot.innerHTML = `
+        <div style="background:linear-gradient(135deg,#0f172a,#1e293b,#0c4a6e);color:#fff;padding:18px 22px;border-radius:8px;margin-bottom:16px">
+          <h1 style="margin:0;font-size:18px;color:#f0f9ff">Controls Project Allocation &amp; Assignment</h1>
+          <p style="margin:5px 0 0;font-size:11px;color:#bae6fd">${esc(projectName)} &middot; ${esc(projectCode)}</p>
+        </div>
+        ${html}
+      `;
+      document.body.appendChild(printRoot);
+
+      const opt = {
+        margin: 8,
+        filename: `${projectCode.replace(/\s/g, "_")}_${new Date().toLocaleDateString().replace(/\//g, "-")}.pdf`,
+        image: { type: "jpeg", quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true, allowTaint: true, windowWidth: 1100 },
+        jsPDF: { orientation: "landscape", unit: "mm", format: "a4" },
+        pagebreak: { mode: ["css", "avoid-all", "legacy"] },
+      };
+
+      await html2pdf().set(opt).from(printRoot).save();
+      document.body.removeChild(printRoot);
+
       setDraftStatus("✅ PDF downloaded successfully");
       setTimeout(() => setDraftStatus(""), 3500);
-    }, 1500);
-  } catch (err: any) {
-    setDraftStatus(`❌ PDF error: ${err.message || "Download failed"}`);
-    setTimeout(() => setDraftStatus(""), 4000);
-  }
-};
-  
-  // ── Detail view ─────────────────────────────────────────────────────────────
+    } catch (err: any) {
+      setDraftStatus(`❌ PDF error: ${err.message || "Download failed"}`);
+      setTimeout(() => setDraftStatus(""), 4000);
+    }
+  };
+
   if (selected && !editing) return (
     <>
       <Header searchQuery="" onSearchChange={() => {}} />
       <main className="mx-auto max-w-3xl px-4 py-8 md:px-6">
-        {/* Button bar */}
         <div className="flex items-center gap-2 mb-6 flex-wrap">
           <Button variant="outline" size="sm" className="gap-2" onClick={() => setSelected(null)}>
             <ChevronLeft className="h-4 w-4" /> Back
@@ -665,17 +800,15 @@ const downloadPDF = async () => {
           </Button>
           <Button variant="outline" size="sm" className="gap-2" onClick={downloadPDF}>
             <Download className="h-4 w-4" /> Download PDF
-        </Button>
-      </div>
+          </Button>
+        </div>
 
-        {/* Draft status toast */}
         {draftStatus && (
           <div className="mb-4 px-4 py-2 rounded-lg text-sm font-medium bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-700">
             {draftStatus}
           </div>
         )}
 
-        {/* Draft picker modal */}
         {showDraftList && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
             <div className="bg-background border rounded-xl shadow-2xl p-6 w-96 space-y-3 max-h-[80vh] overflow-y-auto">
@@ -723,7 +856,6 @@ const downloadPDF = async () => {
             {selected.tags.map(t => <span key={t} className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">#{t}</span>)}
           </div>
         )}
-        {/* Single content div with ref */}
         <div
           ref={contentRef}
           className="prose prose-sm dark:prose-invert max-w-none"
@@ -733,7 +865,6 @@ const downloadPDF = async () => {
     </>
   );
 
-  // ── Editor ──────────────────────────────────────────────────────────────────
   if (editing) return (
     <>
       <Header searchQuery="" onSearchChange={() => {}} />
@@ -813,7 +944,6 @@ const downloadPDF = async () => {
     </>
   );
 
-  // ── List view ────────────────────────────────────────────────────────────────
   return (
     <>
       <Header searchQuery="" onSearchChange={() => {}} />
@@ -840,7 +970,6 @@ const downloadPDF = async () => {
           </div>
         </div>
 
-        {/* Admin login modal */}
         {showLogin && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
             <div className="bg-background border rounded-xl shadow-2xl p-6 w-80 space-y-4">
@@ -876,7 +1005,6 @@ const downloadPDF = async () => {
           </div>
         )}
 
-        {/* Search + filter */}
         <div className="flex gap-3 flex-wrap items-center">
           <div className="relative flex-1 min-w-[200px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
