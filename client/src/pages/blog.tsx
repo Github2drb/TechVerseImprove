@@ -734,14 +734,38 @@ export default function BlogPage() {
         (tpRows.length ? printSubhead("Team Performance Review") + printTable(["Team Member","Rating","Key Contributions","Areas for Dev.","Next Suitability"], tpRows) : "")
       );
 
+      // ── Build print container ──────────────────────────────────────────
+      // IMPORTANT: we do NOT hide this off-screen with left:-99999px.
+      // html2canvas frequently returns a BLANK capture for elements pushed
+      // far outside the viewport (this was the cause of empty PDFs before).
+      // Instead, show it as a brief full-screen overlay during generation —
+      // this guarantees correct rendering every time.
+      const overlay = document.createElement("div");
+      overlay.style.position = "fixed";
+      overlay.style.inset = "0";
+      overlay.style.zIndex = "99999";
+      overlay.style.background = "rgba(15,23,42,0.85)";
+      overlay.style.display = "flex";
+      overlay.style.flexDirection = "column";
+      overlay.style.alignItems = "center";
+      overlay.style.overflow = "auto";
+      overlay.style.padding = "30px 0";
+
+      const loadingLabel = document.createElement("div");
+      loadingLabel.textContent = "Generating PDF…";
+      loadingLabel.style.color = "#fff";
+      loadingLabel.style.fontSize = "14px";
+      loadingLabel.style.fontWeight = "600";
+      loadingLabel.style.marginBottom = "16px";
+      loadingLabel.style.fontFamily = "'Segoe UI',Arial,sans-serif";
+      overlay.appendChild(loadingLabel);
+
       const printRoot = document.createElement("div");
-      printRoot.style.position = "fixed";
-      printRoot.style.left = "-99999px";
-      printRoot.style.top = "0";
       printRoot.style.width = "1050px";
       printRoot.style.background = "#fff";
       printRoot.style.padding = "20px";
       printRoot.style.fontFamily = "'Segoe UI',Arial,sans-serif";
+      printRoot.style.flexShrink = "0";
       printRoot.innerHTML = `
         <div style="background:linear-gradient(135deg,#0f172a,#1e293b,#0c4a6e);color:#fff;padding:18px 22px;border-radius:8px;margin-bottom:16px">
           <h1 style="margin:0;font-size:18px;color:#f0f9ff">Controls Project Allocation &amp; Assignment</h1>
@@ -749,19 +773,23 @@ export default function BlogPage() {
         </div>
         ${html}
       `;
-      document.body.appendChild(printRoot);
+      overlay.appendChild(printRoot);
+      document.body.appendChild(overlay);
+
+      // Let the browser paint the newly-inserted content before capturing it.
+      await new Promise(resolve => setTimeout(resolve, 150));
 
       const opt = {
         margin: 8,
         filename: `${projectCode.replace(/\s/g, "_")}_${new Date().toLocaleDateString().replace(/\//g, "-")}.pdf`,
         image: { type: "jpeg", quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, allowTaint: true, windowWidth: 1100 },
+        html2canvas: { scale: 2, useCORS: true, allowTaint: true, backgroundColor: "#ffffff", windowWidth: 1100 },
         jsPDF: { orientation: "landscape", unit: "mm", format: "a4" },
         pagebreak: { mode: ["css", "avoid-all", "legacy"] },
       };
 
       await html2pdf().set(opt).from(printRoot).save();
-      document.body.removeChild(printRoot);
+      document.body.removeChild(overlay);
 
       setDraftStatus("✅ PDF downloaded successfully");
       setTimeout(() => setDraftStatus(""), 3500);
