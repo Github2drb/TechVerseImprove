@@ -105,8 +105,7 @@ function StatusSelectContent() {
 
 export default function ProjectStatus() {
   const { toast }  = useToast();
-  const { user }   = useAuth();
-  const isAdmin    = user?.role === "admin";
+  const { user, isAdmin } = useAuth();
 
   const [pendingActivities, setPendingActivities] = useState<Record<string, Record<string, string>>>({});
   const [pendingStatuses,   setPendingStatuses]   = useState<Record<string, string>>({});
