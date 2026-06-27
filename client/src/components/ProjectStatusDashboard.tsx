@@ -76,7 +76,7 @@ function parseSheet(rows: any[][]): SheetData {
 function isAdmin(): boolean { return sessionStorage.getItem("drb_admin") === "1"; }
 function adminHeader(): string {
   try {
-    const name = sessionStorage.getItem("drb_admin_name") ?? "admin";
+    const name = "admin";
     return btoa(JSON.stringify({ username: name.toLowerCase(), role: "admin" }));
   } catch { return ""; }
 }
@@ -164,7 +164,7 @@ export function ProjectStatusDashboard() {
   const [lastRefresh, setLastRefresh] = useState("");
   const [saveStatus,  setSaveStatus]  = useState<"idle"|"saving"|"saved"|"error">("idle");
   const [picker, setPicker] = useState<{ projId: string; ci: number; top: number; left: number } | null>(null);
-  const [adminMode, setAdminMode] = useState(isAdmin());
+  const [adminMode, setAdminMode] = useState(true); // Project Status editable by all users
 
   // ── Fetch Excel via backend proxy (GITHUB_TOKEN, no CORS issues) ────────────
   const fetchExcel = async (): Promise<SheetData | null> => {
@@ -219,13 +219,7 @@ export function ProjectStatusDashboard() {
   // Load on every mount
   useEffect(() => { loadData(); }, []);
 
-  // Sync admin mode from sessionStorage (in case user logs in/out on analytics page)
-  useEffect(() => {
-    const check = () => setAdminMode(isAdmin());
-    window.addEventListener("storage", check);
-    const interval = setInterval(check, 2000);
-    return () => { window.removeEventListener("storage", check); clearInterval(interval); };
-  }, []);
+  
 
   // ── Get effective status (override > excel) ───────────────────────────────
   const getStatus = (projId: string, ci: number, excelStatus: string): string => {
