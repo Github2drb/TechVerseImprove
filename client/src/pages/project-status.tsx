@@ -107,7 +107,6 @@ export default function ProjectStatus() {
   const { toast }  = useToast();
   const { user } = useAuth();
   const isAdmin = true; // Project Status is editable by everyone — no admin gate
-
   const [pendingActivities, setPendingActivities] = useState<Record<string, Record<string, string>>>({});
   const [pendingStatuses,   setPendingStatuses]   = useState<Record<string, string>>({});
   // savedStatuses: persists confirmed saves — overrides server data even after refetch
