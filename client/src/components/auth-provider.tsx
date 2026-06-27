@@ -21,6 +21,7 @@ interface AuthContextType {
   isAdmin: boolean;
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
+  logoutAdmin: () => void;
   hasPermission: (permission: keyof typeof rolePermissions.admin) => boolean;
 }
 
@@ -41,7 +42,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return null;
   });
   const [isLoading, setIsLoading] = useState(false);
-
+  const [adminStepDown, setAdminStepDown] = useState(false);
   const login = async (username: string, password: string) => {
     setIsLoading(true);
     try {
@@ -55,6 +56,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       const userData = await response.json() as EngineerUser;
       setUser(userData);
+      setAdminStepDown(false);   // fresh login always re-enables admin if role allows it
       localStorage.setItem("currentEngineer", JSON.stringify(userData));
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
     } finally {
@@ -64,6 +66,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = () => {
     setUser(null);
+    setAdminStepDown(false);
     localStorage.removeItem("currentEngineer");
     queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
   };
@@ -80,10 +83,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const isAuthenticated = !!user;
   // Always treat username 'admin' as admin, in case stored role is stale
-  const isAdmin = user?.role === 'admin' || user?.username?.toLowerCase() === 'admin';
+  const isAdmin = !adminStepDown && (user?.role === 'admin' || user?.username?.toLowerCase() === 'admin');
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, isAuthenticated, isAdmin, login, logout, hasPermission }}>
+    <AuthContext.Provider value={{ user, isLoading, isAuthenticated, isAdmin, login, logout, logoutAdmin, hasPermission }}>
       {children}
     </AuthContext.Provider>
   );
