@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Header } from "@/components/header";
+import { useAuth } from "@/components/auth-provider";
 import { ArrowLeft, Lock, Unlock, Plus, X, Save, Download } from "lucide-react";
 
 // ── GitHub Data Sources ────────────────────────────────────────────────────────
@@ -57,10 +58,13 @@ export default function DailyReport() {
   const [attendance, setAttendance] = useState<Record<string,Record<number,string>>>({});
 
   // Admin
-  const [adminMode,    setAdminMode]    = useState(false);
-  const [adminName,    setAdminName]    = useState("");
-  const [adminRole,    setAdminRole]    = useState("admin");
-  const [adminUser,    setAdminUser]    = useState("admin");
+  const { user, isAdmin, login, logout } = useAuth();
+  const adminMode = isAdmin;
+  const adminName = user?.name || user?.username || "";
+  const adminUser = user?.username || "admin";
+  const adminRole = user?.role || "admin";
+  
+  
   const [showPassDlg,  setShowPassDlg]  = useState(false);
   const [adminUsers,   setAdminUsers]   = useState<AdminUser[]>([]);
   const [authLoading,  setAuthLoading]  = useState(false);
@@ -220,18 +224,12 @@ export default function DailyReport() {
   };
 
   // ── Login / logout ───────────────────────────────────────────────────────────
-  const tryLogin=()=>{
-    const un=inputUser.trim().toLowerCase();
-    const pw=inputPass;
-    const match=adminUsers.find(u=>u.username.toLowerCase()===un&&u.password===pw);
-    if (match) {
-      setAdminMode(true);
-      setAdminName(match.name||match.username);
-      setAdminUser(match.username);
-      setAdminRole(match.role||"admin");
+  const tryLogin = async () => {
+   try {
+      await login(inputUser.trim(), inputPass);
       setShowPassDlg(false);
       setInputUser(""); setInputPass(""); setPassError(false);
-    } else {
+    } catch {
       setPassError(true); setInputPass("");
     }
   };
@@ -299,7 +297,7 @@ export default function DailyReport() {
             </Button>
             {adminMode ? (
               <Button variant="destructive" size="sm" className="gap-2"
-                onClick={()=>{setAdminMode(false);setAdminName("");}}>
+                onClick={logout}>
                 <Unlock className="h-4 w-4"/>Exit Admin ({adminName})
               </Button>
             ) : (
