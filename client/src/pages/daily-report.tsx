@@ -58,7 +58,7 @@ export default function DailyReport() {
   const [attendance, setAttendance] = useState<Record<string,Record<number,string>>>({});
 
   // Admin
-  const { user, isAdmin, login, logout } = useAuth();
+  const { user, isAdmin, login, logout, logoutAdmin } = useAuth();
   const adminMode = isAdmin;
   const adminName = user?.name || user?.username || "";
   const adminUser = user?.username || "admin";
@@ -297,7 +297,7 @@ export default function DailyReport() {
             </Button>
             {adminMode ? (
               <Button variant="destructive" size="sm" className="gap-2"
-                onClick={logout}>
+                onClick={logoutAdmin}>
                 <Unlock className="h-4 w-4"/>Exit Admin ({adminName})
               </Button>
             ) : (
