@@ -63,7 +63,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setIsLoading(false);
     }
   };
-
+  const logoutAdmin = () => {
+    setAdminStepDown(true);
+  };
   const logout = () => {
     setUser(null);
     setAdminStepDown(false);
