@@ -19,6 +19,7 @@ interface AuthContextType {
   isLoading: boolean;
   isAuthenticated: boolean;
   isAdmin: boolean;
+  isStores: boolean;
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
   logoutAdmin: () => void;
@@ -86,7 +87,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const isAuthenticated = !!user;
   // Always treat username 'admin' as admin, in case stored role is stale
   const isAdmin = !adminStepDown && (user?.role === 'admin' || user?.username?.toLowerCase() === 'admin');
-
+  const isStores = isStores: user?.role === 'stores' || user?.role === 'admin'
   return (
     <AuthContext.Provider value={{ user, isLoading, isAuthenticated, isAdmin, login, logout, logoutAdmin, hasPermission }}>
       {children}
