@@ -22,7 +22,10 @@ if (process.env.VAPID_PUBLIC_KEY) {
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 interface EngineerCredential {
   id: string; username: string; name: string; password: string;
-  role: "admin"|"engineer"; company?: string;
+  role: "admin"|"engineer"|"stores"; company?: string;
+  mobile?: string;
+  email?: string;
+  callmebotApiKey?: string;
   isActive: boolean; createdAt: string; lastLogin?: string;
 }
 interface CredFile { engineers: EngineerCredential[]; lastUpdated: string; }
@@ -105,6 +108,103 @@ function isAdmin(req: Request): boolean {
     const d = JSON.parse(Buffer.from(h as string, "base64").toString("utf-8"));
     return d?.role === "admin" || d?.username?.toLowerCase() === "admin";
   } catch { return false; }
+}
+function isStores(req: Request): boolean {
+  try {
+    const h = req.headers["x-admin-auth"];
+    if (!h) return false;
+    const d = JSON.parse(Buffer.from(h as string, "base64").toString("utf-8"));
+    return ["admin","stores"].includes(d?.role) || d?.username?.toLowerCase() === "admin";
+  } catch { return false; }
+}
+
+function daysBetweenServer(from: string, to: string): number {
+  const a = new Date(from); a.setHours(0,0,0,0);
+  const b = new Date(to);   b.setHours(0,0,0,0);
+  return Math.round((b.getTime() - a.getTime()) / 86400000);
+}
+
+async function sendWhatsApp(mobile: string, apiKey: string, message: string): Promise<void> {
+  try {
+    const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(mobile)}&text=${encodeURIComponent(message)}&apikey=${encodeURIComponent(apiKey)}`;
+    await fetch(url);
+  } catch (e: any) { console.error("[sendWhatsApp]", e.message); }
+}
+
+async function sendEmail(to: string, subject: string, html: string): Promise<void> {
+  if (!process.env.SMTP_USER || !process.env.SMTP_PASS) return;
+  try {
+    const nodemailer = await import("nodemailer");
+    const t = nodemailer.default.createTransport({
+      host: process.env.SMTP_HOST || "smtp.gmail.com",
+      port: parseInt(process.env.SMTP_PORT || "587"),
+      secure: false,
+      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+    });
+    await t.sendMail({ from: `"DRB TechVerse" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`, to, subject, html });
+  } catch (e: any) { console.error("[sendEmail]", e.message); }
+}
+
+async function getProjectEngineers(projectName: string): Promise<EngineerCredential[]> {
+  try {
+    const [waFile, authFile] = await Promise.all([
+      readJsonFile<WAFile>("weekly-assignments.json"),
+      readJsonFile<CredFile>("engineers_auth.json"),
+    ]);
+    const pnLower = projectName.trim().toLowerCase();
+    const engineerNames = new Set<string>();
+    (waFile?.assignments ?? [])
+      .filter(a => a.projectName.trim().toLowerCase() === pnLower)
+      .forEach(a => a.engineerName.split(",").forEach(n => engineerNames.add(n.trim().toLowerCase())));
+    return (authFile?.engineers ?? []).filter(e =>
+      engineerNames.has(e.name.toLowerCase()) || engineerNames.has(e.username.toLowerCase())
+    );
+  } catch { return []; }
+}
+
+async function notifyMaterialReceived(projectName: string, materialName: string): Promise<void> {
+  const engineers = await getProjectEngineers(projectName);
+  const dateStr = new Date().toLocaleDateString("en-IN", { day:"numeric", month:"long", year:"numeric" });
+  const waMsg = `✅ Material Received\n"${materialName}" for project ${projectName} has been marked as Received on ${dateStr}.\nLogin: https://drbtechverse.in`;
+  const html = `<div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden"><div style="background:#16a34a;color:white;padding:16px 20px"><h2 style="margin:0">✅ Material Received</h2></div><div style="padding:20px"><p><b>${materialName}</b> for project <b>${projectName}</b> has been marked as <b>Received</b>.</p><p>Date: ${dateStr}</p><a href="https://drbtechverse.in/material-tracker" style="display:inline-block;background:#16a34a;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;margin-top:12px">View Material Tracker</a></div></div>`;
+  await Promise.allSettled([
+    ...engineers.map(eng => sendPushToEngineer(eng.name, { title:"Material Received", body:`${materialName} — ${projectName}`, url:"/material-tracker", tag:"material-received" })),
+    ...engineers.map(async eng => {
+      if (eng.email) sendEmail(eng.email, `✅ Material Received — ${projectName}`, html).catch(console.error);
+      if (eng.mobile && eng.callmebotApiKey) sendWhatsApp(eng.mobile, eng.callmebotApiKey, waMsg).catch(console.error);
+    }),
+  ]);
+}
+
+async function checkAndSendMaterialAlerts(projectName: string, materials: Array<{name?:string;prApproved?:string;poCreated?:string;poApproved?:string;targetReceipt?:string;receiptStatus?:string}>): Promise<void> {
+  const today = new Date().toISOString().split("T")[0];
+  const issues: string[] = [];
+  for (const m of materials) {
+    if (!m.name) continue;
+    if (m.prApproved && !m.poCreated) {
+      const d = daysBetweenServer(m.prApproved, today);
+      if (d > 3) issues.push(`"${m.name}": PO not raised (${d}d since PR Approved)`);
+    }
+    if (m.poCreated && !m.poApproved) {
+      const d = daysBetweenServer(m.poCreated, today);
+      if (d > 3) issues.push(`"${m.name}": PO not approved (${d}d since PO Created)`);
+    }
+    if (m.targetReceipt && m.targetReceipt < today && (!m.receiptStatus || m.receiptStatus === "Not Received")) {
+      const d = daysBetweenServer(m.targetReceipt, today);
+      issues.push(`"${m.name}": Receipt overdue by ${d} day(s) (Target: ${m.targetReceipt})`);
+    }
+  }
+  if (issues.length === 0) return;
+  const engineers = await getProjectEngineers(projectName);
+  if (engineers.length === 0) return;
+  const subject = `⚠️ Material Alert — ${projectName}`;
+  const listItems = issues.map(i => `<li style="margin-bottom:6px">${i}</li>`).join("");
+  const html = `<div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden"><div style="background:#d97706;color:white;padding:16px 20px"><h2 style="margin:0">⚠️ Material Alert</h2></div><div style="padding:20px"><p><b>Project:</b> ${projectName}</p><ul style="padding-left:20px">${listItems}</ul><a href="https://drbtechverse.in/material-tracker" style="display:inline-block;background:#d97706;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;margin-top:12px">Open Material Tracker</a></div></div>`;
+  const waMsg = `⚠️ Material Alert — ${projectName}\n${issues.map(i=>`• ${i}`).join("\n")}`;
+  await Promise.allSettled(engineers.map(async eng => {
+    if (eng.email) sendEmail(eng.email, subject, html).catch(console.error);
+    if (eng.mobile && eng.callmebotApiKey) sendWhatsApp(eng.mobile, eng.callmebotApiKey, waMsg).catch(console.error);
+  }));
 }
 function projKey(name: string): string {
   const m = name.trim().match(/^([A-Z0-9]{1,4}-[A-Z0-9]{1,5}-\d{4,6})/i);
@@ -1010,7 +1110,9 @@ interface MaterialRow {
   id: string; name: string; qty: string; unit: string;
   bomDate?: string; prCreated?: string; prApproved?: string;
   poCreated?: string; poApproved?: string;
-  targetReceipt?: string; actualReceipt?: string; notes?: string;
+  targetReceipt?: string; actualReceipt?: string;
+  receiptStatus?: "Not Received"|"Partially Received"|"Received";
+  notes?: string;
 }
 interface ProjectMaterialData {
   projectName: string; bomPath: string; materials: MaterialRow[];
