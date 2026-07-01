@@ -21,13 +21,15 @@ interface EngineerCredential {
   id: string;
   name: string;
   username: string;
-  role: 'admin' | 'engineer';
+  role: 'admin' | 'engineer' | 'stores';
   company?: string;
+  mobile?: string;
+  email?: string;
+  callmebotApiKey?: string;
   isActive: boolean;
   createdAt: string;
   lastLogin?: string;
 }
-
 export default function EngineerManagement() {
   const { toast } = useToast();
   const { isAdmin } = useAuth();
@@ -41,8 +43,11 @@ export default function EngineerManagement() {
     name: "",
     username: "",
     password: "",
-    role: "engineer" as 'admin' | 'engineer',
+    role: "engineer" as 'admin' | 'engineer' | 'stores',
     company: "",
+    mobile: "",
+    email: "",
+    callmebotApiKey: "",
     isActive: true,
   });
 
@@ -118,10 +123,13 @@ export default function EngineerManagement() {
       password: "",
       role: "engineer",
       company: "",
+      mobile: "",
+      email: "",
+      callmebotApiKey: "",
       isActive: true,
     });
   };
-
+  
   const handleEdit = (engineer: EngineerCredential) => {
     setSelectedEngineer(engineer);
     setFormData({
@@ -130,6 +138,9 @@ export default function EngineerManagement() {
       password: "",
       role: engineer.role,
       company: engineer.company || "",
+      mobile: engineer.mobile || "",
+      email: engineer.email || "",
+      callmebotApiKey: engineer.callmebotApiKey || "",
       isActive: engineer.isActive,
     });
     setEditDialogOpen(true);
@@ -417,6 +428,7 @@ export default function EngineerManagement() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="engineer">Engineer</SelectItem>
+                  <SelectItem value="stores">Stores</SelectItem>
                   <SelectItem value="admin">Admin</SelectItem>
                 </SelectContent>
               </Select>
@@ -428,6 +440,36 @@ export default function EngineerManagement() {
                 onChange={(e) => setFormData({ ...formData, company: e.target.value })}
                 placeholder="e.g., Ampere, PAES, D.I.C.S"
                 data-testid="input-engineer-company"
+              />
+            </div>
+             <div>
+              <Label>Mobile (with country code, e.g. 919876543210)</Label>
+              <Input
+                value={formData.mobile}
+                onChange={(e) => setFormData({ ...formData, mobile: e.target.value })}
+                placeholder="919876543210"
+              />
+            </div>
+            <div>
+              <Label>Email</Label>
+              <Input
+                type="email"
+                value={formData.email}
+                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                placeholder="engineer@example.com"
+              />
+            </div>
+            <div>
+              <Label className="flex items-center gap-1">
+                WhatsApp API Key
+                <span className="text-[10px] text-muted-foreground font-normal ml-1">
+                  (CallMeBot — engineer sends "I allow callmebot to send me messages" to +34 644 597 490 on WhatsApp to get this key)
+                </span>
+              </Label>
+              <Input
+                value={formData.callmebotApiKey}
+                onChange={(e) => setFormData({ ...formData, callmebotApiKey: e.target.value })}
+                placeholder="API key from CallMeBot"
               />
             </div>
             <div className="flex items-center gap-2">
