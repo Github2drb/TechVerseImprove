@@ -11,17 +11,15 @@ async function throwIfResNotOk(res: Response) {
 export function getAdminAuthHeader(): Record<string, string> {
   const userStr = localStorage.getItem("currentEngineer");
   if (!userStr) return {};
-  
   try {
     const user = JSON.parse(userStr);
-    const isAdminUser = user.role === 'admin' || user.username?.toLowerCase() === 'admin';
-    if (isAdminUser) {
-      const authData = btoa(JSON.stringify({ username: user.username, role: 'admin' }));
+    const validRoles = ["admin", "stores"];
+    const isPrivileged = validRoles.includes(user.role) || user.username?.toLowerCase() === "admin";
+    if (isPrivileged) {
+      const authData = btoa(JSON.stringify({ username: user.username, role: user.role }));
       return { "X-Admin-Auth": authData };
     }
-  } catch {
-    // Ignore parse errors
-  }
+  } catch {}
   return {};
 }
 
