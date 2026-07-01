@@ -1141,23 +1141,57 @@ r.get("/material-tracker/:project", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-// Save data for one project
+// Save data for one project (admin: all fields; stores: receipt fields only handled via PATCH)
 r.post("/material-tracker/:project", async (req, res) => {
   try {
     if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
     const f = (await readJsonFile<MaterialTrackerFile>("material-tracker.json")) ?? { projects: {}, lastUpdated: "" };
     const key = matKey(req.params.project);
+    const prevMaterials: MaterialRow[] = f.projects[key]?.materials ?? [];
+    const newMaterials: MaterialRow[] = Array.isArray(req.body.materials) ? req.body.materials : [];
     f.projects[key] = {
       projectName: req.body.projectName || req.params.project,
       bomPath: req.body.bomPath || "",
-      materials: Array.isArray(req.body.materials) ? req.body.materials : [],
+      materials: newMaterials,
     };
     f.lastUpdated = new Date().toISOString();
     await writeJsonFile("material-tracker.json", f, `Material tracker update: ${req.params.project}`);
+    // Notify on newly-Received items
+    const prevMap = new Map(prevMaterials.map(m => [m.id, m]));
+    for (const m of newMaterials) {
+      if (m.receiptStatus === "Received" && prevMap.get(m.id)?.receiptStatus !== "Received") {
+        notifyMaterialReceived(req.body.projectName || req.params.project, m.name).catch(console.error);
+      }
+    }
+    // Auto-alert for PO missing / receipt overdue — background
+    checkAndSendMaterialAlerts(req.body.projectName || req.params.project, newMaterials).catch(console.error);
     res.json({ success: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
+// Stores: update only receipt fields for a specific material
+r.patch("/material-tracker/:project/receipt", async (req, res) => {
+  try {
+    if (!isStores(req)) return res.status(403).json({ message: "Admin or Stores only" });
+    const { materialId, actualReceipt, receiptStatus } = req.body;
+    if (!materialId) return res.status(400).json({ message: "materialId required" });
+    const f = await readJsonFile<MaterialTrackerFile>("material-tracker.json");
+    if (!f) return res.status(404).json({ message: "Not found" });
+    const proj = f.projects[matKey(req.params.project)];
+    if (!proj) return res.status(404).json({ message: "Project not found" });
+    const mat = proj.materials.find(m => m.id === materialId);
+    if (!mat) return res.status(404).json({ message: "Material not found" });
+    const wasReceived = mat.receiptStatus === "Received";
+    if (actualReceipt !== undefined) mat.actualReceipt = actualReceipt;
+    if (receiptStatus !== undefined) mat.receiptStatus = receiptStatus as any;
+    f.lastUpdated = new Date().toISOString();
+    await writeJsonFile("material-tracker.json", f, `Receipt update: ${proj.projectName} — ${mat.name}`);
+    if (receiptStatus === "Received" && !wasReceived) {
+      notifyMaterialReceived(proj.projectName, mat.name).catch(console.error);
+    }
+    res.json({ success: true, material: mat });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
 // Delete a project's material tracking
 r.delete("/material-tracker/:project", async (req, res) => {
   try {
