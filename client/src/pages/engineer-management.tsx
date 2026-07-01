@@ -544,6 +544,39 @@ export default function EngineerManagement() {
                 data-testid="input-edit-company"
               />
             </div>
+            <div>
+              <Label>Mobile (with country code, e.g. 919876543210)</Label>
+              <Input
+                value={formData.mobile}
+                onChange={(e) => setFormData({ ...formData, mobile: e.target.value })}
+                placeholder="919876543210"
+                data-testid="input-edit-mobile"
+              />
+            </div>
+            <div>
+              <Label>Email</Label>
+              <Input
+                type="email"
+                value={formData.email}
+                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                placeholder="engineer@example.com"
+                data-testid="input-edit-email"
+              />
+            </div>
+            <div>
+              <Label className="flex items-center gap-1">
+                WhatsApp API Key
+                <span className="text-[10px] text-muted-foreground font-normal ml-1">
+                  (CallMeBot — engineer sends "I allow callmebot to send me messages" to +34 644 597 490 on WhatsApp)
+                </span>
+              </Label>
+              <Input
+                value={formData.callmebotApiKey}
+                onChange={(e) => setFormData({ ...formData, callmebotApiKey: e.target.value })}
+                placeholder="API key from CallMeBot"
+                data-testid="input-edit-callmebotkey"
+              />
+            </div>
             <div className="flex items-center gap-2">
               <Switch
                 checked={formData.isActive}
