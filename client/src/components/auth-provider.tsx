@@ -1,5 +1,4 @@
-import { createContext, useContext, useState, useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { createContext, useContext, useState } from "react";
 import { queryClient } from "@/lib/queryClient";
 import type { UserRole } from "@shared/schema";
 import { rolePermissions } from "@shared/schema";
@@ -8,7 +7,7 @@ interface EngineerUser {
   id: string;
   username: string;
   name: string;
-  role: 'admin' | 'engineer';
+  role: 'admin' | 'engineer' | 'stores';
   company?: string;
   email: string;
   status: string;
@@ -33,17 +32,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (typeof window !== "undefined") {
       const stored = localStorage.getItem("currentEngineer");
       if (stored) {
-        try {
-          return JSON.parse(stored);
-        } catch {
-          return null;
-        }
+        try { return JSON.parse(stored); } catch { return null; }
       }
     }
     return null;
   });
+
   const [isLoading, setIsLoading] = useState(false);
   const [adminStepDown, setAdminStepDown] = useState(false);
+
   const login = async (username: string, password: string) => {
     setIsLoading(true);
     try {
@@ -52,21 +49,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
       });
-      if (!response.ok) {
-        throw new Error("Login failed");
-      }
+      if (!response.ok) throw new Error("Login failed");
       const userData = await response.json() as EngineerUser;
       setUser(userData);
-      setAdminStepDown(false);   // fresh login always re-enables admin if role allows it
+      setAdminStepDown(false);
       localStorage.setItem("currentEngineer", JSON.stringify(userData));
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
     } finally {
       setIsLoading(false);
     }
   };
-  const logoutAdmin = () => {
-    setAdminStepDown(true);
-  };
+
+  const logoutAdmin = () => setAdminStepDown(true);
+
   const logout = () => {
     setUser(null);
     setAdminStepDown(false);
@@ -76,20 +71,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const hasPermission = (permission: keyof typeof rolePermissions.admin): boolean => {
     if (!user) return false;
-    // Admin has all permissions
     if (user.role === 'admin') return true;
-    // Map engineer role to member permissions
-    const userRole: UserRole = user.role === 'engineer' ? 'member' : 'admin';
+    // stores and engineer both get member-level permissions
+    const userRole: UserRole = 'member';
     const permissions = rolePermissions[userRole];
     return permissions ? permissions[permission] : false;
   };
 
   const isAuthenticated = !!user;
-  // Always treat username 'admin' as admin, in case stored role is stale
-  const isAdmin = !adminStepDown && (user?.role === 'admin' || user?.username?.toLowerCase() === 'admin');
-  const isStores = isStores: user?.role === 'stores' || user?.role === 'admin'
+  const isAdmin = !adminStepDown && (
+    user?.role === 'admin' || user?.username?.toLowerCase() === 'admin'
+  );
+  const isStores = !adminStepDown && (
+    user?.role === 'stores' || user?.role === 'admin' || user?.username?.toLowerCase() === 'admin'
+  );
+
   return (
-    <AuthContext.Provider value={{ user, isLoading, isAuthenticated, isAdmin, login, logout, logoutAdmin, hasPermission }}>
+    <AuthContext.Provider value={{
+      user, isLoading, isAuthenticated,
+      isAdmin, isStores,
+      login, logout, logoutAdmin, hasPermission,
+    }}>
       {children}
     </AuthContext.Provider>
   );
@@ -97,8 +99,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error("useAuth must be used within an AuthProvider");
-  }
+  if (!context) throw new Error("useAuth must be used within an AuthProvider");
   return context;
 }
