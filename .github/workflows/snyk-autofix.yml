@@ -14,13 +14,13 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.0
         with:
           token: ${{ secrets.GH_PAT }}
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v4.1.0
         with:
           node-version: '20'
 
@@ -125,7 +125,7 @@ jobs:
               with open("no_issues.flag", "w") as f:
                   f.write("1")
           else:
-              prompt = f"""You are a security engineer. Analyze these {len(issues)} Snyk security vulnerabilities found in the DRB TechVerse dashboard codebase (React/TypeScript frontend + Node.js/Express backend).
+              prompt = f"""You are a security engineer. Analyze these {len(issues)} Snyk security vulnerabilities found in the DRB TechVerse dashboard codebase (React/TypeScript frontend + Node.j[...]
 
           VULNERABILITIES:
           {json.dumps(issues, indent=2)}
