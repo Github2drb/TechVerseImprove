@@ -22,6 +22,10 @@ function checkRateLimit(ip: string): boolean {
   if (record.count >= 5) return false; // Block after 5 attempts
   record.count++; record.lastAttempt = now; return true;
 }
+function sanitizeInput(s: unknown): string {
+  if (typeof s !== "string") return "";
+  return s.replace(/[<>&"']/g, "").trim().slice(0, 200);
+}
 
 // ── VAPID config (module level) ───────────────────────────────────────────────
 if (process.env.VAPID_PUBLIC_KEY) {
@@ -362,21 +366,27 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
   // ── AUTH ──────────────────────────────────────────────────────────────────
   r.post("/auth/login", async (req, res) => {
     try {
+      const ip = req.ip || req.socket.remoteAddress || "unknown";
+      if (!checkRateLimit(ip)) {
+        return res.status(429).json({ message: "Too many login attempts. Try again in 15 minutes." });
+      }
       const { username, password } = req.body;
       if (!username || !password) return res.status(400).json({ message: "Username and password required" });
       const f = await readJsonFile<CredFile>("engineers_auth.json");
       const list: EngineerCredential[] = f?.engineers ?? [];
       if (!list.find(e => e.username === "admin"))
         list.push({ id:"admin-1", username:"admin", name:"Admin", password:"admin@drb", role:"admin", isActive:true, createdAt:new Date().toISOString() });
-      const found = list.find(async e => {
-        if (e.username.toLowerCase() !== username.toLowerCase()) return false;
-        if (e.isActive === false) return false;
-        // Support both hashed and plain text (migration period)
-        if (e.password.startsWith("$2")) {
-          return await bcrypt.compare(password, e.password);
-        }
-        return e.password === password;
-        });
+      const username_clean = sanitizeInput(username);
+      const password_clean = typeof password === "string" ? password.slice(0, 200) : "";
+      let found: EngineerCredential | undefined;
+      for (const e of list) {
+        if (e.username.toLowerCase() !== username_clean.toLowerCase()) continue;
+        if (e.isActive === false) continue;
+        const match = e.password.startsWith("$2")
+          ? await bcrypt.compare(password_clean, e.password)
+          : e.password === password_clean;
+        if (match) { found = e; break; }
+      }
       if (!found) return res.status(401).json({ message: "Invalid credentials" });
       found.lastLogin = new Date().toISOString();
       if (f) { f.lastUpdated=new Date().toISOString(); writeJsonFile("engineers_auth.json",f,"Update lastLogin").catch(()=>{}); }
@@ -401,7 +411,7 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
       if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
       const f = (await readJsonFile<CredFile>("engineers_auth.json"))??{engineers:[],lastUpdated:""};
       const eng: EngineerCredential = { id:req.body.id||`eng-${Date.now()}`, username:req.body.username,
-        name:req.body.name, password:req.body.password||"drb@123", role:req.body.role||"engineer",
+        name:req.body.name, password: await bcrypt.hash(req.body.password || "drb@123", 10), role:req.body.role||"engineer",
         company:req.body.company, isActive:req.body.isActive!==false, createdAt:new Date().toISOString() };
       f.engineers.push(eng); f.lastUpdated=new Date().toISOString();
       await writeJsonFile("engineers_auth.json",f,`Add engineer: ${eng.username}`);
@@ -454,7 +464,7 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
       if (!f) return res.status(404).json({message:"Not found"});
       const eng=f.engineers.find(e=>e.username.toLowerCase()===username.toLowerCase());
       if (!eng) return res.status(404).json({message:"Engineer not found"});
-      eng.password=newPassword; f.lastUpdated=new Date().toISOString();
+      eng.password = await bcrypt.hash(newPassword, 10); f.lastUpdated=new Date().toISOString();
       await writeJsonFile("engineers_auth.json",f,`Reset password: ${username}`);
       res.json({success:true});
     } catch (e: any) { res.status(500).json({ error: e.message }); }
