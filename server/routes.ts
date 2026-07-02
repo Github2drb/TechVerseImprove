@@ -10,6 +10,18 @@ import {
   readJsonFile, writeJsonFile,
 } from "./github";
 import webpush from "web-push";
+const loginAttempts = new Map<string, { count: number; lastAttempt: number }>();
+function checkRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const record = loginAttempts.get(ip);
+  if (!record) { loginAttempts.set(ip, { count: 1, lastAttempt: now }); return true; }
+  // Reset after 15 minutes
+  if (now - record.lastAttempt > 15 * 60 * 1000) {
+    loginAttempts.set(ip, { count: 1, lastAttempt: now }); return true;
+  }
+  if (record.count >= 5) return false; // Block after 5 attempts
+  record.count++; record.lastAttempt = now; return true;
+}
 
 // ── VAPID config (module level) ───────────────────────────────────────────────
 if (process.env.VAPID_PUBLIC_KEY) {
