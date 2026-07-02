@@ -82,14 +82,13 @@
   },
   "overrides": {
     "uuid": "^11.1.1",
-    "glob": "^9.0.0",
     "@esbuild-kit/core-utils": {
       "esbuild": "^0.25.0"
     },
     "@esbuild-kit/esm-loader": {
       "esbuild": "^0.25.0"
     }
-  },
+  }
   "scripts": {
     "dev": "NODE_ENV=development tsx server/index.ts",
     "build": "npx tsx script/build.ts",
