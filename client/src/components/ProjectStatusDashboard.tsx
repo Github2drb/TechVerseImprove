@@ -57,7 +57,7 @@ function parseSheet(rows: any[][]): SheetData {
       statuses.push(row[c] ? String(row[c]).trim() : "");
     }
     projects.push({
-      id:       `proj-${r}`,
+      id:       "proj-" + r,
       name:     String(row[1] ?? "").trim(),
       engineer: String(row[2] ?? "—").trim(),
       statuses,
@@ -66,7 +66,6 @@ function parseSheet(rows: any[][]): SheetData {
   return { phases, projects };
 }
 
-function isAdmin(): boolean { return sessionStorage.getItem("drb_admin") === "1"; }
 function adminHeader(): string {
   try {
     return btoa(JSON.stringify({ username: "admin", role: "admin" }));
@@ -79,9 +78,9 @@ function StatusCell({ sym, onClick, adminMode }: { sym: string; onClick?: () => 
     <button
       onClick={adminMode ? onClick : undefined}
       title={m.label}
-      className={`inline-flex items-center justify-center w-7 h-7 rounded text-xs font-bold border transition-all
-        ${m.bg} ${m.text} ${m.border}
-        ${adminMode ? "cursor-pointer hover:scale-110 hover:shadow-md active:scale-95" : "cursor-default"}`}
+      className={"inline-flex items-center justify-center w-7 h-7 rounded text-xs font-bold border transition-all " +
+        m.bg + " " + m.text + " " + m.border + " " +
+        (adminMode ? "cursor-pointer hover:scale-110 hover:shadow-md active:scale-95" : "cursor-default")}
     >
       {m.badge}
     </button>
@@ -94,9 +93,9 @@ function CompletionBar({ pct }: { pct: number }) {
   return (
     <div className="flex items-center gap-2 min-w-[100px]">
       <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
-        <div className={`h-full rounded-full transition-all duration-500 ${color}`} style={{ width:`${pct}%` }} />
+        <div className={"h-full rounded-full transition-all duration-500 " + color} style={{ width: pct + "%" }} />
       </div>
-      <span className={`text-xs font-bold tabular-nums min-w-[34px] text-right ${textColor}`}>{pct}%</span>
+      <span className={"text-xs font-bold tabular-nums min-w-[34px] text-right " + textColor}>{pct}%</span>
     </div>
   );
 }
@@ -112,7 +111,7 @@ function StatusPicker({
     const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
-  }, []);
+  }, [onClose]);
 
   return (
     <div ref={ref} className="fixed z-50 bg-background border rounded-xl shadow-2xl p-3 w-52" style={{ top, left }}>
@@ -125,10 +124,9 @@ function StatusPicker({
           const m = STATUS_META[sym];
           return (
             <button key={sym} onClick={() => { onSelect(sym); onClose(); }}
-              className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs font-medium text-left transition-all
-                hover:opacity-90 active:scale-95
-                ${current === sym ? "ring-2 ring-primary ring-offset-1" : ""}
-                ${m.bg} ${m.text}`}>
+              className={"flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs font-medium text-left transition-all hover:opacity-90 active:scale-95 " +
+                (current === sym ? "ring-2 ring-primary ring-offset-1 " : "") +
+                m.bg + " " + m.text}>
               <span className="text-sm font-bold w-5 text-center">{m.badge}</span>
               <span>{m.label}</span>
               {current === sym && <span className="ml-auto text-[10px] opacity-70">current</span>}
@@ -150,32 +148,28 @@ export function ProjectStatusDashboard() {
   const [picker, setPicker] = useState<{ projId: string; ci: number; top: number; left: number } | null>(null);
   const [adminMode] = useState(true);
 
-  // ── Fetch Excel via backend proxy — uses ExcelJS instead of xlsx ───────────
   const fetchExcel = async (): Promise<SheetData | null> => {
     const res = await fetch(EXCEL_API, { cache: "no-store" });
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
-      throw new Error(j.error ?? `Backend HTTP ${res.status}`);
+      throw new Error(j.error ?? "Backend HTTP " + res.status);
     }
     const meta   = await res.json();
     const b64    = (meta.content as string).replace(/\n/g, "");
     const binary = atob(b64);
     const buf    = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) buf[i] = binary.charCodeAt(i);
-
-    // ExcelJS: load workbook from ArrayBuffer
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(buf.buffer as ArrayBuffer);
     const ws = wb.worksheets[0];
     const rows: any[][] = [];
     ws.eachRow((row) => {
-      // ExcelJS row.values is 1-indexed — slice(1) to make it 0-indexed
       rows.push((row.values as any[]).slice(1));
     });
     return parseSheet(rows);
   };
 
-  const fetchSaved = async (): Promise<{ overrides: Record<string, string[]>; phases?: string[]; projects?: any[] } | null> => {
+  const fetchSaved = async (): Promise<{ overrides: Record<string, string[]> } | null> => {
     try {
       const r = await fetch("/api/project-status-data");
       if (!r.ok) return null;
@@ -261,15 +255,13 @@ export function ProjectStatusDashboard() {
 
   if (loading) return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight">Project Status</h2>
-          <p className="text-muted-foreground text-sm mt-1">May – Sept 2026 · Controls Engineering</p>
-        </div>
+      <div>
+        <h2 className="text-2xl font-bold tracking-tight">Project Status</h2>
+        <p className="text-muted-foreground text-sm mt-1">May - Sept 2026 · Controls Engineering</p>
       </div>
       <div className="flex items-center gap-3 py-12 justify-center">
         <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary" />
-        <span className="text-muted-foreground text-sm">Loading from GitHub…</span>
+        <span className="text-muted-foreground text-sm">Loading from GitHub...</span>
       </div>
     </div>
   );
@@ -291,7 +283,7 @@ export function ProjectStatusDashboard() {
   const avgPct    = totals.length ? Math.round(totals.reduce((a, b) => a + b, 0) / totals.length) : 0;
   const hasUnsaved = Object.keys(overrides).length > 0;
 
-  const saveBtnLabel = saveStatus==="saving"?"Saving…":saveStatus==="saved"?"Saved ✓":saveStatus==="error"?"Error!":"Save";
+  const saveBtnLabel = saveStatus==="saving"?"Saving...":saveStatus==="saved"?"Saved ✓":saveStatus==="error"?"Error!":"Save";
   const saveBtnColor = saveStatus==="saved"?"bg-green-600 hover:bg-green-700 text-white":saveStatus==="error"?"bg-red-600 hover:bg-red-700 text-white":"";
 
   return (
@@ -300,7 +292,7 @@ export function ProjectStatusDashboard() {
         <div>
           <h2 className="text-2xl font-bold tracking-tight">Project Status</h2>
           <p className="text-muted-foreground text-sm mt-1">
-            May – Sept 2026 · Controls Engineering
+            May - Sept 2026 · Controls Engineering
             {lastRefresh && <span className="ml-2 opacity-60">· Refreshed {lastRefresh}</span>}
           </p>
         </div>
@@ -310,20 +302,21 @@ export function ProjectStatusDashboard() {
                 <Unlock className="h-3 w-3"/> Admin Mode
               </span>
             : <span className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border text-muted-foreground">
-                <Lock className="h-3 w-3"/> View only · log in via Daily Report to edit
+                <Lock className="h-3 w-3"/> View only
               </span>
           }
           {adminMode && (
             <button onClick={saveData} disabled={saveStatus==="saving"}
-              className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors
-                ${saveBtnColor || "hover:bg-muted border-input"} ${hasUnsaved && saveStatus==="idle" ? "border-amber-400 text-amber-600 dark:text-amber-400" : ""}`}>
+              className={"inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors " +
+                (saveBtnColor || "hover:bg-muted border-input") + " " +
+                (hasUnsaved && saveStatus==="idle" ? "border-amber-400 text-amber-600 dark:text-amber-400" : "")}>
               <Save className="h-3.5 w-3.5"/>{saveBtnLabel}
               {hasUnsaved && saveStatus==="idle" && <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"/>}
             </button>
           )}
           <button onClick={refresh} disabled={loading}
             className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border hover:bg-muted transition-colors border-input">
-            <RefreshCw className={`h-3.5 w-3.5 ${loading?"animate-spin":""}`}/> Refresh
+            <RefreshCw className={"h-3.5 w-3.5 " + (loading?"animate-spin":"")}/> Refresh
           </button>
         </div>
       </div>
@@ -333,11 +326,11 @@ export function ProjectStatusDashboard() {
           { label:"Total Projects",   value:projects.length, color:"text-foreground",                    sub:"All tracked" },
           { label:"Completed",        value:fullDone,         color:"text-green-600 dark:text-green-400", sub:"100% done" },
           { label:"In Progress",      value:inProg,           color:"text-blue-600 dark:text-blue-400",   sub:"Partially done" },
-          { label:"Overall Progress", value:`${avgPct}%`,     color:"text-amber-600 dark:text-amber-400", sub:"Average completion" },
+          { label:"Overall Progress", value:avgPct + "%",     color:"text-amber-600 dark:text-amber-400", sub:"Average completion" },
         ].map(c => (
           <div key={c.label} className="border rounded-xl p-4 bg-card">
             <p className="text-xs font-medium text-muted-foreground">{c.label}</p>
-            <p className={`text-3xl font-bold mt-1 ${c.color}`}>{c.value}</p>
+            <p className={"text-3xl font-bold mt-1 " + c.color}>{c.value}</p>
             <p className="text-xs text-muted-foreground mt-1">{c.sub}</p>
           </div>
         ))}
@@ -348,7 +341,7 @@ export function ProjectStatusDashboard() {
         {ALL_STATUSES.filter(s => s !== "").map(sym => {
           const m = STATUS_META[sym];
           return (
-            <span key={sym} className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${m.bg} ${m.text} ${m.border}`}>
+            <span key={sym} className={"inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border " + m.bg + " " + m.text + " " + m.border}>
               <span className="font-bold">{m.badge}</span>{m.label}
             </span>
           );
@@ -357,7 +350,7 @@ export function ProjectStatusDashboard() {
       </div>
 
       <div className="border rounded-xl overflow-x-auto shadow-sm">
-        <table className="w-full border-collapse text-xs" style={{ minWidth:`${300 + phases.length * 72}px` }}>
+        <table className="w-full border-collapse text-xs" style={{ minWidth: (300 + phases.length * 72) + "px" }}>
           <thead>
             <tr className="border-b bg-muted">
               <th className="sticky left-0 z-20 bg-muted border-r px-3 py-3 text-left font-semibold text-muted-foreground w-10">#</th>
@@ -379,7 +372,7 @@ export function ProjectStatusDashboard() {
               const pct   = totals[idx];
               const rowBg = pct === 100 ? "bg-green-50/60 dark:bg-green-950/20" : idx % 2 !== 0 ? "bg-muted/20" : "";
               return (
-                <tr key={proj.id} className={`border-b hover:bg-muted/40 transition-colors ${rowBg}`}>
+                <tr key={proj.id} className={"border-b hover:bg-muted/40 transition-colors " + rowBg}>
                   <td className="sticky left-0 z-10 bg-background border-r px-3 py-3 text-muted-foreground font-mono">{idx + 1}</td>
                   <td className="sticky left-10 z-10 bg-background border-r px-3 py-3 font-medium text-foreground max-w-[240px]">
                     <span className="line-clamp-2 leading-snug">{proj.name}</span>
@@ -390,11 +383,11 @@ export function ProjectStatusDashboard() {
                     const isOverridden = overrides[proj.id]?.[ci] !== undefined;
                     return (
                       <td key={ci}
-                        className={`border-r text-center align-middle py-2 px-1
-                          ${adminMode ? "cursor-pointer" : ""}
-                          ${isOverridden ? "ring-inset ring-1 ring-amber-400/60" : ""}`}
+                        className={"border-r text-center align-middle py-2 px-1 " +
+                          (adminMode ? "cursor-pointer " : "") +
+                          (isOverridden ? "ring-inset ring-1 ring-amber-400/60" : "")}
                         onClick={e => openPicker(proj.id, ci, e)}
-                        title={adminMode ? `Click to change: ${STATUS_META[sym]?.label ?? sym}` : STATUS_META[sym]?.label}>
+                        title={adminMode ? "Click to change: " + (STATUS_META[sym]?.label ?? sym) : STATUS_META[sym]?.label}>
                         <StatusCell sym={sym} adminMode={adminMode} />
                       </td>
                     );
@@ -420,8 +413,35 @@ export function ProjectStatusDashboard() {
                 const txt = pct>=90?"text-green-400":pct>=60?"text-blue-400":pct>=30?"text-amber-400":"text-red-400";
                 return (
                   <td key={p} className="border-r px-2 py-2 text-center">
-                    <span className={`text-[10px] font-bold ${txt}`}>{pct}%</span>
+                    <span className={"text-[10px] font-bold " + txt}>{pct}%</span>
                     <div className="w-full h-1.5 bg-muted rounded-full mt-1 overflow-hidden">
-                      <div className={`h-full rounded-full ${bar}`} style={{ width:`${pct}%` }} />
+                      <div className={"h-full rounded-full " + bar} style={{ width: pct + "%" }} />
                     </div>
                   </td>
+                );
+              })}
+              <td className="px-3 py-2" />
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <p className="text-xs text-muted-foreground text-center">
+        Source: Excel (GitHub) · Overrides saved to GitHub · {projects.length} projects · {phases.length} phases
+      </p>
+
+      {picker && data && (
+        <StatusPicker
+          top={picker.top}
+          left={picker.left}
+          current={getStatus(
+            picker.projId, picker.ci,
+            data.projects.find(p => p.id === picker.projId)?.statuses[picker.ci] ?? ""
+          )}
+          onSelect={applyStatus}
+          onClose={() => setPicker(null)}
+        />
+      )}
+    </div>
+  );
+}
