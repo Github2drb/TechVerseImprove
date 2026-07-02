@@ -15,7 +15,7 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/components/auth-provider";
-import ExcelJS from "exceljs";
+import * as ExcelJS from "exceljs";
 
 // ── Types ────────────────────────────────────────────────────────────
 type ReceiptStatus = "Not Received" | "Partially Received" | "Received";
