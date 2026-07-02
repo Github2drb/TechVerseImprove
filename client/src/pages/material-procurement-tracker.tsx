@@ -15,9 +15,9 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/components/auth-provider";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// ── Types ────────────────────────────────────────────────────────────
 type ReceiptStatus = "Not Received" | "Partially Received" | "Received";
 interface MaterialRow {
   id: string;
@@ -40,7 +40,7 @@ interface ProjectMaterialData {
   materials: MaterialRow[];
 }
 
-// ── Date helpers ───────────────────────────────────────────────────────────────
+// ── Date helpers ─────────────────────────────────────────────────────────
 function daysBetween(from?: string, to?: string): number | null {
   if (!from || !to) return null;
   const a = new Date(from); a.setHours(0,0,0,0);
@@ -70,12 +70,10 @@ function excelCellToDateStr(val: any): string {
     return val.toISOString().split("T")[0];
   }
   if (typeof val === "number") {
-    // Excel serial date (days since 1899-12-30)
-    const parsed = XLSX.SSF.parse_date_code(val);
-    if (!parsed) return "";
-    const mm = String(parsed.m).padStart(2, "0");
-    const dd = String(parsed.d).padStart(2, "0");
-    return `${parsed.y}-${mm}-${dd}`;
+    // Excel serial date: convert from number to date
+    const excelDate = new Date((val - 25569) * 86400000);
+    if (isNaN(excelDate.getTime())) return "";
+    return excelDate.toISOString().split("T")[0];
   }
   const s = String(val).trim();
   if (!s) return "";
@@ -112,36 +110,43 @@ function matchHeader(header: string): keyof MaterialRow | "skip" {
 }
 
 function parseExcelToMaterials(buffer: ArrayBuffer): MaterialRow[] {
-  const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
-  // Use the first sheet that isn't named "Instructions"
-  const sheetName = workbook.SheetNames.find(n => n.toLowerCase() !== "instructions") || workbook.SheetNames[0];
-  const sheet = workbook.Sheets[sheetName];
-  const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: "" });
-  if (rows.length < 2) return [];
+  const workbook = new ExcelJS.Workbook();
+  return workbook.xlsx.load(buffer).then(() => {
+    // Use the first sheet that isn't named "Instructions"
+    const sheet = workbook.worksheets.find(ws => ws.name.toLowerCase() !== "instructions") || workbook.worksheets[0];
+    if (!sheet) return [];
 
-  const headerRow = rows[0].map(h => String(h ?? ""));
-  const fieldMap = headerRow.map(h => matchHeader(h));
-
-  const out: MaterialRow[] = [];
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i];
-    const isEmpty = row.every(c => c === "" || c === null || c === undefined);
-    if (isEmpty) continue;
-
-    const material: MaterialRow = { id: `mat-${Date.now()}-${i}-${Math.random().toString(36).substr(2,4)}`, name: "", qty: "", unit: "" };
-    fieldMap.forEach((field, colIdx) => {
-      if (field === "skip") return;
-      const raw = row[colIdx];
-      if (raw === "" || raw === null || raw === undefined) return;
-      if (field === "name" || field === "qty" || field === "unit" || field === "notes") {
-        (material as any)[field] = String(raw).trim();
-      } else {
-        (material as any)[field] = excelCellToDateStr(raw);
-      }
+    const rows: any[][] = [];
+    sheet.eachRow((row, rowNumber) => {
+      rows.push(row.values as any[]);
     });
-    if (material.name.trim()) out.push(material);
-  }
-  return out;
+
+    if (rows.length < 2) return [];
+
+    const headerRow = (rows[0] || []).map(h => String(h ?? ""));
+    const fieldMap = headerRow.map(h => matchHeader(h));
+
+    const out: MaterialRow[] = [];
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i] || [];
+      const isEmpty = row.every(c => c === "" || c === null || c === undefined);
+      if (isEmpty) continue;
+
+      const material: MaterialRow = { id: `mat-${Date.now()}-${i}-${Math.random().toString(36).substr(2,4)}`, name: "", qty: "", unit: "" };
+      fieldMap.forEach((field, colIdx) => {
+        if (field === "skip") return;
+        const raw = row[colIdx];
+        if (raw === "" || raw === null || raw === undefined) return;
+        if (field === "name" || field === "qty" || field === "unit" || field === "notes") {
+          (material as any)[field] = String(raw).trim();
+        } else {
+          (material as any)[field] = excelCellToDateStr(raw);
+        }
+      });
+      if (material.name.trim()) out.push(material);
+    }
+    return out;
+  }).catch(() => []);
 }
 
 // ── Per-material status calculation ────────────────────────────────────────────
@@ -400,14 +405,14 @@ export default function MaterialProcurementTracker() {
     setHasChanges(true);
   };
 
-  // ── Excel import flow ─────────────────────────────────────────────────────────
+  // ── Excel import flow ───────────────────────────────────────────────────────
   const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setIsImporting(true);
     try {
       const buffer = await file.arrayBuffer();
-      const parsed = parseExcelToMaterials(buffer);
+      const parsed = await parseExcelToMaterials(buffer);
       if (parsed.length === 0) {
         toast({ title: "No materials found in this sheet", description: "Check that column headers match the expected names.", variant: "destructive" });
       } else {
