@@ -10,6 +10,12 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { Lock, User, KeyRound, ArrowLeft } from "lucide-react";
 
+r.post("/auth/login", async (req, res) => {
+  const ip = req.ip || req.socket.remoteAddress || "unknown";
+  if (!checkRateLimit(ip)) {
+    return res.status(429).json({ message: "Too many login attempts. Try again in 15 minutes." });
+  }
+
 const loginSchema = z.object({
   username: z.string().min(1, "Username is required"),
   password: z.string().min(1, "Password is required"),
