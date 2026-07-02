@@ -1,6 +1,7 @@
 // server/routes.ts — DRB TechVerse — CLEAN VERSION
 import { Router, Request, Response } from "express";
 import type { Server } from "http";
+import bcrypt from "bcryptjs";
 import {
   getProjectData, saveProjectAssignment, updateProjectAssignment, deleteProjectAssignment,
   getProjectActivities, upsertProjectActivity, getAnalyticsSummary,
@@ -355,7 +356,15 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
       const list: EngineerCredential[] = f?.engineers ?? [];
       if (!list.find(e => e.username === "admin"))
         list.push({ id:"admin-1", username:"admin", name:"Admin", password:"admin@drb", role:"admin", isActive:true, createdAt:new Date().toISOString() });
-      const found = list.find(e => e.username.toLowerCase()===username.toLowerCase() && e.password===password && e.isActive!==false);
+      const found = list.find(async e => {
+        if (e.username.toLowerCase() !== username.toLowerCase()) return false;
+        if (e.isActive === false) return false;
+        // Support both hashed and plain text (migration period)
+        if (e.password.startsWith("$2")) {
+          return await bcrypt.compare(password, e.password);
+        }
+        return e.password === password;
+        });
       if (!found) return res.status(401).json({ message: "Invalid credentials" });
       found.lastLogin = new Date().toISOString();
       if (f) { f.lastUpdated=new Date().toISOString(); writeJsonFile("engineers_auth.json",f,"Update lastLogin").catch(()=>{}); }
