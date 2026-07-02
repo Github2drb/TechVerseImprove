@@ -9,7 +9,7 @@ import {
   Search, ChevronLeft, Edit2, Lock, Unlock, Download,
   BookOpen, RefreshCw,
 } from "lucide-react";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const CATEGORIES = ["All", "PLC", "HMI", "SCADA", "Project Update", "Training", "General"];
@@ -60,31 +60,42 @@ function isAdminSession(): boolean {
 }
 
 // ── Excel helpers (SheetJS / xlsx — already installed, no extra npm needed) ───
-function makeWs(
+// ── Excel helpers (ExcelJS) ───────────────────────────────────────────────────
+function makeSheet(
+  wb: ExcelJS.Workbook,
+  sheetName: string,
   title: string,
   headers: string[],
   rows: (string | number | boolean)[][],
   colWidths: number[]
-): XLSX.WorkSheet {
-  const aoa: (string | number | boolean)[][] = [
-    [title],
-    [],
-    headers,
-    ...rows,
-  ];
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }];
-  ws["!cols"] = colWidths.map(w => ({ wch: w }));
-  ws["!freeze"] = { xSplit: 0, ySplit: 3 };
+): ExcelJS.Worksheet {
+  const ws = wb.addWorksheet(sheetName);
+  ws.addRow([title]);
+  try { ws.mergeCells(1, 1, 1, headers.length); } catch {}
+  ws.getRow(1).getCell(1).font = { bold: true, size: 12 };
+  ws.addRow([]);
+  const hRow = ws.addRow(headers);
+  hRow.eachCell(cell => { cell.font = { bold: true }; });
+  rows.forEach(row => ws.addRow(row.map(c => c ?? "")));
+  colWidths.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+  ws.views = [{ state: "frozen", xSplit: 0, ySplit: 3 }];
   return ws;
 }
 
-function addSubSection(
+function addAoaSheet(
+  wb: ExcelJS.Workbook,
+  sheetName: string,
   aoa: (string | number | boolean)[][],
-  headers: string[],
-  rows: (string | number | boolean)[][]
-) {
-  aoa.push([], headers, ...rows);
+  colWidths: number[],
+  merges: { s: { r: number; c: number }; e: { r: number; c: number } }[]
+): ExcelJS.Worksheet {
+  const ws = wb.addWorksheet(sheetName);
+  aoa.forEach(row => ws.addRow(row.map(c => c ?? "")));
+  colWidths.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+  merges.forEach(m => {
+    try { ws.mergeCells(m.s.r + 1, m.s.c + 1, m.e.r + 1, m.e.c + 1); } catch {}
+  });
+  return ws;
 }
 
 function v(el: Element | null): string {
@@ -343,263 +354,252 @@ export default function BlogPage() {
     setShowDraftList(true);
   };
 
-  const downloadExcel = () => {
-    const div = contentRef.current;
-    if (!div) return;
+  const downloadExcel = async () => {
+  const div = contentRef.current;
+  if (!div) return;
 
-    const wb = XLSX.utils.book_new();
+  const wb = new ExcelJS.Workbook();
 
-    const s1 = makeWs(
-      "CONTROLS PROJECT ALLOCATION & ASSIGNMENT",
-      ["Field", "Value"],
-      [
-        ["Project Name",          v(div.querySelector("#f_projectName"))],
-        ["Project Code",          v(div.querySelector("#f_projectCode"))],
-        ["Client / Facility",     v(div.querySelector("#f_client"))],
-        ["Project Manager",       v(div.querySelector("#f_projectManager"))],
-        ["Start Date",            v(div.querySelector("#f_startDate"))],
-        ["Target Completion",     v(div.querySelector("#f_completionDate"))],
-        ["Budget Allocation",     v(div.querySelector("#f_budget"))],
-        ["Prepared By",           v(div.querySelector("#f_preparedBy"))],
-        ["Approved By",           v(div.querySelector("#f_approvedBy"))],
-        ["Document Date",         v(div.querySelector("#f_docDate"))],
-        ["Project Type",          checkboxGroup(div, "f_projType")],
-        ["Priority Level",        radioVal(div, "f_priority")],
-        ["Safety Classification", radioVal(div, "f_safety")],
-      ],
-      [30, 55]
-    );
-    XLSX.utils.book_append_sheet(wb, s1, "1. Project Overview");
+  // ── Sheet 1: Project Overview ─────────────────────────────────────────────
+  makeSheet(wb, "1. Project Overview",
+    "CONTROLS PROJECT ALLOCATION & ASSIGNMENT",
+    ["Field", "Value"],
+    [
+      ["Project Name",          v(div.querySelector("#f_projectName"))],
+      ["Project Code",          v(div.querySelector("#f_projectCode"))],
+      ["Client / Facility",     v(div.querySelector("#f_client"))],
+      ["Project Manager",       v(div.querySelector("#f_projectManager"))],
+      ["Start Date",            v(div.querySelector("#f_startDate"))],
+      ["Target Completion",     v(div.querySelector("#f_completionDate"))],
+      ["Budget Allocation",     v(div.querySelector("#f_budget"))],
+      ["Prepared By",           v(div.querySelector("#f_preparedBy"))],
+      ["Approved By",           v(div.querySelector("#f_approvedBy"))],
+      ["Document Date",         v(div.querySelector("#f_docDate"))],
+      ["Project Type",          checkboxGroup(div, "f_projType")],
+      ["Priority Level",        radioVal(div, "f_priority")],
+      ["Safety Classification", radioVal(div, "f_safety")],
+    ],
+    [30, 55]
+  );
 
-    const SYSTEMS: [string, string, string][] = [
-      ["f_sys_plc","PLC Programming",           "f_sys_plc_note"],
-      ["f_sys_hmi","HMI / SCADA Development",   "f_sys_hmi_note"],
-      ["f_sys_mcs","Motor Control Systems",      "f_sys_mcs_note"],
-      ["f_sys_ins","Instrumentation & Sensors",  "f_sys_ins_note"],
-      ["f_sys_net","Industrial Networks",         "f_sys_net_note"],
-      ["f_sys_saf","Safety Systems (SIL Rated)", "f_sys_saf_note"],
-      ["f_sys_pcs","Process Control Systems",    "f_sys_pcs_note"],
-      ["f_sys_rob","Robotics Integration",       "f_sys_rob_note"],
-      ["f_sys_vis","Vision Systems",             "f_sys_vis_note"],
-      ["f_sys_drv","Drive Systems (VFDs/Servo)", "f_sys_drv_note"],
-    ];
-    const sysRows = SYSTEMS.map(([cbId, label, noteId], i) => [
-      i + 1,
-      label,
-      div.querySelector<HTMLInputElement>(`#${cbId}`)?.checked ? "Yes" : "No",
-      v(div.querySelector(`#${noteId}`)),
-    ]);
-    const delRows: (string | number)[][] = [];
-    for (let i = 1; i <= 5; i++) delRows.push([i, v(div.querySelector(`#f_del${i}`))]);
+  // ── Sheet 2: Scope & Systems ──────────────────────────────────────────────
+  const SYSTEMS: [string, string, string][] = [
+    ["f_sys_plc","PLC Programming",           "f_sys_plc_note"],
+    ["f_sys_hmi","HMI / SCADA Development",   "f_sys_hmi_note"],
+    ["f_sys_mcs","Motor Control Systems",      "f_sys_mcs_note"],
+    ["f_sys_ins","Instrumentation & Sensors",  "f_sys_ins_note"],
+    ["f_sys_net","Industrial Networks",        "f_sys_net_note"],
+    ["f_sys_saf","Safety Systems (SIL Rated)", "f_sys_saf_note"],
+    ["f_sys_pcs","Process Control Systems",    "f_sys_pcs_note"],
+    ["f_sys_rob","Robotics Integration",       "f_sys_rob_note"],
+    ["f_sys_vis","Vision Systems",             "f_sys_vis_note"],
+    ["f_sys_drv","Drive Systems (VFDs/Servo)", "f_sys_drv_note"],
+  ];
+  const sysRows = SYSTEMS.map(([cbId, label, noteId], i) => [
+    i + 1, label,
+    div.querySelector<HTMLInputElement>(`#${cbId}`)?.checked ? "Yes" : "No",
+    v(div.querySelector(`#${noteId}`)),
+  ]);
+  const delRows: (string | number)[][] = [];
+  for (let i = 1; i <= 5; i++) delRows.push([i, v(div.querySelector(`#f_del${i}`))]);
+  addAoaSheet(wb, "2. Scope & Systems", [
+    ["PROJECT SCOPE & TECHNICAL REQUIREMENTS"],
+    [],
+    ["AUTOMATION SYSTEMS INVOLVED"],
+    ["#", "System / Scope", "Included", "Brand / Standard / Details"],
+    ...sysRows,
+    [],
+    ["KEY DELIVERABLES"],
+    ["#", "Description"],
+    ...delRows,
+  ], [6, 34, 10, 45], [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 3 } },
+    { s: { r: 2, c: 0 }, e: { r: 2, c: 3 } },
+    { s: { r: 14, c: 0 }, e: { r: 14, c: 3 } },
+  ]);
 
-    const s2aoa: (string | number)[][] = [
-      ["PROJECT SCOPE & TECHNICAL REQUIREMENTS"],
-      [],
-      ["AUTOMATION SYSTEMS INVOLVED"],
-      ["#", "System / Scope", "Included", "Brand / Standard / Details"],
-      ...sysRows,
-      [],
-      ["KEY DELIVERABLES"],
-      ["#", "Description"],
-      ...delRows,
-    ];
-    const s2 = XLSX.utils.aoa_to_sheet(s2aoa);
-    s2["!cols"] = [{ wch: 6 }, { wch: 34 }, { wch: 10 }, { wch: 45 }];
-    s2["!merges"] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: 3 } },
-      { s: { r: 2, c: 0 }, e: { r: 2, c: 3 } },
-      { s: { r: 14, c: 0 }, e: { r: 14, c: 3 } },
-    ];
-    XLSX.utils.book_append_sheet(wb, s2, "2. Scope & Systems");
+  // ── Sheet 3: Team Assignment ──────────────────────────────────────────────
+  makeSheet(wb, "3. Team Assignment",
+    "TEAM ASSIGNMENT MATRIX",
+    ["Team Member","Role / Specialization","Primary Tasks","Hours","Start Date","End Date","Dependencies"],
+    Array.from({ length: 6 }, (_, i) => [
+      v(div.querySelector(`#f_tm${i}_name`)),
+      v(div.querySelector(`#f_tm${i}_role`)),
+      v(div.querySelector(`#f_tm${i}_tasks`)),
+      v(div.querySelector(`#f_tm${i}_hrs`)),
+      v(div.querySelector(`#f_tm${i}_start`)),
+      v(div.querySelector(`#f_tm${i}_end`)),
+      v(div.querySelector(`#f_tm${i}_dep`)),
+    ]),
+    [22, 24, 28, 8, 12, 12, 26]
+  );
 
-    const s3 = makeWs(
-      "TEAM ASSIGNMENT MATRIX",
-      ["Team Member","Role / Specialization","Primary Tasks","Hours","Start Date","End Date","Dependencies"],
-      Array.from({ length: 6 }, (_, i) => [
-        v(div.querySelector(`#f_tm${i}_name`)),
-        v(div.querySelector(`#f_tm${i}_role`)),
-        v(div.querySelector(`#f_tm${i}_tasks`)),
-        v(div.querySelector(`#f_tm${i}_hrs`)),
-        v(div.querySelector(`#f_tm${i}_start`)),
-        v(div.querySelector(`#f_tm${i}_end`)),
-        v(div.querySelector(`#f_tm${i}_dep`)),
-      ]),
-      [22, 24, 28, 8, 12, 12, 26]
-    );
-    XLSX.utils.book_append_sheet(wb, s3, "3. Team Assignment");
+  // ── Sheet 4: Skill Requirements ───────────────────────────────────────────
+  const SKILLS = [
+    "PLC Programming (Brand Specific)","HMI Development",
+    "Industrial Safety Certification","Electrical Installation",
+    "Instrumentation Calibration","Network Configuration","Client Site Access / Clearance",
+  ];
+  makeSheet(wb, "4. Skill Requirements",
+    "SKILL REQUIREMENTS & CERTIFICATIONS",
+    ["Certification","Assigned Team Member","Status","Notes"],
+    SKILLS.map((sk, i) => [
+      sk,
+      v(div.querySelector(`#f_sk${i}_member`)),
+      radioVal(div, `f_sk${i}_status`),
+      v(div.querySelector(`#f_sk${i}_notes`)),
+    ]),
+    [36, 24, 20, 32]
+  );
 
-    const SKILLS = [
-      "PLC Programming (Brand Specific)","HMI Development",
-      "Industrial Safety Certification","Electrical Installation",
-      "Instrumentation Calibration","Network Configuration","Client Site Access / Clearance",
-    ];
-    const s4 = makeWs(
-      "SKILL REQUIREMENTS & CERTIFICATIONS",
-      ["Certification","Assigned Team Member","Status","Notes"],
-      SKILLS.map((sk, i) => [
-        sk,
-        v(div.querySelector(`#f_sk${i}_member`)),
-        radioVal(div, `f_sk${i}_status`),
-        v(div.querySelector(`#f_sk${i}_notes`)),
-      ]),
-      [36, 24, 20, 32]
-    );
-    XLSX.utils.book_append_sheet(wb, s4, "4. Skill Requirements");
+  // ── Sheet 5: Project Phases ───────────────────────────────────────────────
+  const phaseHdr = ["Task","Assigned To","Duration","Start Date","End Date","Status","Notes"];
+  const p1rows = [
+    ["System Architecture Design", v(div.querySelector("#f_p1_arch_to")), v(div.querySelector("#f_p1_arch_dur")), v(div.querySelector("#f_p1_arch_start")), v(div.querySelector("#f_p1_arch_end")), radioVal(div,"f_p1_arch_st"), v(div.querySelector("#f_p1_arch_notes"))],
+    ["I/O List Development",        v(div.querySelector("#f_p1_io_to")),   v(div.querySelector("#f_p1_io_dur")),   v(div.querySelector("#f_p1_io_start")),   v(div.querySelector("#f_p1_io_end")),   radioVal(div,"f_p1_io_st"),   v(div.querySelector("#f_p1_io_notes"))],
+    ["Control Logic Design",         v(div.querySelector("#f_p1_ctrl_to")),v(div.querySelector("#f_p1_ctrl_dur")),v(div.querySelector("#f_p1_ctrl_start")),v(div.querySelector("#f_p1_ctrl_end")),radioVal(div,"f_p1_ctrl_st"),v(div.querySelector("#f_p1_ctrl_notes"))],
+    ["HMI Screen Design",            v(div.querySelector("#f_p1_hmi_to")), v(div.querySelector("#f_p1_hmi_dur")), v(div.querySelector("#f_p1_hmi_start")), v(div.querySelector("#f_p1_hmi_end")), radioVal(div,"f_p1_hmi_st"), v(div.querySelector("#f_p1_hmi_notes"))],
+    ["Safety System Design",         v(div.querySelector("#f_p1_saf_to")), v(div.querySelector("#f_p1_saf_dur")), v(div.querySelector("#f_p1_saf_start")), v(div.querySelector("#f_p1_saf_end")), radioVal(div,"f_p1_saf_st"), v(div.querySelector("#f_p1_saf_notes"))],
+  ];
+  const p2rows = [
+    ["PLC Program Development", v(div.querySelector("#f_p2_plc_to")),v(div.querySelector("#f_p2_plc_dur")),v(div.querySelector("#f_p2_plc_start")),v(div.querySelector("#f_p2_plc_end")),radioVal(div,"f_p2_plc_st"),v(div.querySelector("#f_p2_plc_notes"))],
+    ["HMI Development",          v(div.querySelector("#f_p2_hmi_to")),v(div.querySelector("#f_p2_hmi_dur")),v(div.querySelector("#f_p2_hmi_start")),v(div.querySelector("#f_p2_hmi_end")),radioVal(div,"f_p2_hmi_st"),v(div.querySelector("#f_p2_hmi_notes"))],
+    ["Simulation Testing",        v(div.querySelector("#f_p2_sim_to")),v(div.querySelector("#f_p2_sim_dur")),v(div.querySelector("#f_p2_sim_start")),v(div.querySelector("#f_p2_sim_end")),radioVal(div,"f_p2_sim_st"),v(div.querySelector("#f_p2_sim_notes"))],
+    ["FAT Preparation",           v(div.querySelector("#f_p2_fat_to")),v(div.querySelector("#f_p2_fat_dur")),v(div.querySelector("#f_p2_fat_start")),v(div.querySelector("#f_p2_fat_end")),radioVal(div,"f_p2_fat_st"),v(div.querySelector("#f_p2_fat_notes"))],
+    ["Documentation Creation",    v(div.querySelector("#f_p2_doc_to")),v(div.querySelector("#f_p2_doc_dur")),v(div.querySelector("#f_p2_doc_start")),v(div.querySelector("#f_p2_doc_end")),radioVal(div,"f_p2_doc_st"),v(div.querySelector("#f_p2_doc_notes"))],
+  ];
+  const p3rows = [
+    ["Hardware Installation",      v(div.querySelector("#f_p3_hw_to")), v(div.querySelector("#f_p3_hw_dur")), v(div.querySelector("#f_p3_hw_start")), v(div.querySelector("#f_p3_hw_end")), radioVal(div,"f_p3_hw_st"), v(div.querySelector("#f_p3_hw_notes"))],
+    ["System Wiring",              v(div.querySelector("#f_p3_wir_to")),v(div.querySelector("#f_p3_wir_dur")),v(div.querySelector("#f_p3_wir_start")),v(div.querySelector("#f_p3_wir_end")),radioVal(div,"f_p3_wir_st"),v(div.querySelector("#f_p3_wir_notes"))],
+    ["Software Download & Config", v(div.querySelector("#f_p3_sw_to")), v(div.querySelector("#f_p3_sw_dur")), v(div.querySelector("#f_p3_sw_start")), v(div.querySelector("#f_p3_sw_end")), radioVal(div,"f_p3_sw_st"), v(div.querySelector("#f_p3_sw_notes"))],
+    ["System Integration Testing", v(div.querySelector("#f_p3_sit_to")),v(div.querySelector("#f_p3_sit_dur")),v(div.querySelector("#f_p3_sit_start")),v(div.querySelector("#f_p3_sit_end")),radioVal(div,"f_p3_sit_st"),v(div.querySelector("#f_p3_sit_notes"))],
+    ["Operator Training",          v(div.querySelector("#f_p3_trn_to")),v(div.querySelector("#f_p3_trn_dur")),v(div.querySelector("#f_p3_trn_start")),v(div.querySelector("#f_p3_trn_end")),radioVal(div,"f_p3_trn_st"),v(div.querySelector("#f_p3_trn_notes"))],
+    ["System Handover",            v(div.querySelector("#f_p3_hnd_to")),v(div.querySelector("#f_p3_hnd_dur")),v(div.querySelector("#f_p3_hnd_start")),v(div.querySelector("#f_p3_hnd_end")),radioVal(div,"f_p3_hnd_st"),v(div.querySelector("#f_p3_hnd_notes"))],
+  ];
+  addAoaSheet(wb, "5. Project Phases", [
+    ["PROJECT PHASES & MILESTONES"],
+    [],
+    ["▶ PHASE 1: DESIGN & ENGINEERING"],
+    phaseHdr, ...p1rows,
+    [],
+    ["▶ PHASE 2: DEVELOPMENT & TESTING"],
+    phaseHdr, ...p2rows,
+    [],
+    ["▶ PHASE 3: INSTALLATION & COMMISSIONING"],
+    phaseHdr, ...p3rows,
+  ], [30, 20, 10, 12, 12, 18, 28], [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 6 } },
+    { s: { r: 2, c: 0 }, e: { r: 2, c: 6 } },
+    { s: { r: 9, c: 0 }, e: { r: 9, c: 6 } },
+    { s: { r: 16, c: 0 }, e: { r: 16, c: 6 } },
+  ]);
 
-    const phaseHdr = ["Task","Assigned To","Duration","Start Date","End Date","Status","Notes"];
-    const p1rows = [
-      ["System Architecture Design", v(div.querySelector("#f_p1_arch_to")), v(div.querySelector("#f_p1_arch_dur")), v(div.querySelector("#f_p1_arch_start")), v(div.querySelector("#f_p1_arch_end")), radioVal(div,"f_p1_arch_st"), v(div.querySelector("#f_p1_arch_notes"))],
-      ["I/O List Development",        v(div.querySelector("#f_p1_io_to")),   v(div.querySelector("#f_p1_io_dur")),   v(div.querySelector("#f_p1_io_start")),   v(div.querySelector("#f_p1_io_end")),   radioVal(div,"f_p1_io_st"),   v(div.querySelector("#f_p1_io_notes"))],
-      ["Control Logic Design",         v(div.querySelector("#f_p1_ctrl_to")),v(div.querySelector("#f_p1_ctrl_dur")),v(div.querySelector("#f_p1_ctrl_start")),v(div.querySelector("#f_p1_ctrl_end")),radioVal(div,"f_p1_ctrl_st"),v(div.querySelector("#f_p1_ctrl_notes"))],
-      ["HMI Screen Design",            v(div.querySelector("#f_p1_hmi_to")), v(div.querySelector("#f_p1_hmi_dur")), v(div.querySelector("#f_p1_hmi_start")), v(div.querySelector("#f_p1_hmi_end")), radioVal(div,"f_p1_hmi_st"), v(div.querySelector("#f_p1_hmi_notes"))],
-      ["Safety System Design",         v(div.querySelector("#f_p1_saf_to")), v(div.querySelector("#f_p1_saf_dur")), v(div.querySelector("#f_p1_saf_start")), v(div.querySelector("#f_p1_saf_end")), radioVal(div,"f_p1_saf_st"), v(div.querySelector("#f_p1_saf_notes"))],
-    ];
-    const p2rows = [
-      ["PLC Program Development", v(div.querySelector("#f_p2_plc_to")),v(div.querySelector("#f_p2_plc_dur")),v(div.querySelector("#f_p2_plc_start")),v(div.querySelector("#f_p2_plc_end")),radioVal(div,"f_p2_plc_st"),v(div.querySelector("#f_p2_plc_notes"))],
-      ["HMI Development",          v(div.querySelector("#f_p2_hmi_to")),v(div.querySelector("#f_p2_hmi_dur")),v(div.querySelector("#f_p2_hmi_start")),v(div.querySelector("#f_p2_hmi_end")),radioVal(div,"f_p2_hmi_st"),v(div.querySelector("#f_p2_hmi_notes"))],
-      ["Simulation Testing",        v(div.querySelector("#f_p2_sim_to")),v(div.querySelector("#f_p2_sim_dur")),v(div.querySelector("#f_p2_sim_start")),v(div.querySelector("#f_p2_sim_end")),radioVal(div,"f_p2_sim_st"),v(div.querySelector("#f_p2_sim_notes"))],
-      ["FAT Preparation",           v(div.querySelector("#f_p2_fat_to")),v(div.querySelector("#f_p2_fat_dur")),v(div.querySelector("#f_p2_fat_start")),v(div.querySelector("#f_p2_fat_end")),radioVal(div,"f_p2_fat_st"),v(div.querySelector("#f_p2_fat_notes"))],
-      ["Documentation Creation",    v(div.querySelector("#f_p2_doc_to")),v(div.querySelector("#f_p2_doc_dur")),v(div.querySelector("#f_p2_doc_start")),v(div.querySelector("#f_p2_doc_end")),radioVal(div,"f_p2_doc_st"),v(div.querySelector("#f_p2_doc_notes"))],
-    ];
-    const p3rows = [
-      ["Hardware Installation",      v(div.querySelector("#f_p3_hw_to")), v(div.querySelector("#f_p3_hw_dur")), v(div.querySelector("#f_p3_hw_start")), v(div.querySelector("#f_p3_hw_end")), radioVal(div,"f_p3_hw_st"), v(div.querySelector("#f_p3_hw_notes"))],
-      ["System Wiring",              v(div.querySelector("#f_p3_wir_to")),v(div.querySelector("#f_p3_wir_dur")),v(div.querySelector("#f_p3_wir_start")),v(div.querySelector("#f_p3_wir_end")),radioVal(div,"f_p3_wir_st"),v(div.querySelector("#f_p3_wir_notes"))],
-      ["Software Download & Config", v(div.querySelector("#f_p3_sw_to")), v(div.querySelector("#f_p3_sw_dur")), v(div.querySelector("#f_p3_sw_start")), v(div.querySelector("#f_p3_sw_end")), radioVal(div,"f_p3_sw_st"), v(div.querySelector("#f_p3_sw_notes"))],
-      ["System Integration Testing", v(div.querySelector("#f_p3_sit_to")),v(div.querySelector("#f_p3_sit_dur")),v(div.querySelector("#f_p3_sit_start")),v(div.querySelector("#f_p3_sit_end")),radioVal(div,"f_p3_sit_st"),v(div.querySelector("#f_p3_sit_notes"))],
-      ["Operator Training",          v(div.querySelector("#f_p3_trn_to")),v(div.querySelector("#f_p3_trn_dur")),v(div.querySelector("#f_p3_trn_start")),v(div.querySelector("#f_p3_trn_end")),radioVal(div,"f_p3_trn_st"),v(div.querySelector("#f_p3_trn_notes"))],
-      ["System Handover",            v(div.querySelector("#f_p3_hnd_to")),v(div.querySelector("#f_p3_hnd_dur")),v(div.querySelector("#f_p3_hnd_start")),v(div.querySelector("#f_p3_hnd_end")),radioVal(div,"f_p3_hnd_st"),v(div.querySelector("#f_p3_hnd_notes"))],
-    ];
-    const s5aoa = [
-      ["PROJECT PHASES & MILESTONES"],
-      [],
-      ["▶ PHASE 1: DESIGN & ENGINEERING"],
-      phaseHdr, ...p1rows,
-      [],
-      ["▶ PHASE 2: DEVELOPMENT & TESTING"],
-      phaseHdr, ...p2rows,
-      [],
-      ["▶ PHASE 3: INSTALLATION & COMMISSIONING"],
-      phaseHdr, ...p3rows,
-    ];
-    const s5 = XLSX.utils.aoa_to_sheet(s5aoa);
-    s5["!cols"] = [{ wch: 30 }, { wch: 20 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 28 }];
-    s5["!merges"] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: 6 } },
-      { s: { r: 2, c: 0 }, e: { r: 2, c: 6 } },
-      { s: { r: 9, c: 0 }, e: { r: 9, c: 6 } },
-      { s: { r: 16, c: 0 }, e: { r: 16, c: 6 } },
-    ];
-    XLSX.utils.book_append_sheet(wb, s5, "5. Project Phases");
+  // ── Sheet 6: Resources ────────────────────────────────────────────────────
+  const EQ_NAMES = ["Laptop / Programming Software","PLC Hardware","Test Equipment (Multimeter etc.)","Safety Equipment (PPE)","Vehicle / Transportation"];
+  addAoaSheet(wb, "6. Resources", [
+    ["RESOURCE REQUIREMENTS"],
+    [],
+    ["EQUIPMENT & TOOLS"],
+    ["Item","Qty","Assigned To","Required Date","Status"],
+    ...EQ_NAMES.map((name, i) => [name, v(div.querySelector(`#f_eq${i}_qty`)), v(div.querySelector(`#f_eq${i}_to`)), v(div.querySelector(`#f_eq${i}_reqdate`)), radioVal(div, `f_eq${i}_st`)]),
+    [],
+    ["SOFTWARE LICENSES"],
+    ["Software","Version","Assigned User","License Status","Expiry Date"],
+    ...Array.from({ length: 3 }, (_, i) => [v(div.querySelector(`#f_sw${i}_name`)), v(div.querySelector(`#f_sw${i}_ver`)), v(div.querySelector(`#f_sw${i}_user`)), radioVal(div, `f_sw${i}_st`), v(div.querySelector(`#f_sw${i}_expiry`))]),
+  ], [34, 8, 22, 14, 18], [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 4 } },
+    { s: { r: 2, c: 0 }, e: { r: 2, c: 4 } },
+    { s: { r: 9, c: 0 }, e: { r: 9, c: 4 } },
+  ]);
 
-    const EQ_NAMES = ["Laptop / Programming Software","PLC Hardware","Test Equipment (Multimeter etc.)","Safety Equipment (PPE)","Vehicle / Transportation"];
-    const s6aoa = [
-      ["RESOURCE REQUIREMENTS"],
-      [],
-      ["EQUIPMENT & TOOLS"],
-      ["Item","Qty","Assigned To","Required Date","Status"],
-      ...EQ_NAMES.map((name, i) => [name, v(div.querySelector(`#f_eq${i}_qty`)), v(div.querySelector(`#f_eq${i}_to`)), v(div.querySelector(`#f_eq${i}_reqdate`)), radioVal(div, `f_eq${i}_st`)]),
-      [],
-      ["SOFTWARE LICENSES"],
-      ["Software","Version","Assigned User","License Status","Expiry Date"],
-      ...Array.from({ length: 3 }, (_, i) => [v(div.querySelector(`#f_sw${i}_name`)), v(div.querySelector(`#f_sw${i}_ver`)), v(div.querySelector(`#f_sw${i}_user`)), radioVal(div, `f_sw${i}_st`), v(div.querySelector(`#f_sw${i}_expiry`))]),
-    ];
-    const s6 = XLSX.utils.aoa_to_sheet(s6aoa);
-    s6["!cols"] = [{ wch: 34 }, { wch: 8 }, { wch: 22 }, { wch: 14 }, { wch: 18 }];
-    s6["!merges"] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: 4 } },
-      { s: { r: 2, c: 0 }, e: { r: 2, c: 4 } },
-      { s: { r: 9, c: 0 }, e: { r: 9, c: 4 } },
-    ];
-    XLSX.utils.book_append_sheet(wb, s6, "6. Resources");
+  // ── Sheet 7: Communication ────────────────────────────────────────────────
+  const STAKEHOLDERS = ["Client Project Manager","Site Supervisor","Operations Manager","Maintenance Team Lead"];
+  makeSheet(wb, "7. Communication",
+    "COMMUNICATION PLAN",
+    ["Stakeholder","Role","Contact Method","Frequency","Assigned Team Member"],
+    STAKEHOLDERS.map((sh, i) => [sh, v(div.querySelector(`#f_comm${i}_role`)), v(div.querySelector(`#f_comm${i}_contact`)), v(div.querySelector(`#f_comm${i}_freq`)), v(div.querySelector(`#f_comm${i}_member`))]),
+    [28, 22, 24, 16, 26]
+  );
 
-    const STAKEHOLDERS = ["Client Project Manager","Site Supervisor","Operations Manager","Maintenance Team Lead"];
-    const s7 = makeWs(
-      "COMMUNICATION PLAN",
-      ["Stakeholder","Role","Contact Method","Frequency","Assigned Team Member"],
-      STAKEHOLDERS.map((sh, i) => [sh, v(div.querySelector(`#f_comm${i}_role`)), v(div.querySelector(`#f_comm${i}_contact`)), v(div.querySelector(`#f_comm${i}_freq`)), v(div.querySelector(`#f_comm${i}_member`))]),
-      [28, 22, 24, 16, 26]
-    );
-    XLSX.utils.book_append_sheet(wb, s7, "7. Communication");
+  // ── Sheet 8: Risk Assessment ──────────────────────────────────────────────
+  const RISKS = ["Equipment Delivery Delays","Site Access Restrictions","Technical Skill Gaps","Safety Incidents"];
+  makeSheet(wb, "8. Risk Assessment",
+    "RISK ASSESSMENT & MITIGATION",
+    ["Risk Factor","Probability","Impact","Mitigation Strategy","Responsible Person"],
+    RISKS.map((rk, i) => [rk, radioVal(div, `f_risk${i}_prob`), radioVal(div, `f_risk${i}_impact`), v(div.querySelector(`#f_risk${i}_mit`)), v(div.querySelector(`#f_risk${i}_resp`))]),
+    [30, 14, 14, 36, 24]
+  );
 
-    const RISKS = ["Equipment Delivery Delays","Site Access Restrictions","Technical Skill Gaps","Safety Incidents"];
-    const s8 = makeWs(
-      "RISK ASSESSMENT & MITIGATION",
-      ["Risk Factor","Probability","Impact","Mitigation Strategy","Responsible Person"],
-      RISKS.map((r, i) => [r, radioVal(div, `f_risk${i}_prob`), radioVal(div, `f_risk${i}_impact`), v(div.querySelector(`#f_risk${i}_mit`)), v(div.querySelector(`#f_risk${i}_resp`))]),
-      [30, 14, 14, 36, 24]
-    );
-    XLSX.utils.book_append_sheet(wb, s8, "8. Risk Assessment");
+  // ── Sheet 9: QA Checklist ─────────────────────────────────────────────────
+  const DR  = ["System architecture reviewed and approved","Safety systems validated","Client requirements verified","Code standards compliance checked"];
+  const TV  = ["Unit testing completed","Integration testing passed","FAT successfully conducted","Performance benchmarks met"];
+  const DC  = ["As-built drawings updated","Operation manuals completed","Maintenance procedures documented","Training materials prepared"];
+  addAoaSheet(wb, "9. QA Checklist", [
+    ["QUALITY ASSURANCE CHECKLIST"],
+    [],
+    ["Design Review","Status","Testing & Validation","Status","Documentation","Status"],
+    ...DR.map((item, i) => [
+      item, isChecked(div, `f_qa_dr${i}`) ? "✔ Done" : "Pending",
+      TV[i], isChecked(div, `f_qa_tv${i}`) ? "✔ Done" : "Pending",
+      DC[i], isChecked(div, `f_qa_dc${i}`) ? "✔ Done" : "Pending",
+    ]),
+  ], [36, 12, 36, 12, 36, 12], [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 5 } },
+  ]);
 
-    const DR  = ["System architecture reviewed and approved","Safety systems validated","Client requirements verified","Code standards compliance checked"];
-    const TV  = ["Unit testing completed","Integration testing passed","FAT successfully conducted","Performance benchmarks met"];
-    const DC  = ["As-built drawings updated","Operation manuals completed","Maintenance procedures documented","Training materials prepared"];
-    const s9aoa = [
-      ["QUALITY ASSURANCE CHECKLIST"],
-      [],
-      ["Design Review","Status","Testing & Validation","Status","Documentation","Status"],
-      ...DR.map((item, i) => [
-        item, isChecked(div, `f_qa_dr${i}`) ? "✔ Done" : "Pending",
-        TV[i], isChecked(div, `f_qa_tv${i}`) ? "✔ Done" : "Pending",
-        DC[i], isChecked(div, `f_qa_dc${i}`) ? "✔ Done" : "Pending",
-      ]),
-    ];
-    const s9 = XLSX.utils.aoa_to_sheet(s9aoa);
-    s9["!cols"] = [{ wch: 36 }, { wch: 12 }, { wch: 36 }, { wch: 12 }, { wch: 36 }, { wch: 12 }];
-    s9["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }];
-    XLSX.utils.book_append_sheet(wb, s9, "9. QA Checklist");
+  // ── Sheet 10: Project Status ──────────────────────────────────────────────
+  addAoaSheet(wb, "10. Project Status", [
+    ["PROJECT STATUS TRACKING"],
+    [],
+    ["WEEKLY PROGRESS REPORT"],
+    ["Week Ending","Progress %","Issues / Blockers","Next Week Priorities","Team Member Updates"],
+    ...Array.from({ length: 3 }, (_, i) => [v(div.querySelector(`#f_wk${i}_end`)), v(div.querySelector(`#f_wk${i}_pct`)), v(div.querySelector(`#f_wk${i}_issues`)), v(div.querySelector(`#f_wk${i}_pri`)), v(div.querySelector(`#f_wk${i}_updates`))]),
+    [],
+    ["CHANGE MANAGEMENT"],
+    ["CR #","Date","Requested By","Description","Impact Assessment","Approval Status","Impl. Date"],
+    ...Array.from({ length: 3 }, (_, i) => [v(div.querySelector(`#f_cr${i}_num`)), v(div.querySelector(`#f_cr${i}_date`)), v(div.querySelector(`#f_cr${i}_by`)), v(div.querySelector(`#f_cr${i}_desc`)), v(div.querySelector(`#f_cr${i}_impact`)), radioVal(div, `f_cr${i}_st`), v(div.querySelector(`#f_cr${i}_impl`))]),
+  ], [14, 12, 28, 28, 28, 16, 12], [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 6 } },
+    { s: { r: 2, c: 0 }, e: { r: 2, c: 6 } },
+    { s: { r: 7, c: 0 }, e: { r: 7, c: 6 } },
+  ]);
 
-    const s10aoa = [
-      ["PROJECT STATUS TRACKING"],
-      [],
-      ["WEEKLY PROGRESS REPORT"],
-      ["Week Ending","Progress %","Issues / Blockers","Next Week Priorities","Team Member Updates"],
-      ...Array.from({ length: 3 }, (_, i) => [v(div.querySelector(`#f_wk${i}_end`)), v(div.querySelector(`#f_wk${i}_pct`)), v(div.querySelector(`#f_wk${i}_issues`)), v(div.querySelector(`#f_wk${i}_pri`)), v(div.querySelector(`#f_wk${i}_updates`))]),
-      [],
-      ["CHANGE MANAGEMENT"],
-      ["CR #","Date","Requested By","Description","Impact Assessment","Approval Status","Impl. Date"],
-      ...Array.from({ length: 3 }, (_, i) => [v(div.querySelector(`#f_cr${i}_num`)), v(div.querySelector(`#f_cr${i}_date`)), v(div.querySelector(`#f_cr${i}_by`)), v(div.querySelector(`#f_cr${i}_desc`)), v(div.querySelector(`#f_cr${i}_impact`)), radioVal(div, `f_cr${i}_st`), v(div.querySelector(`#f_cr${i}_impl`))]),
-    ];
-    const s10 = XLSX.utils.aoa_to_sheet(s10aoa);
-    s10["!cols"] = [{ wch: 14 }, { wch: 12 }, { wch: 28 }, { wch: 28 }, { wch: 28 }, { wch: 16 }, { wch: 12 }];
-    s10["!merges"] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: 6 } },
-      { s: { r: 2, c: 0 }, e: { r: 2, c: 6 } },
-      { s: { r: 7, c: 0 }, e: { r: 7, c: 6 } },
-    ];
-    XLSX.utils.book_append_sheet(wb, s10, "10. Project Status");
+  // ── Sheet 11: Project Closure ─────────────────────────────────────────────
+  const PC_ITEMS: [string, string][] = [
+    ["f_pc0","All systems tested and operational"],
+    ["f_pc1","Client training completed"],
+    ["f_pc2","Documentation handed over"],
+    ["f_pc3","Warranty terms explained"],
+    ["f_pc4","Support procedures established"],
+    ["f_pc5","Project retrospective conducted"],
+    ["f_pc6","Lessons learned documented"],
+  ];
+  addAoaSheet(wb, "11. Project Closure", [
+    ["PROJECT CLOSURE"],
+    [],
+    ["FINAL DELIVERABLES CHECKLIST"],
+    ["Item","Status"],
+    ...PC_ITEMS.map(([id, label]) => [label, isChecked(div, id) ? "✔ Done" : "Pending"]),
+    [],
+    ["TEAM PERFORMANCE REVIEW"],
+    ["Team Member","Performance Rating","Key Contributions","Areas for Development","Next Project Suitability"],
+    ...Array.from({ length: 3 }, (_, i) => [v(div.querySelector(`#f_tp${i}_member`)), radioVal(div, `f_tp${i}_rating`), v(div.querySelector(`#f_tp${i}_contrib`)), v(div.querySelector(`#f_tp${i}_areas`)), v(div.querySelector(`#f_tp${i}_suitability`))]),
+  ], [26, 20, 28, 28, 24], [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 4 } },
+    { s: { r: 2, c: 0 }, e: { r: 2, c: 4 } },
+    { s: { r: 11, c: 0 }, e: { r: 11, c: 4 } },
+  ]);
 
-    const PC_ITEMS = [
-      ["f_pc0","All systems tested and operational"],
-      ["f_pc1","Client training completed"],
-      ["f_pc2","Documentation handed over"],
-      ["f_pc3","Warranty terms explained"],
-      ["f_pc4","Support procedures established"],
-      ["f_pc5","Project retrospective conducted"],
-      ["f_pc6","Lessons learned documented"],
-    ];
-    const s11aoa = [
-      ["PROJECT CLOSURE"],
-      [],
-      ["FINAL DELIVERABLES CHECKLIST"],
-      ["Item","Status"],
-      ...PC_ITEMS.map(([id, label]) => [label, isChecked(div, id) ? "✔ Done" : "Pending"]),
-      [],
-      ["TEAM PERFORMANCE REVIEW"],
-      ["Team Member","Performance Rating","Key Contributions","Areas for Development","Next Project Suitability"],
-      ...Array.from({ length: 3 }, (_, i) => [v(div.querySelector(`#f_tp${i}_member`)), radioVal(div, `f_tp${i}_rating`), v(div.querySelector(`#f_tp${i}_contrib`)), v(div.querySelector(`#f_tp${i}_areas`)), v(div.querySelector(`#f_tp${i}_suitability`))]),
-    ];
-    const s11 = XLSX.utils.aoa_to_sheet(s11aoa);
-    s11["!cols"] = [{ wch: 26 }, { wch: 20 }, { wch: 28 }, { wch: 28 }, { wch: 24 }];
-    s11["!merges"] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: 4 } },
-      { s: { r: 2, c: 0 }, e: { r: 2, c: 4 } },
-      { s: { r: 3, c: 0 }, e: { r: 3, c: 1 } },
-      { s: { r: 11, c: 0 }, e: { r: 11, c: 4 } },
-    ];
-    XLSX.utils.book_append_sheet(wb, s11, "11. Project Closure");
-
-    XLSX.writeFile(wb, (selected?.title || "project").replace(/[^a-zA-Z0-9]/g, "_") + ".xlsx");
-  };
+  // ── Download ──────────────────────────────────────────────────────────────
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = (selected?.title || "project").replace(/[^a-zA-Z0-9]/g, "_") + ".xlsx";
+  a.click();
+  URL.revokeObjectURL(url);
+};
 
   // ── DOWNLOAD PDF — builds a clean, static print summary (no clipped inputs) ──
   const downloadPDF = async () => {
