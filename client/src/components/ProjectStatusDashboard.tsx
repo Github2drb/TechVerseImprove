@@ -3,7 +3,7 @@
 // Import in analytics.tsx: import { ProjectStatusDashboard } from "@/components/ProjectStatusDashboard";
 
 import { useState, useEffect, useRef } from "react";
-import * as XLSX from "xlsx";
+import * as ExcelJS from "exceljs";
 import { Save, RefreshCw, Lock, Unlock, X } from "lucide-react";
 
 // ── Data source — proxied through backend (avoids CORS + uses GITHUB_TOKEN) ──
