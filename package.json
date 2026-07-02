@@ -82,9 +82,11 @@
     "nodemailer": "^6.9.13"
   },
   "overrides": {
+  "drizzle-kit": {
+    "esbuild": "^0.25.0"
+  },
   "exceljs": {
-    "uuid": "^11.1.1",
-    "fast-csv": "^4.3.6"
+    "uuid": "^11.1.1"
   }
 },
   "scripts": {
