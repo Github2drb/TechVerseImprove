@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import {
   ChevronLeft, Plus, Trash2, AlertTriangle, Package, Link2,
-  Clock, CheckCircle2, FileText, Truck, Bell, Edit2, X, Upload, Loader2,
+  Clock, CheckCircle2, FileText, Truck, Bell, Edit2, X, Upload, Loader2, Search, User,
 } from "lucide-react";
 import { Link } from "wouter";
 import { useState, useMemo, useEffect, useRef } from "react";
@@ -33,6 +33,8 @@ interface MaterialRow {
   actualReceipt?: string;
   receiptStatus?: ReceiptStatus;
   notes?: string;
+  takenBy?: string;    // who took the material from stores
+  takenDate?: string;  // when the material was taken
 }
 interface ProjectMaterialData {
   projectName: string;
@@ -105,11 +107,13 @@ function matchHeader(header: string): keyof MaterialRow | "skip" {
   if (h.includes("po") && h.includes("approved")) return "poApproved";
   if (h.includes("target")) return "targetReceipt";
   if (h.includes("actual")) return "actualReceipt";
+  if (h.includes("taken") && h.includes("by")) return "takenBy";
+  if (h.includes("taken") && (h.includes("date") || h.includes("on") || h.includes("when"))) return "takenDate";
   if (h.includes("note") || h.includes("vendor") || h.includes("remark")) return "notes";
   return "skip";
 }
 
-function parseExcelToMaterials(buffer: ArrayBuffer): MaterialRow[] {
+function parseExcelToMaterials(buffer: ArrayBuffer): Promise<MaterialRow[]> {
   const workbook = new ExcelJS.Workbook();
   return workbook.xlsx.load(buffer).then(() => {
     // Use the first sheet that isn't named "Instructions"
@@ -137,7 +141,7 @@ function parseExcelToMaterials(buffer: ArrayBuffer): MaterialRow[] {
         if (field === "skip") return;
         const raw = row[colIdx];
         if (raw === "" || raw === null || raw === undefined) return;
-        if (field === "name" || field === "qty" || field === "unit" || field === "notes") {
+        if (field === "name" || field === "qty" || field === "unit" || field === "notes" || field === "takenBy") {
           (material as any)[field] = String(raw).trim();
         } else {
           (material as any)[field] = excelCellToDateStr(raw);
@@ -186,7 +190,7 @@ function StageCell({ value, onChange, isLate, disabled }: StageCellProps) {
         value={value || ""}
         onChange={e => onChange(e.target.value)}
         disabled={disabled}
-        className={`h-8 text-xs ${isLate ? "border-red-500 bg-red-500/5 text-red-600 dark:text-red-400" : ""}`}
+        className={`h-8 w-[140px] text-xs ${isLate ? "border-red-500 bg-red-500/5 text-red-600 dark:text-red-400" : ""}`}
       />
       {isLate && (
         <span className="text-[10px] text-red-500 flex items-center gap-1">
@@ -206,38 +210,30 @@ interface MaterialRowItemProps {
 }
 function MaterialRowItem({ material, onUpdate, onDelete, disabled, receiptOnly }: MaterialRowItemProps & { receiptOnly?: boolean }) {
   const status = getMaterialStatus(material);
-  const RECEIPT_STATUS_OPTIONS: ReceiptStatus[] = ["Not Received", "Partially Received", "Received"];
-  const receiptStatusColor: Record<ReceiptStatus, string> = {
-    "Not Received": "text-red-500",
-    "Partially Received": "text-amber-500",
-    "Received": "text-green-500",
-  };
   return (
     <div className={`rounded-xl border p-4 space-y-3 transition-colors ${
       status.receiptOverdue ? "border-red-500/40 bg-red-500/5" :
       status.overallAlert ? "border-amber-500/40 bg-amber-500/5" :
       status.received ? "border-green-500/30 bg-green-500/5" : "border-border"
     }`}>
-      {/* Header row */}
+      {/* Header row — material name on its own full-width line so it is fully visible */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <Input
-              value={material.name}
-              onChange={e => onUpdate(material.id, "name", e.target.value)}
-              disabled={disabled || receiptOnly}
-              placeholder="Material name"
-              className="h-8 text-sm font-medium border-0 bg-transparent px-0 focus-visible:ring-0 focus-visible:bg-muted/50 focus-visible:px-2 -ml-0"
-              style={{ minWidth: "180px", maxWidth: "320px" }}
-            />
+          <Input
+            value={material.name}
+            onChange={e => onUpdate(material.id, "name", e.target.value)}
+            disabled={disabled || receiptOnly}
+            placeholder="Material name"
+            title={material.name}
+            className="h-8 w-full text-sm font-medium border-0 bg-transparent px-0 focus-visible:ring-0 focus-visible:bg-muted/50 focus-visible:px-2"
+          />
+          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+            <Input value={material.qty} onChange={e => onUpdate(material.id, "qty", e.target.value)} disabled={disabled || receiptOnly} placeholder="Qty" className="h-6 w-16 text-xs"/>
+            <Input value={material.unit} onChange={e => onUpdate(material.id, "unit", e.target.value)} disabled={disabled || receiptOnly} placeholder="Unit" className="h-6 w-20 text-xs"/>
             {status.received && <Badge className="bg-green-500 text-white text-[10px]"><CheckCircle2 className="h-3 w-3 mr-1"/>Received</Badge>}
             {!status.received && status.receiptOverdue && <Badge className="bg-red-500 text-white text-[10px]"><Bell className="h-3 w-3 mr-1"/>Receipt overdue</Badge>}
             {!status.received && !status.receiptOverdue && status.receiptDueSoon && <Badge className="bg-amber-500 text-white text-[10px]"><Clock className="h-3 w-3 mr-1"/>Due soon</Badge>}
             {material.receiptStatus === "Partially Received" && <Badge className="bg-amber-500 text-white text-[10px]"><Truck className="h-3 w-3 mr-1"/>Partial</Badge>}
-          </div>
-          <div className="flex items-center gap-2 mt-1.5">
-            <Input value={material.qty} onChange={e => onUpdate(material.id, "qty", e.target.value)} disabled={disabled || receiptOnly} placeholder="Qty" className="h-6 w-16 text-xs"/>
-            <Input value={material.unit} onChange={e => onUpdate(material.id, "unit", e.target.value)} disabled={disabled || receiptOnly} placeholder="Unit" className="h-6 w-20 text-xs"/>
           </div>
         </div>
         {!disabled && !receiptOnly && (
@@ -247,32 +243,32 @@ function MaterialRowItem({ material, onUpdate, onDelete, disabled, receiptOnly }
         )}
       </div>
 
-      {/* BOM/PR/PO fields — admin only */}
+      {/* BOM/PR/PO fields — admin only. Fixed compact widths, wrap as needed. */}
       {!receiptOnly && (
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
-          <div><Label className="text-[10px] text-muted-foreground">BOM Created</Label><StageCell value={material.bomDate} onChange={v=>onUpdate(material.id,"bomDate",v)} disabled={disabled}/></div>
-          <div><Label className="text-[10px] text-muted-foreground">PR Created</Label><StageCell value={material.prCreated} onChange={v=>onUpdate(material.id,"prCreated",v)} isLate={status.prLate} disabled={disabled}/></div>
-          <div><Label className="text-[10px] text-muted-foreground">PR Approved</Label><StageCell value={material.prApproved} onChange={v=>onUpdate(material.id,"prApproved",v)} disabled={disabled}/></div>
-          <div><Label className="text-[10px] text-muted-foreground">PO Created</Label><StageCell value={material.poCreated} onChange={v=>onUpdate(material.id,"poCreated",v)} isLate={status.poLate} disabled={disabled}/></div>
-          <div><Label className="text-[10px] text-muted-foreground">PO Approved</Label><StageCell value={material.poApproved} onChange={v=>onUpdate(material.id,"poApproved",v)} disabled={disabled}/></div>
-          <div><Label className="text-[10px] text-muted-foreground">Target Receipt</Label><StageCell value={material.targetReceipt} onChange={v=>onUpdate(material.id,"targetReceipt",v)} isLate={status.receiptOverdue} disabled={disabled}/></div>
+        <div className="flex flex-wrap gap-3">
+          <div className="w-[140px]"><Label className="text-[10px] text-muted-foreground">BOM Created</Label><StageCell value={material.bomDate} onChange={v=>onUpdate(material.id,"bomDate",v)} disabled={disabled}/></div>
+          <div className="w-[140px]"><Label className="text-[10px] text-muted-foreground">PR Created</Label><StageCell value={material.prCreated} onChange={v=>onUpdate(material.id,"prCreated",v)} isLate={status.prLate} disabled={disabled}/></div>
+          <div className="w-[140px]"><Label className="text-[10px] text-muted-foreground">PR Approved</Label><StageCell value={material.prApproved} onChange={v=>onUpdate(material.id,"prApproved",v)} disabled={disabled}/></div>
+          <div className="w-[140px]"><Label className="text-[10px] text-muted-foreground">PO Created</Label><StageCell value={material.poCreated} onChange={v=>onUpdate(material.id,"poCreated",v)} isLate={status.poLate} disabled={disabled}/></div>
+          <div className="w-[140px]"><Label className="text-[10px] text-muted-foreground">PO Approved</Label><StageCell value={material.poApproved} onChange={v=>onUpdate(material.id,"poApproved",v)} disabled={disabled}/></div>
+          <div className="w-[140px]"><Label className="text-[10px] text-muted-foreground">Target Receipt</Label><StageCell value={material.targetReceipt} onChange={v=>onUpdate(material.id,"targetReceipt",v)} isLate={status.receiptOverdue} disabled={disabled}/></div>
         </div>
       )}
 
       {/* Receipt fields — visible to all, editable by admin + stores */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-        <div>
+      <div className="flex flex-wrap gap-3 items-start">
+        <div className="w-[140px]">
           <Label className="text-[10px] text-muted-foreground">Actual Receipt Date</Label>
-          <Input type="date" value={material.actualReceipt || ""} onChange={e=>onUpdate(material.id,"actualReceipt",e.target.value)} disabled={disabled && !receiptOnly} className="h-8 text-xs"/>
+          <Input type="date" value={material.actualReceipt || ""} onChange={e=>onUpdate(material.id,"actualReceipt",e.target.value)} disabled={disabled && !receiptOnly} className="h-8 w-[140px] text-xs"/>
         </div>
-        <div>
+        <div className="w-[170px]">
           <Label className="text-[10px] text-muted-foreground flex items-center gap-1"><Truck className="h-3 w-3"/>Receipt Status</Label>
           <Select
             value={material.receiptStatus || "Not Received"}
             onValueChange={v => onUpdate(material.id, "receiptStatus", v)}
             disabled={disabled && !receiptOnly}
           >
-            <SelectTrigger className="h-8 text-xs">
+            <SelectTrigger className="h-8 w-[170px] text-xs">
               <SelectValue/>
             </SelectTrigger>
             <SelectContent>
@@ -282,8 +278,16 @@ function MaterialRowItem({ material, onUpdate, onDelete, disabled, receiptOnly }
             </SelectContent>
           </Select>
         </div>
+        <div className="w-[180px]">
+          <Label className="text-[10px] text-muted-foreground flex items-center gap-1"><User className="h-3 w-3"/>Taken By (from stores)</Label>
+          <Input value={material.takenBy || ""} onChange={e=>onUpdate(material.id,"takenBy",e.target.value)} disabled={disabled && !receiptOnly} placeholder="Engineer name" className="h-8 w-[180px] text-xs"/>
+        </div>
+        <div className="w-[140px]">
+          <Label className="text-[10px] text-muted-foreground">Taken Date</Label>
+          <Input type="date" value={material.takenDate || ""} onChange={e=>onUpdate(material.id,"takenDate",e.target.value)} disabled={disabled && !receiptOnly} className="h-8 w-[140px] text-xs"/>
+        </div>
         {!receiptOnly && (
-          <div>
+          <div className="flex-1 min-w-[200px]">
             <Label className="text-[10px] text-muted-foreground">Notes</Label>
             <Input value={material.notes || ""} onChange={e=>onUpdate(material.id,"notes",e.target.value)} disabled={disabled} placeholder="Vendor, remarks..." className="h-8 text-xs"/>
           </div>
@@ -301,6 +305,22 @@ export default function MaterialProcurementTracker() {
   const [selectedProject, setSelectedProject] = useState<string>("");
   const [pendingProject, setPendingProject] = useState<string | null>(null);
   const [confirmSwitchOpen, setConfirmSwitchOpen] = useState(false);
+  const [bomPath, setBomPath] = useState("");
+  const [materials, setMaterials] = useState<MaterialRow[]>([]);
+  const [hasChanges, setHasChanges] = useState(false);
+  const [addProjectOpen, setAddProjectOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [filterMode, setFilterMode] = useState<"all"|"alerts"|"pending">("all");
+
+  // Text search filter (autocomplete + Filter button)
+  const [searchText, setSearchText] = useState("");
+  const [activeSearch, setActiveSearch] = useState("");
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importPreview, setImportPreview] = useState<MaterialRow[] | null>(null);
+  const [importMode, setImportMode] = useState<"replace"|"append">("append");
+  const [importConfirmOpen, setImportConfirmOpen] = useState(false);
 
   const requestSwitchProject = (next: string) => {
     if (hasChanges && next !== selectedProject) {
@@ -315,18 +335,6 @@ export default function MaterialProcurementTracker() {
     setPendingProject(null);
     setConfirmSwitchOpen(false);
   };
-  const [bomPath, setBomPath] = useState("");
-  const [materials, setMaterials] = useState<MaterialRow[]>([]);
-  const [hasChanges, setHasChanges] = useState(false);
-  const [addProjectOpen, setAddProjectOpen] = useState(false);
-  const [newProjectName, setNewProjectName] = useState("");
-  const [filterMode, setFilterMode] = useState<"all"|"alerts"|"pending">("all");
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [isImporting, setIsImporting] = useState(false);
-  const [importPreview, setImportPreview] = useState<MaterialRow[] | null>(null);
-  const [importMode, setImportMode] = useState<"replace"|"append">("append");
-  const [importConfirmOpen, setImportConfirmOpen] = useState(false);
 
   const { data: projectNames = [] } = useQuery<string[]>({
     queryKey: ["/api/project-names"],
@@ -364,6 +372,9 @@ export default function MaterialProcurementTracker() {
       setMaterials([]);
       setHasChanges(false);
     }
+    // Reset text filter when switching projects
+    setSearchText("");
+    setActiveSearch("");
   }, [projectData, selectedProject]);
 
   // Warn before closing/refreshing the tab if there are unsaved edits
@@ -442,7 +453,11 @@ export default function MaterialProcurementTracker() {
     setAddProjectOpen(false);
   };
 
-  // Alert summary across the loaded project
+  // Apply the text filter
+  const applyTextFilter = () => setActiveSearch(searchText.trim());
+  const clearTextFilter = () => { setSearchText(""); setActiveSearch(""); };
+
+  // Alert summary across the loaded project (always reflects ALL materials, not the filtered view)
   const alertSummary = useMemo(() => {
     let prLate = 0, poLate = 0, receiptOverdue = 0, dueSoon = 0, received = 0;
     materials.forEach(m => {
@@ -456,15 +471,35 @@ export default function MaterialProcurementTracker() {
     return { prLate, poLate, receiptOverdue, dueSoon, received, total: materials.length };
   }, [materials]);
 
+  // Unique material names for the autocomplete datalist
+  const materialNameSuggestions = useMemo(() => {
+    const s = new Set<string>();
+    materials.forEach(m => { if (m.name.trim()) s.add(m.name.trim()); });
+    return Array.from(s).sort();
+  }, [materials]);
+
   const filteredMaterials = useMemo(() => {
-    if (filterMode === "all") return materials;
-    return materials.filter(m => {
-      const s = getMaterialStatus(m);
-      if (filterMode === "alerts") return s.overallAlert;
-      if (filterMode === "pending") return !s.received;
-      return true;
-    });
-  }, [materials, filterMode]);
+    let list = materials;
+    if (filterMode !== "all") {
+      list = list.filter(m => {
+        const s = getMaterialStatus(m);
+        if (filterMode === "alerts") return s.overallAlert;
+        if (filterMode === "pending") return !s.received;
+        return true;
+      });
+    }
+    if (activeSearch) {
+      const q = activeSearch.toLowerCase();
+      list = list.filter(m =>
+        (m.name || "").toLowerCase().includes(q) ||
+        (m.notes || "").toLowerCase().includes(q) ||
+        (m.unit || "").toLowerCase().includes(q) ||
+        (m.qty || "").toLowerCase().includes(q) ||
+        (m.takenBy || "").toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [materials, filterMode, activeSearch]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -558,7 +593,38 @@ export default function MaterialProcurementTracker() {
               </Card>
             </div>
 
-            {/* Filter + Add material */}
+            {/* Text search filter with autocomplete */}
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <div className="relative flex-1 min-w-[240px] max-w-md">
+                <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"/>
+                <Input
+                  list="material-filter-suggestions"
+                  value={searchText}
+                  onChange={e => setSearchText(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") applyTextFilter(); }}
+                  placeholder="Type material name, notes, taken by..."
+                  className="h-9 pl-9 text-sm"
+                />
+                <datalist id="material-filter-suggestions">
+                  {materialNameSuggestions.map(n => <option key={n} value={n}/>)}
+                </datalist>
+              </div>
+              <Button size="sm" variant="secondary" onClick={applyTextFilter} disabled={!searchText.trim()}>
+                <Search className="h-4 w-4 mr-1"/>Filter
+              </Button>
+              {activeSearch && (
+                <Button size="sm" variant="ghost" onClick={clearTextFilter}>
+                  <X className="h-4 w-4 mr-1"/>Clear
+                </Button>
+              )}
+              {activeSearch && (
+                <span className="text-xs text-muted-foreground">
+                  Showing <span className="font-medium text-foreground">{filteredMaterials.length}</span> of {materials.length} materials matching "<span className="font-medium text-foreground">{activeSearch}</span>"
+                </span>
+              )}
+            </div>
+
+            {/* Filter chips + Add material */}
             <div className="flex items-center justify-between mb-4">
               <div className="flex gap-1">
                 {([["all","All"],["alerts","Alerts Only"],["pending","Pending"]] as const).map(([k,label])=>(
@@ -587,7 +653,11 @@ export default function MaterialProcurementTracker() {
               <div className="text-center py-12 text-muted-foreground">Loading…</div>
             ) : filteredMaterials.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground border rounded-xl">
-                {materials.length === 0 ? "No materials added yet — click \"Add Material\" to start." : "No materials match this filter."}
+                {materials.length === 0
+                  ? "No materials added yet — click \"Add Material\" to start."
+                  : activeSearch
+                    ? `No materials match "${activeSearch}". Click Clear to show all.`
+                    : "No materials match this filter."}
               </div>
             ) : (
               <div className="space-y-3">
