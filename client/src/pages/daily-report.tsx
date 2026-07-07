@@ -5,10 +5,14 @@ import { Header } from "@/components/header";
 import { useAuth } from "@/components/auth-provider";
 import { ArrowLeft, Lock, Unlock, Plus, X, Save, Download } from "lucide-react";
 
-// ── GitHub Data Sources ────────────────────────────────────────────────────────
-const ENGINEERS_URL  = "https://raw.githubusercontent.com/Github2drb/Controls_Team_Tracker/main/engineers_master_list.json";
+// ── Data Sources ───────────────────────────────────────────────────────────────
+// Engineers list loads through the backend API (uses the server's GitHub token).
+// NEVER fetch raw.githubusercontent.com directly from the browser — it is
+// rate-limited per IP (429 Too Many Requests) and the browser can cache the 429.
+const ENGINEERS_API  = "/api/engineers-master-list";
+// master_site.json has no backend route yet — best-effort raw fetch with
+// cache disabled; silently falls back to FALLBACK_SITES on any failure.
 const MASTER_SITE_URL= "https://raw.githubusercontent.com/Github2drb/Controls_Team_Tracker/main/master_site.json";
-const AUTH_URL       = "https://raw.githubusercontent.com/Github2drb/Controls_Team_Tracker/main/engineers_auth.json";
 
 const DEFAULT_SITE = "3D CAD U1";
 
@@ -38,7 +42,6 @@ function makeAuthHeader(username: string, role: string): string {
 }
 
 interface Engineer  { id:string; name:string; initials:string; }
-interface AdminUser { username:string; password:string; name?:string; role?:string; isActive?:boolean; }
 
 // ── Component ──────────────────────────────────────────────────────────────────
 export default function DailyReport() {
@@ -58,16 +61,13 @@ export default function DailyReport() {
   const [attendance, setAttendance] = useState<Record<string,Record<number,string>>>({});
 
   // Admin
-  const { user, isAdmin, login, logout, logoutAdmin } = useAuth();
+  const { user, isAdmin, login, logoutAdmin } = useAuth();
   const adminMode = isAdmin;
   const adminName = user?.name || user?.username || "";
   const adminUser = user?.username || "admin";
   const adminRole = user?.role || "admin";
-  
-  
+
   const [showPassDlg,  setShowPassDlg]  = useState(false);
-  const [adminUsers,   setAdminUsers]   = useState<AdminUser[]>([]);
-  const [authLoading,  setAuthLoading]  = useState(false);
   const [inputUser,    setInputUser]    = useState("");
   const [inputPass,    setInputPass]    = useState("");
   const [passError,    setPassError]    = useState(false);
@@ -89,22 +89,22 @@ export default function DailyReport() {
   useEffect(()=>{
     (async()=>{
       try {
-        const [engRes, siteRes] = await Promise.allSettled([
-          fetch(ENGINEERS_URL),
-          fetch(MASTER_SITE_URL),
-        ]);
+        // Engineers via backend API (server-side GitHub token — no rate limits)
+        const engRes = await fetch(ENGINEERS_API, { cache:"no-store" });
+        if (!engRes.ok) throw new Error("Could not load engineers list (server error "+engRes.status+"). Try reloading; if it persists check /api/debug/status.");
+        const engJson = await engRes.json();
+        const engs: Engineer[] = Array.isArray(engJson) ? engJson : (engJson.engineers||[]);
+        if (!engs.length) throw new Error("Engineers list is empty — check engineers_master_list.json in the data repo.");
 
-        let engs: Engineer[] = [];
-        if (engRes.status==="fulfilled"&&engRes.value.ok) {
-          const json = await engRes.value.json();
-          engs = json.engineers||[];
-        } else throw new Error("Could not load engineers list from GitHub.");
-
+        // Sites — best-effort raw fetch, never blocks the page, never cached
         let sites = FALLBACK_SITES;
-        if (siteRes.status==="fulfilled"&&siteRes.value.ok) {
-          const json = await siteRes.value.json();
-          if (json.sites?.length) sites = json.sites;
-        }
+        try {
+          const siteRes = await fetch(MASTER_SITE_URL+"?t="+Date.now(), { cache:"no-store" });
+          if (siteRes.ok) {
+            const json = await siteRes.json();
+            if (json.sites?.length) sites = json.sites;
+          }
+        } catch { /* keep fallback sites */ }
 
         setEngineers(engs);
         setSiteList(sites);
@@ -120,7 +120,7 @@ export default function DailyReport() {
 
         // Load saved attendance from GitHub via backend API
         try {
-          const saved = await fetch(`/api/daily-report-data?year=${year}&month=${month}`);
+          const saved = await fetch(`/api/daily-report-data?year=${year}&month=${month}`, { cache:"no-store" });
           if (saved.ok) {
             const json = await saved.json();
             const savedAttendance: Record<string,Record<string,string>> = json.attendance||{};
@@ -161,21 +161,10 @@ export default function DailyReport() {
     return ()=>document.removeEventListener("mousedown",handler);
   },[]);
 
-  // ── Fetch admin credentials when dialog opens ────────────────────────────────
-  const openLoginDialog = async()=>{
+  // ── Open login dialog (auth handled by useAuth().login — no GitHub fetch) ────
+  const openLoginDialog = ()=>{
     setShowPassDlg(true);
     setInputUser(""); setInputPass(""); setPassError(false);
-    setAuthLoading(true);
-    try {
-      const res = await fetch(AUTH_URL+"?t="+Date.now());
-      if (!res.ok) throw new Error();
-      const data = await res.json();
-      const list: AdminUser[] = data.engineers||data;
-      const admins = list.filter(u=>u.role==="admin"&&u.isActive!==false);
-      setAdminUsers(admins.length ? admins : [{username:"admin",password:"admin@drb",name:"Admin",role:"admin"}]);
-    } catch {
-      setAdminUsers([{username:"admin",password:"admin@drb",name:"Admin",role:"admin"}]);
-    } finally { setAuthLoading(false); }
   };
 
   // ── Save to GitHub via backend API ───────────────────────────────────────────
@@ -223,7 +212,7 @@ export default function DailyReport() {
     URL.revokeObjectURL(url);
   };
 
-  // ── Login / logout ───────────────────────────────────────────────────────────
+  // ── Login ────────────────────────────────────────────────────────────────────
   const tryLogin = async () => {
    try {
       await login(inputUser.trim(), inputPass);
@@ -314,31 +303,23 @@ export default function DailyReport() {
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
             <div className="bg-background border rounded-xl shadow-2xl p-6 w-80 space-y-4">
               <h2 className="text-lg font-semibold flex items-center gap-2"><Lock className="h-4 w-4"/>Admin Login</h2>
-              {authLoading ? (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"/>Loading credentials…
-                </div>
-              ) : (
-                <>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium text-muted-foreground">Username</label>
-                    <input type="text" placeholder="e.g. admin" value={inputUser} autoComplete="username"
-                      onChange={e=>{setInputUser(e.target.value);setPassError(false);}}
-                      onKeyDown={e=>e.key==="Enter"&&tryLogin()}
-                      className="w-full border rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-primary border-input" autoFocus/>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium text-muted-foreground">Password</label>
-                    <input type="password" placeholder="Enter password" value={inputPass} autoComplete="current-password"
-                      onChange={e=>{setInputPass(e.target.value);setPassError(false);}}
-                      onKeyDown={e=>e.key==="Enter"&&tryLogin()}
-                      className={`w-full border rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-primary ${passError?"border-red-500":"border-input"}`}/>
-                  </div>
-                  {passError&&<p className="text-xs text-red-500">Incorrect username or password. Try again.</p>}
-                </>
-              )}
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-muted-foreground">Username</label>
+                <input type="text" placeholder="e.g. admin" value={inputUser} autoComplete="username"
+                  onChange={e=>{setInputUser(e.target.value);setPassError(false);}}
+                  onKeyDown={e=>e.key==="Enter"&&tryLogin()}
+                  className="w-full border rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-primary border-input" autoFocus/>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-muted-foreground">Password</label>
+                <input type="password" placeholder="Enter password" value={inputPass} autoComplete="current-password"
+                  onChange={e=>{setInputPass(e.target.value);setPassError(false);}}
+                  onKeyDown={e=>e.key==="Enter"&&tryLogin()}
+                  className={`w-full border rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-primary ${passError?"border-red-500":"border-input"}`}/>
+              </div>
+              {passError&&<p className="text-xs text-red-500">Incorrect username or password. Try again.</p>}
               <div className="flex gap-2 pt-1">
-                <Button size="sm" onClick={tryLogin} disabled={authLoading} className="flex-1">Login</Button>
+                <Button size="sm" onClick={tryLogin} className="flex-1">Login</Button>
                 <Button size="sm" variant="outline" onClick={()=>{setShowPassDlg(false);setInputUser("");setInputPass("");setPassError(false);}} className="flex-1">Cancel</Button>
               </div>
             </div>
