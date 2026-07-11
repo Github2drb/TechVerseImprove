@@ -21,7 +21,7 @@ interface EngineerCredential {
   id: string;
   name: string;
   username: string;
-  role: 'admin' | 'engineer' | 'stores';
+  role: 'admin' | 'engineer' | 'stores' | 'documentation';
   company?: string;
   mobile?: string;
   email?: string;
@@ -30,6 +30,14 @@ interface EngineerCredential {
   createdAt: string;
   lastLogin?: string;
 }
+
+const ROLE_LABELS: Record<string, string> = {
+  admin: 'Admin',
+  engineer: 'Engineer',
+  stores: 'Stores',
+  documentation: 'Documentation Engineer',
+};
+
 export default function EngineerManagement() {
   const { toast } = useToast();
   const { isAdmin } = useAuth();
@@ -43,7 +51,7 @@ export default function EngineerManagement() {
     name: "",
     username: "",
     password: "",
-    role: "engineer" as 'admin' | 'engineer' | 'stores',
+    role: "engineer" as 'admin' | 'engineer' | 'stores' | 'documentation',
     company: "",
     mobile: "",
     email: "",
@@ -294,7 +302,7 @@ export default function EngineerManagement() {
                       <TableCell>{eng.username}</TableCell>
                       <TableCell>
                         <Badge variant={eng.role === 'admin' ? 'default' : 'secondary'}>
-                          {eng.role === 'admin' ? 'Admin' : 'Engineer'}
+                          {ROLE_LABELS[eng.role] || 'Engineer'}
                         </Badge>
                       </TableCell>
                       <TableCell>
@@ -422,13 +430,14 @@ export default function EngineerManagement() {
             </div>
             <div>
               <Label>Role</Label>
-              <Select value={formData.role} onValueChange={(v: 'admin' | 'engineer') => setFormData({ ...formData, role: v })}>
+              <Select value={formData.role} onValueChange={(v: 'admin' | 'engineer' | 'stores' | 'documentation') => setFormData({ ...formData, role: v })}>
                 <SelectTrigger data-testid="select-engineer-role">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="engineer">Engineer</SelectItem>
                   <SelectItem value="stores">Stores</SelectItem>
+                  <SelectItem value="documentation">Documentation Engineer</SelectItem>
                   <SelectItem value="admin">Admin</SelectItem>
                 </SelectContent>
               </Select>
@@ -526,12 +535,14 @@ export default function EngineerManagement() {
             </div>
             <div>
               <Label>Role</Label>
-              <Select value={formData.role} onValueChange={(v: 'admin' | 'engineer') => setFormData({ ...formData, role: v })}>
+              <Select value={formData.role} onValueChange={(v: 'admin' | 'engineer' | 'stores' | 'documentation') => setFormData({ ...formData, role: v })}>
                 <SelectTrigger data-testid="select-edit-role">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="engineer">Engineer</SelectItem>
+                  <SelectItem value="stores">Stores</SelectItem>
+                  <SelectItem value="documentation">Documentation Engineer</SelectItem>
                   <SelectItem value="admin">Admin</SelectItem>
                 </SelectContent>
               </Select>
