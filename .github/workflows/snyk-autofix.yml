@@ -100,7 +100,9 @@ jobs:
             8. Do NOT modify snyk.sarif, .github/, or delete any files.
 
             After fixing, run a syntax sanity check on every file you changed.
-          claude_args: "--allowedTools Edit,Write,Read,Glob,Grep,Bash"
+          # Pin an explicitly available model — the action default (Opus 1M-context
+          # beta) is not enabled on all API accounts and fails instantly if missing.
+          claude_args: "--model claude-sonnet-4-5 --allowedTools Edit,Write,Read,Glob,Grep,Bash"
 
       - name: Remove SARIF before committing
         run: rm -f snyk.sarif
