@@ -1,241 +1,142 @@
-name: Snyk Auto-Fix with Claude
+name: Snyk Auto-Fix
+# ------------------------------------------------------------------------------
+# Scans the repo with Snyk Code on every push to main (and daily), and when
+# vulnerabilities are found: Claude fixes them, the build is verified, and the
+# fix PR is auto-merged -- which triggers the normal Render deploy.
+# No manual intervention needed. If the build fails, the PR is left open for
+# review instead of merging, so a bad fix can never reach production.
+# ------------------------------------------------------------------------------
 
 on:
+  push:
+    branches: [main]
   schedule:
-    - cron: '0 2 * * 1'   # Every Monday at 2 AM
-  workflow_dispatch:        # Also allows manual trigger from GitHub UI
+    - cron: "30 2 * * *" # daily 02:30 UTC safety-net scan
+  workflow_dispatch:
+
+# Prevent overlapping runs / infinite loops
+concurrency:
+  group: snyk-autofix
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
-  snyk-autofix:
+  scan:
+    # Skip runs triggered by the auto-fix bot's own merge commit
+    if: "!contains(github.event.head_commit.message || '', '[snyk-autofix]')"
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-
+    outputs:
+      issue_count: ${{ steps.count.outputs.issue_count }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4.2.0
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
-          token: ${{ secrets.GH_PAT }}
-          fetch-depth: 0
+          node-version: 20
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4.1.0
-        with:
-          node-version: '20'
+      - name: Set up Snyk
+        uses: snyk/actions/setup@master
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Install Snyk CLI
-        run: npm install -g snyk
-
-      - name: Install Claude Code CLI
-        run: npm install -g @anthropic-ai/claude-code
-
-      - name: Authenticate Snyk
-        run: snyk auth ${{ secrets.SNYK_TOKEN }}
-
-      - name: Fetch Snyk vulnerabilities via API
-        id: snyk_issues
+      - name: Run Snyk Code scan
+        run: snyk code test --sarif-file-output=snyk.sarif || true
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+      - name: Count open issues
+        id: count
         run: |
-          curl -s \
-            -H "Authorization: token $SNYK_TOKEN" \
-            -H "Content-Type: application/json" \
-            "https://api.snyk.io/rest/orgs/github2drb/projects/a69fe6f8-d23c-4fdd-8cfd-cf0ac686cd8b/issues?version=2024-01-23&limit=100&severity=critical,high,medium" \
-            -o snyk_issues.json
+          COUNT=$(jq '[.runs[].results[]] | length' snyk.sarif 2>/dev/null || echo 0)
+          echo "issue_count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "Snyk found $COUNT issue(s)"
 
-          # Also run local snyk test to get code-level issues
-          snyk test --json > snyk_code_issues.json || true
-          snyk code test --json >> snyk_code_issues.json || true
+      - name: Upload SARIF for the fix job
+        if: steps.count.outputs.issue_count != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: snyk-sarif
+          path: snyk.sarif
 
-          echo "Issues fetched"
-          cat snyk_issues.json | python3 -c "
-          import json, sys
-          data = json.load(sys.stdin)
-          issues = data.get('data', [])
-          print(f'Total issues found: {len(issues)}')
-          for i in issues[:5]:
-              attrs = i.get('attributes', {})
-              print(f\"- [{attrs.get('effective_severity_level','?').upper()}] {attrs.get('title','?')}\")
-          "
+  fix:
+    needs: scan
+    if: needs.scan.outputs.issue_count != '0'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Create fix branch
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Download Snyk results
+        uses: actions/download-artifact@v4
+        with:
+          name: snyk-sarif
+
+      - name: Fix vulnerabilities with Claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            The file snyk.sarif in the repo root contains Snyk Code findings
+            for this repository. Fix EVERY finding listed in it, one by one.
+
+            Hard rules -- the application must keep working exactly as before:
+            1. Make the minimal change that removes each vulnerability. Never
+               refactor unrelated code.
+            2. Never define a React component inside another component.
+            3. Never put JSX outside a function.
+            4. package.json must remain strict JSON (no trailing commas).
+            5. server/index.ts builds as CommonJS -- never use import.meta.url
+               or fileURLToPath there.
+            6. Never commit real passwords or secrets. Replace hardcoded
+               credentials with environment variables (random fallback so no
+               committed literal ever works), replace Math.random()-based IDs
+               with crypto APIs, sanitize any HTML rendered from data with
+               DOMPurify, and sanitize request data flowing into responses.
+            7. If a fix requires a new dependency, add it to package.json.
+            8. Do NOT modify snyk.sarif, .github/, or delete any files.
+
+            After fixing, run a syntax sanity check on every file you changed.
+          claude_args: "--allowedTools Edit,Write,Read,Glob,Grep,Bash"
+
+      - name: Remove SARIF before committing
+        run: rm -f snyk.sarif
+
+      - name: Build gate -- verify the app still compiles
+        id: build
         run: |
-          BRANCH="snyk-autofix-$(date +%Y%m%d-%H%M%S)"
-          echo "BRANCH=$BRANCH" >> $GITHUB_ENV
-          git checkout -b $BRANCH
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          npm install --no-audit --no-fund
+          npm run build
+        continue-on-error: true
 
-      - name: Run Claude Code to analyze and fix issues
+      - name: Create fix PR
+        id: pr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: snyk-autofix/${{ github.run_id }}
+          commit-message: "fix(security): auto-fix Snyk findings [snyk-autofix]"
+          title: "Snyk auto-fix: ${{ needs.scan.outputs.issue_count }} finding(s) resolved"
+          body: |
+            Automated security fixes for Snyk Code findings.
+            Build gate: ${{ steps.build.outcome }}.
+            Generated by the snyk-autofix workflow (run ${{ github.run_id }}).
+
+      - name: Auto-merge (only if build passed)
+        if: steps.build.outcome == 'success' && steps.pr.outputs.pull-request-number != ''
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          # Build a prompt from the Snyk results
-          python3 << 'PYEOF'
-          import json, os
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr merge ${{ steps.pr.outputs.pull-request-number }} --squash
 
-          issues = []
-
-          # Parse API issues
-          try:
-              with open("snyk_issues.json") as f:
-                  data = json.load(f)
-              for item in data.get("data", []):
-                  attrs = item.get("attributes", {})
-                  sev = attrs.get("effective_severity_level", "unknown")
-                  if sev in ("critical", "high", "medium"):
-                      issues.append({
-                          "severity": sev,
-                          "title": attrs.get("title", "Unknown"),
-                          "description": attrs.get("description", ""),
-                          "fix": attrs.get("fix_info", {}).get("isPatchable", False),
-                      })
-          except Exception as e:
-              print(f"API parse error: {e}")
-
-          # Parse local snyk test issues
-          try:
-              with open("snyk_code_issues.json") as f:
-                  raw = f.read()
-              # snyk outputs multiple JSON objects — take last valid one
-              for chunk in raw.split("\n}\n"):
-                  try:
-                      d = json.loads(chunk + "}")
-                      vulns = d.get("vulnerabilities", [])
-                      for v in vulns:
-                          issues.append({
-                              "severity": v.get("severity", "unknown"),
-                              "title": v.get("title", ""),
-                              "packageName": v.get("packageName", ""),
-                              "version": v.get("version", ""),
-                              "fixedIn": v.get("fixedIn", []),
-                              "from": v.get("from", []),
-                          })
-                  except:
-                      pass
-          except Exception as e:
-              print(f"Code parse error: {e}")
-
-          if not issues:
-              print("No fixable issues found")
-              with open("no_issues.flag", "w") as f:
-                  f.write("1")
-          else:
-              prompt = f"""You are a security engineer. Analyze these {len(issues)} Snyk security vulnerabilities found in the DRB TechVerse dashboard codebase (React/TypeScript frontend + Node.j[...]
-
-          VULNERABILITIES:
-          {json.dumps(issues, indent=2)}
-
-          The codebase structure:
-          - Frontend: client/src/ (React + TypeScript)
-          - Backend: server/routes.ts, server/index.ts
-          - Dependencies: package.json
-
-          Your task:
-          1. For each vulnerability, identify the affected file(s) in the codebase
-          2. Apply the minimum safe fix — upgrade package versions in package.json, fix unsafe code patterns, add input sanitization where missing
-          3. Focus on: dependency upgrades, XSS prevention, SQL/NoSQL injection, insecure headers, exposed secrets patterns, prototype pollution
-          4. After all fixes, run: npm audit fix --force if needed
-          5. Do NOT break existing functionality — only security fixes
-          6. For each fix applied, add a comment explaining what was fixed and why
-
-          Critical rules:
-          - Never add stray JSX outside a component return()
-          - Never define components inside other components  
-          - Double-check package.json for valid JSON (no trailing commas)
-          - If a package upgrade could break the app, upgrade to the nearest safe version
-
-          Start fixing now. Apply all changes directly to the files."""
-
-              with open("claude_prompt.txt", "w") as f:
-                  f.write(prompt)
-              print(f"Prompt written with {len(issues)} issues")
-          PYEOF
-
-      - name: Apply fixes with Claude Code
-        if: ${{ !contains(steps.snyk_issues.outputs.*, 'No fixable') }}
+      - name: Flag failed build for review
+        if: steps.build.outcome != 'success' && steps.pr.outputs.pull-request-number != ''
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ -f "no_issues.flag" ]; then
-            echo "No issues to fix"
-            exit 0
-          fi
-
-          # Run Claude Code in non-interactive mode with the generated prompt
-          claude --print \
-            --allowedTools "Read,Write,Edit,Bash" \
-            --max-turns 30 \
-            "$(cat claude_prompt.txt)" || true
-
-          # Also run npm audit fix for known dep vulnerabilities
-          npm audit fix || true
-
-      - name: Check if any files were changed
-        id: check_changes
-        run: |
-          git diff --quiet && git diff --staged --quiet && echo "no_changes=true" >> $GITHUB_OUTPUT || echo "no_changes=false" >> $GITHUB_OUTPUT
-
-      - name: Commit and push fixes
-        if: steps.check_changes.outputs.no_changes == 'false'
-        run: |
-          git add -A
-          git commit -m "fix(security): Auto-fix Snyk vulnerabilities via Claude Code
-
-          - Applied fixes for critical/high/medium severity issues
-          - Upgraded vulnerable dependencies where possible  
-          - Applied code-level security patches
-          - Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-          
-          Snyk project: a69fe6f8-d23c-4fdd-8cfd-cf0ac686cd8b"
-          
-          git push origin $BRANCH
-
-      - name: Create Pull Request
-        if: steps.check_changes.outputs.no_changes == 'false'
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          # Get issue summary for PR body
-          ISSUE_COUNT=$(python3 -c "
-          import json
-          try:
-            with open('snyk_issues.json') as f:
-              data = json.load(f)
-            print(len(data.get('data', [])))
-          except:
-            print('unknown')
-          ")
-
-          gh pr create \
-            --title "🔒 Security: Auto-fix Snyk vulnerabilities ($(date +%Y-%m-%d))" \
-            --body "## Automated Snyk Security Fix
-
-          This PR was automatically generated by the Snyk + Claude Code pipeline.
-
-          **Issues addressed:** $ISSUE_COUNT vulnerabilities (critical/high/medium)  
-          **Snyk project:** [View on Snyk](https://app.snyk.io/org/github2drb/project/a69fe6f8-d23c-4fdd-8cfd-cf0ac686cd8b)  
-          **Generated:** $(date -u +%Y-%m-%dT%H:%M:%SZ)
-
-          ### What was fixed
-          - Dependency version upgrades for known CVEs
-          - Code-level security patches (XSS, injection, etc.)
-          - \`npm audit fix\` applied
-
-          ### Before merging
-          - [ ] Check Render preview deploy builds successfully
-          - [ ] Verify no functional regressions on key pages
-          - [ ] Re-run Snyk scan to confirm issues resolved
-
-          > Auto-generated — review before merging to main" \
-            --base main \
-            --head $BRANCH \
-            --label "security,automated"
-
-      - name: No changes needed
-        if: steps.check_changes.outputs.no_changes == 'true'
-        run: echo "✅ No security fixes needed — codebase is clean"
+          gh pr comment ${{ steps.pr.outputs.pull-request-number }} \
+            --body "WARNING: Build failed after the automated fix -- NOT merged. Review manually before merging."
