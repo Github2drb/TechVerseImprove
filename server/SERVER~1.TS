@@ -2,7 +2,6 @@
 import { Router, Request, Response } from "express";
 import { randomUUID } from "crypto";
 import type { Server } from "http";
-import bcrypt from "bcryptjs";
 import {
   getProjectData, saveProjectAssignment, updateProjectAssignment, deleteProjectAssignment,
   getProjectActivities, upsertProjectActivity, getAnalyticsSummary,
@@ -21,22 +20,6 @@ const DEFAULT_ENGINEER_PASSWORD = process.env.DEFAULT_ENGINEER_PASSWORD || rando
 // SECURITY (Snyk: insecure randomness): IDs are generated with crypto, not Math.random().
 const secureId = (len: number) => randomUUID().replace(/-/g, "").slice(0, len);
 
-const loginAttempts = new Map<string, { count: number; lastAttempt: number }>();
-function checkRateLimit(ip: string): boolean {
-  const now = Date.now();
-  const record = loginAttempts.get(ip);
-  if (!record) { loginAttempts.set(ip, { count: 1, lastAttempt: now }); return true; }
-  // Reset after 15 minutes
-  if (now - record.lastAttempt > 15 * 60 * 1000) {
-    loginAttempts.set(ip, { count: 1, lastAttempt: now }); return true;
-  }
-  if (record.count >= 5) return false; // Block after 5 attempts
-  record.count++; record.lastAttempt = now; return true;
-}
-function sanitizeInput(s: unknown): string {
-  if (typeof s !== "string") return "";
-  return s.replace(/[<>&"']/g, "").trim().slice(0, 200);
-}
 
 // ── VAPID config (module level) ───────────────────────────────────────────────
 if (process.env.VAPID_PUBLIC_KEY) {
@@ -50,10 +33,7 @@ if (process.env.VAPID_PUBLIC_KEY) {
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 interface EngineerCredential {
   id: string; username: string; name: string; password: string;
-  role: "admin"|"engineer"|"stores"; company?: string;
-  mobile?: string;
-  email?: string;
-  callmebotApiKey?: string;
+  role: "admin"|"engineer"|"hr"|"pic"|"scm"; company?: string;
   isActive: boolean; createdAt: string; lastLogin?: string;
 }
 interface CredFile { engineers: EngineerCredential[]; lastUpdated: string; }
@@ -137,102 +117,27 @@ function isAdmin(req: Request): boolean {
     return d?.role === "admin" || d?.username?.toLowerCase() === "admin";
   } catch { return false; }
 }
-function isStores(req: Request): boolean {
+// HR / Project-In-Charge / SCM get full read access app-wide, but the ONLY
+// thing they're allowed to write to is the Material Procurement Tracker.
+const MATERIAL_EDITOR_ROLES = new Set(["admin", "hr", "pic", "scm"]);
+function canEditMaterials(req: Request): boolean {
   try {
     const h = req.headers["x-admin-auth"];
     if (!h) return false;
     const d = JSON.parse(Buffer.from(h as string, "base64").toString("utf-8"));
-    return ["admin","stores"].includes(d?.role) || d?.username?.toLowerCase() === "admin";
+    if (d?.username?.toLowerCase() === "admin") return true;
+    return MATERIAL_EDITOR_ROLES.has((d?.role || "").toLowerCase());
   } catch { return false; }
 }
-
-function daysBetweenServer(from: string, to: string): number {
-  const a = new Date(from); a.setHours(0,0,0,0);
-  const b = new Date(to);   b.setHours(0,0,0,0);
-  return Math.round((b.getTime() - a.getTime()) / 86400000);
-}
-
-async function sendWhatsApp(mobile: string, apiKey: string, message: string): Promise<void> {
+const FULL_ACCESS_VIEWER_ROLES = new Set(["admin", "hr", "pic", "scm"]);
+function isFullAccessViewer(req: Request): boolean {
   try {
-    const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(mobile)}&text=${encodeURIComponent(message)}&apikey=${encodeURIComponent(apiKey)}`;
-    await fetch(url);
-  } catch (e: any) { console.error("[sendWhatsApp]", e.message); }
-}
-
-async function sendEmail(to: string, subject: string, html: string): Promise<void> {
-  if (!process.env.SMTP_USER || !process.env.SMTP_PASS) return;
-  try {
-    const nodemailer = await import("nodemailer");
-    const t = nodemailer.default.createTransport({
-      host: process.env.SMTP_HOST || "smtp.gmail.com",
-      port: parseInt(process.env.SMTP_PORT || "587"),
-      secure: false,
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-    });
-    await t.sendMail({ from: `"DRB TechVerse" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`, to, subject, html });
-  } catch (e: any) { console.error("[sendEmail]", e.message); }
-}
-
-async function getProjectEngineers(projectName: string): Promise<EngineerCredential[]> {
-  try {
-    const [waFile, authFile] = await Promise.all([
-      readJsonFile<WAFile>("weekly-assignments.json"),
-      readJsonFile<CredFile>("engineers_auth.json"),
-    ]);
-    const pnLower = projectName.trim().toLowerCase();
-    const engineerNames = new Set<string>();
-    (waFile?.assignments ?? [])
-      .filter(a => a.projectName.trim().toLowerCase() === pnLower)
-      .forEach(a => a.engineerName.split(",").forEach(n => engineerNames.add(n.trim().toLowerCase())));
-    return (authFile?.engineers ?? []).filter(e =>
-      engineerNames.has(e.name.toLowerCase()) || engineerNames.has(e.username.toLowerCase())
-    );
-  } catch { return []; }
-}
-
-async function notifyMaterialReceived(projectName: string, materialName: string): Promise<void> {
-  const engineers = await getProjectEngineers(projectName);
-  const dateStr = new Date().toLocaleDateString("en-IN", { day:"numeric", month:"long", year:"numeric" });
-  const waMsg = `✅ Material Received\n"${materialName}" for project ${projectName} has been marked as Received on ${dateStr}.\nLogin: https://drbtechverse.in`;
-  const html = `<div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden"><div style="background:#16a34a;color:white;padding:16px 20px"><h2 style="margin:0">✅ Material Received</h2></div><div style="padding:20px"><p><b>${materialName}</b> for project <b>${projectName}</b> has been marked as <b>Received</b>.</p><p>Date: ${dateStr}</p><a href="https://drbtechverse.in/material-tracker" style="display:inline-block;background:#16a34a;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;margin-top:12px">View Material Tracker</a></div></div>`;
-  await Promise.allSettled([
-    ...engineers.map(eng => sendPushToEngineer(eng.name, { title:"Material Received", body:`${materialName} — ${projectName}`, url:"/material-tracker", tag:"material-received" })),
-    ...engineers.map(async eng => {
-      if (eng.email) sendEmail(eng.email, `✅ Material Received — ${projectName}`, html).catch(console.error);
-      if (eng.mobile && eng.callmebotApiKey) sendWhatsApp(eng.mobile, eng.callmebotApiKey, waMsg).catch(console.error);
-    }),
-  ]);
-}
-
-async function checkAndSendMaterialAlerts(projectName: string, materials: Array<{name?:string;prApproved?:string;poCreated?:string;poApproved?:string;targetReceipt?:string;receiptStatus?:string}>): Promise<void> {
-  const today = new Date().toISOString().split("T")[0];
-  const issues: string[] = [];
-  for (const m of materials) {
-    if (!m.name) continue;
-    if (m.prApproved && !m.poCreated) {
-      const d = daysBetweenServer(m.prApproved, today);
-      if (d > 3) issues.push(`"${m.name}": PO not raised (${d}d since PR Approved)`);
-    }
-    if (m.poCreated && !m.poApproved) {
-      const d = daysBetweenServer(m.poCreated, today);
-      if (d > 3) issues.push(`"${m.name}": PO not approved (${d}d since PO Created)`);
-    }
-    if (m.targetReceipt && m.targetReceipt < today && (!m.receiptStatus || m.receiptStatus === "Not Received")) {
-      const d = daysBetweenServer(m.targetReceipt, today);
-      issues.push(`"${m.name}": Receipt overdue by ${d} day(s) (Target: ${m.targetReceipt})`);
-    }
-  }
-  if (issues.length === 0) return;
-  const engineers = await getProjectEngineers(projectName);
-  if (engineers.length === 0) return;
-  const subject = `⚠️ Material Alert — ${projectName}`;
-  const listItems = issues.map(i => `<li style="margin-bottom:6px">${i}</li>`).join("");
-  const html = `<div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden"><div style="background:#d97706;color:white;padding:16px 20px"><h2 style="margin:0">⚠️ Material Alert</h2></div><div style="padding:20px"><p><b>Project:</b> ${projectName}</p><ul style="padding-left:20px">${listItems}</ul><a href="https://drbtechverse.in/material-tracker" style="display:inline-block;background:#d97706;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;margin-top:12px">Open Material Tracker</a></div></div>`;
-  const waMsg = `⚠️ Material Alert — ${projectName}\n${issues.map(i=>`• ${i}`).join("\n")}`;
-  await Promise.allSettled(engineers.map(async eng => {
-    if (eng.email) sendEmail(eng.email, subject, html).catch(console.error);
-    if (eng.mobile && eng.callmebotApiKey) sendWhatsApp(eng.mobile, eng.callmebotApiKey, waMsg).catch(console.error);
-  }));
+    const h = req.headers["x-admin-auth"];
+    if (!h) return false;
+    const d = JSON.parse(Buffer.from(h as string, "base64").toString("utf-8"));
+    if (d?.username?.toLowerCase() === "admin") return true;
+    return FULL_ACCESS_VIEWER_ROLES.has((d?.role || "").toLowerCase());
+  } catch { return false; }
 }
 function projKey(name: string): string {
   const m = name.trim().match(/^([A-Z0-9]{1,4}-[A-Z0-9]{1,5}-\d{4,6})/i);
@@ -377,27 +282,13 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
   // ── AUTH ──────────────────────────────────────────────────────────────────
   r.post("/auth/login", async (req, res) => {
     try {
-      const ip = req.ip || req.socket.remoteAddress || "unknown";
-      if (!checkRateLimit(ip)) {
-        return res.status(429).json({ message: "Too many login attempts. Try again in 15 minutes." });
-      }
       const { username, password } = req.body;
       if (!username || !password) return res.status(400).json({ message: "Username and password required" });
       const f = await readJsonFile<CredFile>("engineers_auth.json");
       const list: EngineerCredential[] = f?.engineers ?? [];
       if (!list.find(e => e.username === "admin"))
         list.push({ id:"admin-1", username:"admin", name:"Admin", password:DEFAULT_ADMIN_PASSWORD, role:"admin", isActive:true, createdAt:new Date().toISOString() });
-      const username_clean = sanitizeInput(username);
-      const password_clean = typeof password === "string" ? password.slice(0, 200) : "";
-      let found: EngineerCredential | undefined;
-      for (const e of list) {
-        if (e.username.toLowerCase() !== username_clean.toLowerCase()) continue;
-        if (e.isActive === false) continue;
-        const match = e.password.startsWith("$2")
-          ? await bcrypt.compare(password_clean, e.password)
-          : e.password === password_clean;
-        if (match) { found = e; break; }
-      }
+      const found = list.find(e => e.username.toLowerCase()===username.toLowerCase() && e.password===password && e.isActive!==false);
       if (!found) return res.status(401).json({ message: "Invalid credentials" });
       found.lastLogin = new Date().toISOString();
       if (f) { f.lastUpdated=new Date().toISOString(); writeJsonFile("engineers_auth.json",f,"Update lastLogin").catch(()=>{}); }
@@ -412,9 +303,7 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
   // ── ENGINEER CREDENTIALS ──────────────────────────────────────────────────
   r.get("/engineer-credentials", async (req, res) => {
     try {
-      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const f = await readJsonFile<CredFile>("engineers_auth.json");
-      res.json({ engineers: (f?.engineers??[]).map(({password:_p,...rest})=>rest), lastUpdated: f?.lastUpdated??"" });
+      if (!isFullAccessViewer(req)) return res.status(403).json({ message: "Admin only" });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
   r.post("/engineer-credentials", async (req, res) => {
@@ -422,7 +311,7 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
       if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
       const f = (await readJsonFile<CredFile>("engineers_auth.json"))??{engineers:[],lastUpdated:""};
       const eng: EngineerCredential = { id:req.body.id||`eng-${Date.now()}`, username:req.body.username,
-        name:req.body.name, password: await bcrypt.hash(req.body.password || DEFAULT_ENGINEER_PASSWORD, 10), role:req.body.role||"engineer",
+        name:req.body.name, password:req.body.password||DEFAULT_ENGINEER_PASSWORD, role:req.body.role||"engineer",
         company:req.body.company, isActive:req.body.isActive!==false, createdAt:new Date().toISOString() };
       f.engineers.push(eng); f.lastUpdated=new Date().toISOString();
       await writeJsonFile("engineers_auth.json",f,`Add engineer: ${eng.username}`);
@@ -475,7 +364,7 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
       if (!f) return res.status(404).json({message:"Not found"});
       const eng=f.engineers.find(e=>e.username.toLowerCase()===username.toLowerCase());
       if (!eng) return res.status(404).json({message:"Engineer not found"});
-      eng.password = await bcrypt.hash(newPassword, 10); f.lastUpdated=new Date().toISOString();
+      eng.password=newPassword; f.lastUpdated=new Date().toISOString();
       await writeJsonFile("engineers_auth.json",f,`Reset password: ${username}`);
       res.json({success:true});
     } catch (e: any) { res.status(500).json({ error: e.message }); }
@@ -1152,9 +1041,7 @@ interface MaterialRow {
   id: string; name: string; qty: string; unit: string;
   bomDate?: string; prCreated?: string; prApproved?: string;
   poCreated?: string; poApproved?: string;
-  targetReceipt?: string; actualReceipt?: string;
-  receiptStatus?: "Not Received"|"Partially Received"|"Received";
-  notes?: string;
+  targetReceipt?: string; actualReceipt?: string; notes?: string;
 }
 interface ProjectMaterialData {
   projectName: string; bomPath: string; materials: MaterialRow[];
@@ -1183,61 +1070,27 @@ r.get("/material-tracker/:project", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-// Save data for one project (admin: all fields; stores: receipt fields only handled via PATCH)
+// Save data for one project
 r.post("/material-tracker/:project", async (req, res) => {
   try {
-    if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+    if (!canEditMaterials(req)) return res.status(403).json({ message: "Not allowed to edit the Material Tracker" });
     const f = (await readJsonFile<MaterialTrackerFile>("material-tracker.json")) ?? { projects: {}, lastUpdated: "" };
     const key = matKey(req.params.project);
-    const prevMaterials: MaterialRow[] = f.projects[key]?.materials ?? [];
-    const newMaterials: MaterialRow[] = Array.isArray(req.body.materials) ? req.body.materials : [];
     f.projects[key] = {
       projectName: req.body.projectName || req.params.project,
       bomPath: req.body.bomPath || "",
-      materials: newMaterials,
+      materials: Array.isArray(req.body.materials) ? req.body.materials : [],
     };
     f.lastUpdated = new Date().toISOString();
     await writeJsonFile("material-tracker.json", f, `Material tracker update: ${req.params.project}`);
-    // Notify on newly-Received items
-    const prevMap = new Map(prevMaterials.map(m => [m.id, m]));
-    for (const m of newMaterials) {
-      if (m.receiptStatus === "Received" && prevMap.get(m.id)?.receiptStatus !== "Received") {
-        notifyMaterialReceived(req.body.projectName || req.params.project, m.name).catch(console.error);
-      }
-    }
-    // Auto-alert for PO missing / receipt overdue — background
-    checkAndSendMaterialAlerts(req.body.projectName || req.params.project, newMaterials).catch(console.error);
     res.json({ success: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-// Stores: update only receipt fields for a specific material
-r.patch("/material-tracker/:project/receipt", async (req, res) => {
-  try {
-    if (!isStores(req)) return res.status(403).json({ message: "Admin or Stores only" });
-    const { materialId, actualReceipt, receiptStatus } = req.body;
-    if (!materialId) return res.status(400).json({ message: "materialId required" });
-    const f = await readJsonFile<MaterialTrackerFile>("material-tracker.json");
-    if (!f) return res.status(404).json({ message: "Not found" });
-    const proj = f.projects[matKey(req.params.project)];
-    if (!proj) return res.status(404).json({ message: "Project not found" });
-    const mat = proj.materials.find(m => m.id === materialId);
-    if (!mat) return res.status(404).json({ message: "Material not found" });
-    const wasReceived = mat.receiptStatus === "Received";
-    if (actualReceipt !== undefined) mat.actualReceipt = actualReceipt;
-    if (receiptStatus !== undefined) mat.receiptStatus = receiptStatus as any;
-    f.lastUpdated = new Date().toISOString();
-    await writeJsonFile("material-tracker.json", f, `Receipt update: ${proj.projectName} — ${mat.name}`);
-    if (receiptStatus === "Received" && !wasReceived) {
-      notifyMaterialReceived(proj.projectName, mat.name).catch(console.error);
-    }
-    res.json({ success: true, material: mat });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
-});
 // Delete a project's material tracking
 r.delete("/material-tracker/:project", async (req, res) => {
   try {
-    if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+    if (!canEditMaterials(req)) return res.status(403).json({ message: "Not allowed to edit the Material Tracker" });
     const f = await readJsonFile<MaterialTrackerFile>("material-tracker.json");
     if (!f) return res.json({ success: true });
     delete f.projects[matKey(req.params.project)];

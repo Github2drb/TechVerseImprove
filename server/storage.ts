@@ -68,10 +68,16 @@ export class MemStorage implements IStorage {
   }
 
   private seedUsers() {
+    // SECURITY (Snyk: hardcoded password): seed passwords come from env vars.
+    // Set SEED_ADMIN_PASSWORD / SEED_MANAGER_PASSWORD / SEED_MEMBER_PASSWORD
+    // in Render env. If unset, a random unguessable password is generated so
+    // no account ever exists with a password that is committed to the repo.
+    const pw = (envName: string) =>
+      process.env[envName] || randomUUID().replace(/-/g, "").slice(0, 16);
     const usersData: User[] = [
-      { id: randomUUID(), username: "admin", password: "admin123", name: "Admin User", email: "admin@drbtechverse.in", role: "admin", status: "active", avatar: null, resetToken: null, resetTokenExpiry: null },
-      { id: randomUUID(), username: "manager", password: "manager123", name: "Manager User", email: "manager@drbtechverse.in", role: "manager", status: "active", avatar: null, resetToken: null, resetTokenExpiry: null },
-      { id: randomUUID(), username: "member", password: "member123", name: "Team Member", email: "member@drbtechverse.in", role: "member", status: "active", avatar: null, resetToken: null, resetTokenExpiry: null },
+      { id: randomUUID(), username: "admin", password: pw("SEED_ADMIN_PASSWORD"), name: "Admin User", email: "admin@drbtechverse.in", role: "admin", status: "active", avatar: null, resetToken: null, resetTokenExpiry: null },
+      { id: randomUUID(), username: "manager", password: pw("SEED_MANAGER_PASSWORD"), name: "Manager User", email: "manager@drbtechverse.in", role: "manager", status: "active", avatar: null, resetToken: null, resetTokenExpiry: null },
+      { id: randomUUID(), username: "member", password: pw("SEED_MEMBER_PASSWORD"), name: "Team Member", email: "member@drbtechverse.in", role: "member", status: "active", avatar: null, resetToken: null, resetTokenExpiry: null },
     ];
 
     usersData.forEach((user) => {

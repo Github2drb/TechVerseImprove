@@ -4,7 +4,10 @@ import MemoryStore from "memorystore";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { randomBytes } from "crypto";
 const app = express();
+// SECURITY: hide framework fingerprint (information exposure)
+app.disable("x-powered-by");
 const httpServer = createServer(app);
 
 // ── Serve service worker BEFORE SPA wildcard ──────────────────────────────────
@@ -63,7 +66,10 @@ app.use(express.urlencoded({ extended: false }));
 
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || "drbtechverse-secret-2024",
+    // SECURITY (Snyk: hardcoded secret): secret must come from the
+    // SESSION_SECRET env var. Fallback is a per-boot random value (sessions
+    // already live in MemoryStore, so they never survive a restart anyway).
+    secret: process.env.SESSION_SECRET || randomBytes(32).toString("hex"),
     resave: false,
     saveUninitialized: false,
     store: new MemoryStoreSession({

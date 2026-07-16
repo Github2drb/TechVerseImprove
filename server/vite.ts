@@ -32,7 +32,10 @@ export async function setupVite(server: Server, app: Express) {
   app.use(vite.middlewares);
 
   app.use("*", async (req, res, next) => {
-    const url = req.originalUrl;
+    // SECURITY (Snyk CWE-79): never pass the raw request URL into HTML
+    // generation. Use only the decoded pathname — query strings & fragments
+    // are stripped so attacker-controlled input cannot reach the response.
+    const url = new URL(req.originalUrl, "http://localhost").pathname;
 
     try {
       const clientTemplate = path.resolve(
