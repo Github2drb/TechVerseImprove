@@ -7,11 +7,10 @@ name: Snyk Auto-Fix
 # review instead of merging, so a bad fix can never reach production.
 # ------------------------------------------------------------------------------
 
+# NOTE: claude-code-action does not support "push" events, so this workflow
+# only runs via workflow_dispatch. snyk-trigger.yml dispatches it on every
+# push to main and on the daily schedule.
 on:
-  push:
-    branches: [main]
-  schedule:
-    - cron: "30 2 * * *" # daily 02:30 UTC safety-net scan
   workflow_dispatch:
 
 # Prevent overlapping runs / infinite loops
@@ -26,8 +25,6 @@ permissions:
 
 jobs:
   scan:
-    # Skip runs triggered by the auto-fix bot's own merge commit
-    if: "!contains(github.event.head_commit.message || '', '[snyk-autofix]')"
     runs-on: ubuntu-latest
     outputs:
       issue_count: ${{ steps.count.outputs.issue_count }}
