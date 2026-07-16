@@ -22,6 +22,7 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
+  id-token: write # required by anthropics/claude-code-action (OIDC token exchange)
 
 jobs:
   scan:
