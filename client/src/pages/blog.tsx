@@ -1,4 +1,5 @@
 // client/src/pages/blog.tsx
+import DOMPurify from "dompurify";
 import { useState, useEffect, useRef } from "react";
 import { Link } from "wouter";
 import { Header } from "@/components/header";
@@ -182,9 +183,11 @@ export default function BlogPage() {
       const data = await r.json();
       const list = data.engineers || data;
       const admins = list.filter((u: any) => u.role === "admin" && u.isActive !== false);
-      setAdminUsers(admins.length ? admins : [{ username: "admin", password: "admin@drb", name: "Admin" }]);
+      // SECURITY (Snyk: hardcoded password): no baked-in fallback credentials.
+      // If the auth file cannot be loaded, admin login is unavailable.
+      setAdminUsers(admins);
     } catch {
-      setAdminUsers([{ username: "admin", password: "admin@drb", name: "Admin" }]);
+      setAdminUsers([]);
     } finally { setLoginLoading(false); }
   };
 
@@ -887,7 +890,10 @@ export default function BlogPage() {
         <div
           ref={contentRef}
           className="prose prose-sm dark:prose-invert max-w-none"
-          dangerouslySetInnerHTML={{ __html: selected.content }}
+          dangerouslySetInnerHTML={{
+            // SECURITY (Snyk CWE-79): sanitize stored HTML before rendering.
+            __html: DOMPurify.sanitize(selected.content),
+          }}
         />
       </main>
     </>

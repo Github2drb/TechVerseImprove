@@ -1,5 +1,6 @@
 // server/routes.ts — DRB TechVerse — CLEAN VERSION
 import { Router, Request, Response } from "express";
+import { randomUUID } from "crypto";
 import type { Server } from "http";
 import bcrypt from "bcryptjs";
 import {
@@ -10,6 +11,16 @@ import {
   readJsonFile, writeJsonFile,
 } from "./github";
 import webpush from "web-push";
+
+// SECURITY (Snyk: hardcoded password): default credentials now come from env.
+// Set DEFAULT_ADMIN_PASSWORD / DEFAULT_ENGINEER_PASSWORD in Render env vars to
+// keep the "auto-create missing accounts" behavior working. If unset, a random
+// unguessable value is used so no committed literal can ever be a password.
+const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD || randomUUID().replace(/-/g, "").slice(0, 16);
+const DEFAULT_ENGINEER_PASSWORD = process.env.DEFAULT_ENGINEER_PASSWORD || randomUUID().replace(/-/g, "").slice(0, 16);
+// SECURITY (Snyk: insecure randomness): IDs are generated with crypto, not Math.random().
+const secureId = (len: number) => randomUUID().replace(/-/g, "").slice(0, len);
+
 const loginAttempts = new Map<string, { count: number; lastAttempt: number }>();
 function checkRateLimit(ip: string): boolean {
   const now = Date.now();
@@ -354,12 +365,12 @@ async function syncToDailyActivities(a: WeeklyAssignment): Promise<void> {
         const idx = f.engineerDailyData.findIndex(e => norm(e.engineerName) === norm(eng) && e.date === date);
         if (idx > -1) {
           if (!f.engineerDailyData[idx].targetTasks.some(t => t.text.includes(a.projectName))) {
-            f.engineerDailyData[idx].targetTasks.push({ id: `wa-${Date.now()}-${Math.random().toString(36).substr(2,4)}`, text });
+            f.engineerDailyData[idx].targetTasks.push({ id: `wa-${Date.now()}-${secureId(4)}`, text });
             changed = true;
           }
         } else {
           f.engineerDailyData.push({ engineerName: eng, date,
-            targetTasks: [{ id: `wa-${Date.now()}-${Math.random().toString(36).substr(2,4)}`, text }],
+            targetTasks: [{ id: `wa-${Date.now()}-${secureId(4)}`, text }],
             completedActivities: [] });
           changed = true;
         }
@@ -428,7 +439,7 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
       const f = await readJsonFile<CredFile>("engineers_auth.json");
       const list: EngineerCredential[] = f?.engineers ?? [];
       if (!list.find(e => e.username === "admin"))
-        list.push({ id:"admin-1", username:"admin", name:"Admin", password:"admin@drb", role:"admin", isActive:true, createdAt:new Date().toISOString() });
+        list.push({ id:"admin-1", username:"admin", name:"Admin", password:DEFAULT_ADMIN_PASSWORD, role:"admin", isActive:true, createdAt:new Date().toISOString() });
       const username_clean = sanitizeInput(username);
       const password_clean = typeof password === "string" ? password.slice(0, 200) : "";
       let found: EngineerCredential | undefined;
@@ -464,7 +475,7 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
       if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
       const f = (await readJsonFile<CredFile>("engineers_auth.json"))??{engineers:[],lastUpdated:""};
       const eng: EngineerCredential = { id:req.body.id||`eng-${Date.now()}`, username:req.body.username,
-        name:req.body.name, password: await bcrypt.hash(req.body.password || "drb@123", 10), role:req.body.role||"engineer",
+        name:req.body.name, password: await bcrypt.hash(req.body.password || DEFAULT_ENGINEER_PASSWORD, 10), role:req.body.role||"engineer",
         company:req.body.company, mobile:req.body.mobile, email:req.body.email, callmebotApiKey:req.body.callmebotApiKey,
         isActive:req.body.isActive!==false, createdAt:new Date().toISOString() };
       f.engineers.push(eng); f.lastUpdated=new Date().toISOString();
@@ -512,9 +523,9 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
       const f=ex??{engineers:[],lastUpdated:""}; const existing=new Set(f.engineers.map(e=>e.username.toLowerCase())); let created=0;
       for (const eng of (ml?.engineers??[])) {
         const u=norm(eng.name).replace(/\s+/g,".");
-        if (!existing.has(u)) { f.engineers.push({id:eng.id,name:eng.name,username:u,password:"drb@123",role:"engineer",company:eng.name.match(/\(([^)]+)\)/)?.[1],isActive:true,createdAt:new Date().toISOString()}); created++; }
+        if (!existing.has(u)) { f.engineers.push({id:eng.id,name:eng.name,username:u,password:DEFAULT_ENGINEER_PASSWORD,role:"engineer",company:eng.name.match(/\(([^)]+)\)/)?.[1],isActive:true,createdAt:new Date().toISOString()}); created++; }
       }
-      if (!existing.has("admin")) { f.engineers.push({id:"admin-1",name:"Admin",username:"admin",password:"admin@drb",role:"admin",isActive:true,createdAt:new Date().toISOString()}); created++; }
+      if (!existing.has("admin")) { f.engineers.push({id:"admin-1",name:"Admin",username:"admin",password:DEFAULT_ADMIN_PASSWORD,role:"admin",isActive:true,createdAt:new Date().toISOString()}); created++; }
       f.lastUpdated=new Date().toISOString(); await writeJsonFile("engineers_auth.json",f,"Initialize credentials");
       res.json({success:true,created});
     } catch (e: any) { res.status(500).json({ error: e.message }); }
@@ -615,7 +626,7 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
     try {
       const {engineer}=req.params; const {task,date}=req.body;
       const f=(await readJsonFile<DailyFile>("daily-activities.json"))??{engineerDailyData:[]};
-      const id=`t-${Date.now()}-${Math.random().toString(36).substr(2,5)}`;
+      const id=`t-${Date.now()}-${secureId(5)}`;
       const i=f.engineerDailyData.findIndex(e=>e.engineerName===engineer&&e.date===date);
       if (i>-1) f.engineerDailyData[i].targetTasks.push({id,text:task});
       else f.engineerDailyData.push({engineerName:engineer,date,targetTasks:[{id,text:task}],completedActivities:[]});
@@ -636,7 +647,7 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
     try {
       const {engineer}=req.params; const {activity,date}=req.body;
       const f=(await readJsonFile<DailyFile>("daily-activities.json"))??{engineerDailyData:[]};
-      const id=`a-${Date.now()}-${Math.random().toString(36).substr(2,5)}`;
+      const id=`a-${Date.now()}-${secureId(5)}`;
       const i=f.engineerDailyData.findIndex(e=>e.engineerName===engineer&&e.date===date);
       if (i>-1) f.engineerDailyData[i].completedActivities.push({id,text:activity});
       else f.engineerDailyData.push({engineerName:engineer,date,targetTasks:[],completedActivities:[{id,text:activity}]});
