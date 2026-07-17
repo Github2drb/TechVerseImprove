@@ -37,6 +37,8 @@ interface EngineerRowData {
 interface ProjectRow { projectName: string; engineers: EngineerRowData[]; }
 
 // ── Status config ─────────────────────────────────────────────────────────────
+// Installation now happens AFTER testing — moved to the Completion group.
+// equipment_handover = final status → project is considered completed.
 const statusColors: Record<string,string> = {
   not_started:"bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200",
   in_progress:"bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
@@ -51,6 +53,9 @@ const statusColors: Record<string,string> = {
   electrical_assembly:"bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200",
   installation_pending:"bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200",
   installation_in_progress:"bg-pink-100 text-pink-800 dark:bg-pink-900 dark:text-pink-200",
+  installation_completed:"bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
+  documentation:"bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200",
+  equipment_handover:"bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
   plc_power_up:"bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200",
   io_check:"bg-lime-100 text-lime-800 dark:bg-lime-900 dark:text-lime-200",
   trials_stage:"bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
@@ -64,17 +69,22 @@ const statusLabels: Record<string,string> = {
   electrical_design:"Electrical Design", procurement_stage:"Procurement Stage",
   waiting_for_materials:"Waiting for Materials", mechanical_assembly:"Mechanical Assembly",
   electrical_assembly:"Electrical Assembly", installation_pending:"Installation Pending",
-  installation_in_progress:"Installation in Progress", plc_power_up:"PLC Power Up",
+  installation_in_progress:"Installation in Progress", installation_completed:"Installation Completed",
+  documentation:"Documentation", equipment_handover:"Equipment Handover",
+  plc_power_up:"PLC Power Up",
   io_check:"IO Check", trials_stage:"Trials Stage", fat:"F.A.T", sat:"S.A.T",
   dispatch_stage:"Dispatch Stage",
 };
 const STATUS_GROUPS = [
   { label:"General", items:[{value:"not_started",label:"Not Started"},{value:"on_hold",label:"On Hold"},{value:"blocked",label:"Blocked"},{value:"completed",label:"Completed"}]},
   { label:"Design & Procurement", items:[{value:"design_stage",label:"Design Stage"},{value:"electrical_design",label:"Electrical Design"},{value:"procurement_stage",label:"Procurement Stage"},{value:"waiting_for_materials",label:"Waiting for Materials"}]},
-  { label:"Assembly & Installation", items:[{value:"mechanical_assembly",label:"Mechanical Assembly"},{value:"electrical_assembly",label:"Electrical Assembly"},{value:"installation_pending",label:"Installation Pending"},{value:"installation_in_progress",label:"Installation in Progress"}]},
+  { label:"Assembly", items:[{value:"mechanical_assembly",label:"Mechanical Assembly"},{value:"electrical_assembly",label:"Electrical Assembly"}]},
   { label:"Testing & Commissioning", items:[{value:"plc_power_up",label:"PLC Power Up"},{value:"io_check",label:"IO Check"},{value:"trials_stage",label:"Trials Stage"},{value:"fat",label:"F.A.T"},{value:"sat",label:"S.A.T"}]},
-  { label:"Completion", items:[{value:"in_progress",label:"In Progress"},{value:"dispatch_stage",label:"Dispatch Stage"}]},
+  { label:"Completion & Installation", items:[{value:"in_progress",label:"In Progress"},{value:"dispatch_stage",label:"Dispatch Stage"},{value:"installation_pending",label:"Installation Pending"},{value:"installation_in_progress",label:"Installation in Progress"},{value:"installation_completed",label:"Installation Completed"},{value:"documentation",label:"Documentation"},{value:"equipment_handover",label:"Equipment Handover"}]},
 ];
+
+// Statuses that mean "this assignment is finished" — hidden from the tracker
+const TERMINAL_STATUSES = ["completed","equipment_handover"];
 
 function calcLockDays(from?:string, till?:string):number {
   if(!from||!till)return 0;
@@ -303,11 +313,11 @@ export default function TeamProjectTracker() {
   };
   const filteredEngineers=useMemo(()=>!engSearch.trim()?masterEngineers:masterEngineers.filter(e=>e.name.toLowerCase().includes(engSearch.toLowerCase())),[masterEngineers,engSearch]);
 
-  // Data
-  const activeAssignments=useMemo(()=>assignments.filter(a=>a.currentStatus!=="completed"),[assignments]);
+  // Data — hide assignments that are finished (completed or handed over)
+  const activeAssignments=useMemo(()=>assignments.filter(a=>!TERMINAL_STATUSES.includes(a.currentStatus)),[assignments]);
   const projectRows=useMemo(()=>groupByProject(activeAssignments),[activeAssignments]);
   const filtered=useMemo(()=>projectRows.filter(p=>{
-    if(p.engineers.every(e=>e.currentStatus==="completed"))return false;
+    if(p.engineers.every(e=>TERMINAL_STATUSES.includes(e.currentStatus)))return false;
     const mQ=p.projectName.toLowerCase().includes(search.toLowerCase())||
       p.engineers.some(e=>e.name.toLowerCase().includes(search.toLowerCase()));
     const mS=statusFilter==="all"||p.engineers.some(e=>e.currentStatus===statusFilter);

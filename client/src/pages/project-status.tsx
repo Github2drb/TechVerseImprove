@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import {
   ArrowLeft, Calendar, RefreshCw, Save, Plus,
   CheckCircle, Clock, AlertTriangle, Map,
-  ChevronLeft, ChevronRight, CalendarDays,
+  ChevronLeft, ChevronRight, CalendarDays, FileText,
 } from "lucide-react";
 import { Link } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -25,35 +25,40 @@ interface ProjectActivity {
   activities: Record<string, string>;
 }
 
-// ── Status options — full project lifecycle ───────────────────────────────────
+// ── Status options — full project lifecycle (matches Roadmap 18-phase order) ──
+// Installation now happens AFTER testing (F.A.T / S.A.T), inside Completion.
+// Final status = Equipment Handover → project is considered completed.
 const STATUS_OPTIONS = [
   // Design & Procurement
   { value:"Design Stage",             label:"Design Stage",             icon:Clock,        color:"bg-purple-500/20 text-purple-700 dark:text-purple-300"  },
   { value:"Electrical Design",        label:"Electrical Design",        icon:Clock,        color:"bg-indigo-500/20 text-indigo-700 dark:text-indigo-300"  },
   { value:"Procurement Stage",        label:"Procurement Stage",        icon:Clock,        color:"bg-orange-500/20 text-orange-700 dark:text-orange-300"  },
   { value:"Waiting for Materials",    label:"Waiting for Materials",    icon:Clock,        color:"bg-amber-500/20 text-amber-700 dark:text-amber-300"     },
-  // Assembly & Installation
+  // Assembly
   { value:"Mechanical Assembly Stage",label:"Mechanical Assembly",      icon:Clock,        color:"bg-blue-500/20 text-blue-700 dark:text-blue-300"        },
   { value:"Electrical Assembly Stage",label:"Electrical Assembly",      icon:Clock,        color:"bg-cyan-500/20 text-cyan-700 dark:text-cyan-300"        },
-  { value:"Installation Pending",     label:"Installation Pending",     icon:Clock,        color:"bg-rose-500/20 text-rose-700 dark:text-rose-300"        },
-  { value:"Installation in Progress", label:"Installation in Progress", icon:Clock,        color:"bg-pink-500/20 text-pink-700 dark:text-pink-300"        },
   // Testing & Commissioning
   { value:"PLC Power Up Stage",       label:"PLC Power Up",             icon:Clock,        color:"bg-yellow-500/20 text-yellow-700 dark:text-yellow-300"  },
   { value:"IO Check Stage",           label:"IO Check",                 icon:Clock,        color:"bg-lime-500/20 text-lime-700 dark:text-lime-300"        },
   { value:"Trials Stage",             label:"Trials Stage",             icon:Clock,        color:"bg-pink-500/20 text-pink-700 dark:text-pink-300"        },
   { value:"F.A.T",                    label:"F.A.T",                    icon:Clock,        color:"bg-fuchsia-500/20 text-fuchsia-700 dark:text-fuchsia-300"},
   { value:"S.A.T",                    label:"S.A.T",                    icon:Clock,        color:"bg-violet-500/20 text-violet-700 dark:text-violet-300"  },
-  // Completion
+  // Completion & Installation
   { value:"Completed",                label:"Completed",                icon:CheckCircle,  color:"bg-green-500/20 text-green-700 dark:text-green-300"     },
   { value:"Dispatch Stage",           label:"Dispatch Stage",           icon:CheckCircle,  color:"bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"},
+  { value:"Installation Pending",     label:"Installation Pending",     icon:Clock,        color:"bg-rose-500/20 text-rose-700 dark:text-rose-300"        },
+  { value:"Installation in Progress", label:"Installation in Progress", icon:Clock,        color:"bg-pink-500/20 text-pink-700 dark:text-pink-300"        },
+  { value:"Installation Completed",   label:"Installation Completed",   icon:CheckCircle,  color:"bg-teal-500/20 text-teal-700 dark:text-teal-300"        },
+  { value:"Documentation",            label:"Documentation",            icon:FileText,     color:"bg-sky-500/20 text-sky-700 dark:text-sky-300"           },
+  { value:"Equipment Handover",       label:"Equipment Handover",       icon:CheckCircle,  color:"bg-green-500/20 text-green-700 dark:text-green-300"     },
 ];
 
 // Group labels for visual separation in dropdown
 const STATUS_GROUPS = [
   { label:"Design & Procurement",       from:"Design Stage",              to:"Waiting for Materials"      },
-  { label:"Assembly & Installation",    from:"Mechanical Assembly Stage",  to:"Installation in Progress"   },
+  { label:"Assembly",                   from:"Mechanical Assembly Stage",  to:"Electrical Assembly Stage"  },
   { label:"Testing & Commissioning",    from:"PLC Power Up Stage",         to:"S.A.T"                      },
-  { label:"Completion",                 from:"Completed",                  to:"Dispatch Stage"             },
+  { label:"Completion & Installation",  from:"Completed",                  to:"Equipment Handover"         },
 ];
 
 function generateDateRange(startDate: Date, endDate: Date): string[] {
@@ -103,6 +108,25 @@ function StatusSelectContent() {
   );
 }
 
+// ── Simple page header (top-level — never define inside another component) ────
+function SimpleHeader() {
+  return (
+    <header className="sticky top-0 z-50 h-16 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <div className="mx-auto flex h-full max-w-7xl items-center justify-between gap-4 px-4 md:px-6">
+        <Link href="/">
+          <div className="flex items-center gap-3 cursor-pointer">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-lg">C</div>
+            <span className="hidden font-semibold text-lg sm:inline-block">Controls Team</span>
+          </div>
+        </Link>
+        <div className="flex items-center gap-2">
+          <NotificationBell/><ThemeToggle/><UserMenu/>
+        </div>
+      </div>
+    </header>
+  );
+}
+
 export default function ProjectStatus() {
   const { toast }  = useToast();
   const { user } = useAuth();
@@ -140,11 +164,13 @@ export default function ProjectStatus() {
     staleTime: 30000,
   });
 
-  // Filter: only non-completed projects (backend already filters to weekly-assignments)
+  // Filter: hide only projects that reached Equipment Handover (project completed).
+  // "Completed" and "Installation Completed" are now mid-sequence phases —
+  // installation/documentation work still happens after them, so keep them visible.
   const projects = useMemo(() =>
     rawProjects.filter(p => {
       const s = (p.currentStatus ?? "").toLowerCase();
-      return !s.includes("complete") && !s.includes("done");
+      return !s.includes("equipment handover");
     }),
     [rawProjects]
   );
@@ -263,22 +289,6 @@ export default function ProjectStatus() {
     return { day:d.getDate(), month:d.toLocaleDateString("en-US",{month:"short"}) };
   };
 
-  const SimpleHeader = () => (
-    <header className="sticky top-0 z-50 h-16 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="mx-auto flex h-full max-w-7xl items-center justify-between gap-4 px-4 md:px-6">
-        <Link href="/">
-          <div className="flex items-center gap-3 cursor-pointer">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-lg">C</div>
-            <span className="hidden font-semibold text-lg sm:inline-block">Controls Team</span>
-          </div>
-        </Link>
-        <div className="flex items-center gap-2">
-          <NotificationBell/><ThemeToggle/><UserMenu/>
-        </div>
-      </div>
-    </header>
-  );
-
   if (isLoading) return (
     <div className="min-h-screen bg-background"><SimpleHeader/>
       <div className="container mx-auto p-6 animate-pulse space-y-4">
@@ -345,7 +355,7 @@ export default function ProjectStatus() {
                 {projects.length} Active Projects
                 {rawProjects.length > projects.length && (
                   <span className="text-sm font-normal text-muted-foreground ml-2">
-                    ({rawProjects.length - projects.length} completed hidden)
+                    ({rawProjects.length - projects.length} handed-over hidden)
                   </span>
                 )}
               </CardTitle>
