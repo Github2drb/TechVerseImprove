@@ -24,23 +24,31 @@ import { useAuth } from "@/components/auth-provider";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 
 // ── Full phase order — single source of truth ─────────────────────────────────
+// Installation now happens AFTER testing (F.A.T / S.A.T), inside the Done group.
+// Final phase = Equipment Handover → project is considered completed.
 const PHASES = [
-  { key:"Design Stage",              label:"Design",          short:"DES",  group:"Design",      color:"#7c3aed" },
-  { key:"Electrical Design",         label:"Elec. Design",    short:"ELD",  group:"Design",      color:"#6366f1" },
-  { key:"Procurement Stage",         label:"Procurement",     short:"PRO",  group:"Procurement", color:"#f59e0b" },
-  { key:"Waiting for Materials",     label:"Waiting Mats.",   short:"WFM",  group:"Procurement", color:"#f97316" },
-  { key:"Mechanical Assembly Stage", label:"Mech. Assembly",  short:"MAS",  group:"Assembly",    color:"#3b82f6" },
-  { key:"Electrical Assembly Stage", label:"Elec. Assembly",  short:"EAS",  group:"Assembly",    color:"#06b6d4" },
-  { key:"Installation Pending",      label:"Install Pending", short:"INP",  group:"Assembly",    color:"#f43f5e" },
-  { key:"Installation in Progress",  label:"Installing",      short:"INS",  group:"Assembly",    color:"#ec4899" },
-  { key:"PLC Power Up Stage",        label:"PLC Power Up",    short:"PLU",  group:"Testing",     color:"#eab308" },
-  { key:"IO Check Stage",            label:"IO Check",        short:"IOC",  group:"Testing",     color:"#84cc16" },
-  { key:"Trials Stage",              label:"Trials",          short:"TRL",  group:"Testing",     color:"#14b8a6" },
-  { key:"F.A.T",                     label:"F.A.T",           short:"FAT",  group:"Testing",     color:"#d946ef" },
-  { key:"S.A.T",                     label:"S.A.T",           short:"SAT",  group:"Testing",     color:"#8b5cf6" },
-  { key:"Completed",                 label:"Completed",       short:"CMP",  group:"Done",        color:"#22c55e" },
-  { key:"Dispatch Stage",            label:"Dispatch",        short:"DSP",  group:"Done",        color:"#10b981" },
+  { key:"Design Stage",              label:"Design",           short:"DES",  group:"Design",      color:"#7c3aed" },
+  { key:"Electrical Design",         label:"Elec. Design",     short:"ELD",  group:"Design",      color:"#6366f1" },
+  { key:"Procurement Stage",         label:"Procurement",      short:"PRO",  group:"Procurement", color:"#f59e0b" },
+  { key:"Waiting for Materials",     label:"Waiting Mats.",    short:"WFM",  group:"Procurement", color:"#f97316" },
+  { key:"Mechanical Assembly Stage", label:"Mech. Assembly",   short:"MAS",  group:"Assembly",    color:"#3b82f6" },
+  { key:"Electrical Assembly Stage", label:"Elec. Assembly",   short:"EAS",  group:"Assembly",    color:"#06b6d4" },
+  { key:"PLC Power Up Stage",        label:"PLC Power Up",     short:"PLU",  group:"Testing",     color:"#eab308" },
+  { key:"IO Check Stage",            label:"IO Check",         short:"IOC",  group:"Testing",     color:"#84cc16" },
+  { key:"Trials Stage",              label:"Trials",           short:"TRL",  group:"Testing",     color:"#14b8a6" },
+  { key:"F.A.T",                     label:"F.A.T",            short:"FAT",  group:"Testing",     color:"#d946ef" },
+  { key:"S.A.T",                     label:"S.A.T",            short:"SAT",  group:"Testing",     color:"#8b5cf6" },
+  { key:"Completed",                 label:"Completed",        short:"CMP",  group:"Done",        color:"#22c55e" },
+  { key:"Dispatch Stage",            label:"Dispatch",         short:"DSP",  group:"Done",        color:"#10b981" },
+  { key:"Installation Pending",      label:"Install Pending",  short:"INP",  group:"Done",        color:"#f43f5e" },
+  { key:"Installation in Progress",  label:"Installing",       short:"INS",  group:"Done",        color:"#ec4899" },
+  { key:"Installation Completed",    label:"Install Complete", short:"ICP",  group:"Done",        color:"#059669" },
+  { key:"Documentation",             label:"Documentation",    short:"DOC",  group:"Done",        color:"#0284c7" },
+  { key:"Equipment Handover",        label:"Handover",         short:"EHO",  group:"Done",        color:"#16a34a" },
 ];
+
+// Final phase — selecting this marks the project as completed
+const FINAL_PHASE = "Equipment Handover";
 
 const PHASE_GROUPS = ["Design","Procurement","Assembly","Testing","Done"];
 
@@ -96,6 +104,25 @@ interface ProjectActivity {
   currentStatus: string;
   activities: Record<string, string>;
   engineerName?: string;
+}
+
+// ── Simple page header (top-level — never define inside another component) ────
+function SimpleHeader() {
+  return (
+    <header className="sticky top-0 z-50 h-16 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <div className="mx-auto flex h-full max-w-7xl items-center justify-between gap-4 px-4 md:px-6">
+        <Link href="/">
+          <div className="flex items-center gap-3 cursor-pointer">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-lg">C</div>
+            <span className="hidden font-semibold text-lg sm:inline-block">Controls Team</span>
+          </div>
+        </Link>
+        <div className="flex items-center gap-2">
+          <NotificationBell/><ThemeToggle/><UserMenu/>
+        </div>
+      </div>
+    </header>
+  );
 }
 
 // ── Phase node component ──────────────────────────────────────────────────────
@@ -212,7 +239,8 @@ function ProjectCard({
   const currentIdx = getPhaseIndex(project.currentStatus);
   const progress   = getProgress(project.currentStatus);
   const phase      = PHASES[currentIdx];
-  const isCompleted= project.currentStatus === "Completed" || project.currentStatus === "Dispatch Stage";
+  // Equipment Handover is the completion trigger — project considered completed
+  const isCompleted= project.currentStatus === FINAL_PHASE;
 
   return (
     <Card className={`overflow-hidden transition-all hover:shadow-md
@@ -446,9 +474,11 @@ export default function ProjectRoadmap() {
 
   // Merge engineer names + apply savedStatuses overrides
   const projects = useMemo(() => {
+    // Hide projects that have reached Equipment Handover (project completed).
+    // Dispatch is now a mid-sequence phase — do NOT hide dispatched projects.
     const active = rawProjects.filter(p => {
       const s = (savedStatuses[p.projectName] ?? p.currentStatus ?? "").toLowerCase();
-      return !s.includes("dispatch");
+      return !s.includes("equipment handover");
     });
     return active.map(p => {
       const asgn = assignments.find(a =>
@@ -532,22 +562,6 @@ export default function ProjectRoadmap() {
     }
   };
 
-  const SimpleHeader = () => (
-    <header className="sticky top-0 z-50 h-16 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="mx-auto flex h-full max-w-7xl items-center justify-between gap-4 px-4 md:px-6">
-        <Link href="/">
-          <div className="flex items-center gap-3 cursor-pointer">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-lg">C</div>
-            <span className="hidden font-semibold text-lg sm:inline-block">Controls Team</span>
-          </div>
-        </Link>
-        <div className="flex items-center gap-2">
-          <NotificationBell/><ThemeToggle/><UserMenu/>
-        </div>
-      </div>
-    </header>
-  );
-
   if (isLoading) return (
     <div className="min-h-screen bg-background"><SimpleHeader/>
       <div className="container mx-auto p-6 space-y-4 animate-pulse">
@@ -575,7 +589,7 @@ export default function ProjectRoadmap() {
                 <Map className="h-6 w-6 text-primary"/>Project Roadmap
               </h1>
               <p className="text-sm text-muted-foreground">
-                {filtered.length} of {projects.length} projects · 15-phase lifecycle tracker
+                {filtered.length} of {projects.length} projects · {PHASES.length}-phase lifecycle tracker
               </p>
             </div>
           </div>
