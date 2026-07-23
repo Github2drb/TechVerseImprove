@@ -24,6 +24,8 @@ const LEAVE_CODES = [
   { code:"EL",    label:"EL – Earned Leave",   color:"bg-purple-100 text-purple-700 border-purple-300 dark:bg-purple-950 dark:text-purple-300 dark:border-purple-800" },
   { code:"COff",  label:"COff – Comp Off",     color:"bg-green-100 text-green-700 border-green-300 dark:bg-green-950 dark:text-green-300 dark:border-green-800" },
   { code:"FH",    label:"FH – First Half",     color:"bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950 dark:text-sky-300 dark:border-sky-800" },
+  { code:"P/L",   label:"P/L – Present FN / Leave AN", color:"bg-rose-100 text-rose-700 border-rose-300 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-800" },
+  { code:"L/P",   label:"L/P – Leave FN / Present AN", color:"bg-fuchsia-100 text-fuchsia-700 border-fuchsia-300 dark:bg-fuchsia-950 dark:text-fuchsia-300 dark:border-fuchsia-800" },
   { code:"WP+",   label:"WP+ – Work Plus",     color:"bg-teal-100 text-teal-700 border-teal-300 dark:bg-teal-950 dark:text-teal-300 dark:border-teal-800" },
   { code:"WFH",   label:"WFH – Work From Home",  color:"bg-lime-100 text-lime-700 border-lime-300 dark:bg-lime-950 dark:text-lime-300 dark:border-lime-800" },
 ];
@@ -227,7 +229,7 @@ export default function DailyReport() {
   const openPopup=(engId:string,day:number,e:React.MouseEvent<HTMLTableCellElement>)=>{
     if (!adminMode) return;
     const rect=e.currentTarget.getBoundingClientRect();
-    const POPUP_H=340, POPUP_W=224;
+    const POPUP_H=410, POPUP_W=224;
     let top=rect.top-POPUP_H-6; if(top<8) top=rect.bottom+6;
     let left=rect.left; if(left+POPUP_W>window.innerWidth-8) left=window.innerWidth-POPUP_W-8; if(left<8) left=8;
     setPopup({engId,day,top,left});
