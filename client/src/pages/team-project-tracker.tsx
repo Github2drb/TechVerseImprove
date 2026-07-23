@@ -37,8 +37,10 @@ interface EngineerRowData {
 interface ProjectRow { projectName: string; engineers: EngineerRowData[]; }
 
 // ── Status config ─────────────────────────────────────────────────────────────
-// Installation now happens AFTER testing — moved to the Completion group.
-// equipment_handover = final status → project is considered completed.
+// Testing ends at F.A.T. Installation is its own group — S.A.T happens on site
+// AFTER installation, so it belongs to Installation, not Testing.
+// Done group = Dispatch → Documentation → Handover → Completed.
+// completed = final status → assignment is considered finished.
 const statusColors: Record<string,string> = {
   not_started:"bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200",
   in_progress:"bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
@@ -76,15 +78,18 @@ const statusLabels: Record<string,string> = {
   dispatch_stage:"Dispatch Stage",
 };
 const STATUS_GROUPS = [
-  { label:"General", items:[{value:"not_started",label:"Not Started"},{value:"on_hold",label:"On Hold"},{value:"blocked",label:"Blocked"},{value:"completed",label:"Completed"}]},
+  { label:"General", items:[{value:"not_started",label:"Not Started"},{value:"in_progress",label:"In Progress"},{value:"on_hold",label:"On Hold"},{value:"blocked",label:"Blocked"}]},
   { label:"Design & Procurement", items:[{value:"design_stage",label:"Design Stage"},{value:"electrical_design",label:"Electrical Design"},{value:"procurement_stage",label:"Procurement Stage"},{value:"waiting_for_materials",label:"Waiting for Materials"}]},
   { label:"Assembly", items:[{value:"mechanical_assembly",label:"Mechanical Assembly"},{value:"electrical_assembly",label:"Electrical Assembly"}]},
-  { label:"Testing & Commissioning", items:[{value:"plc_power_up",label:"PLC Power Up"},{value:"io_check",label:"IO Check"},{value:"trials_stage",label:"Trials Stage"},{value:"fat",label:"F.A.T"},{value:"sat",label:"S.A.T"}]},
-  { label:"Completion & Installation", items:[{value:"in_progress",label:"In Progress"},{value:"dispatch_stage",label:"Dispatch Stage"},{value:"installation_pending",label:"Installation Pending"},{value:"installation_in_progress",label:"Installation in Progress"},{value:"installation_completed",label:"Installation Completed"},{value:"documentation",label:"Documentation"},{value:"equipment_handover",label:"Equipment Handover"}]},
+  { label:"Testing & Commissioning", items:[{value:"plc_power_up",label:"PLC Power Up"},{value:"io_check",label:"IO Check"},{value:"trials_stage",label:"Trials Stage"},{value:"fat",label:"F.A.T"}]},
+  { label:"Installation", items:[{value:"installation_pending",label:"Installation Pending"},{value:"installation_in_progress",label:"Installation in Progress"},{value:"installation_completed",label:"Installation Completed"},{value:"sat",label:"S.A.T"}]},
+  { label:"Done", items:[{value:"dispatch_stage",label:"Dispatch Stage"},{value:"documentation",label:"Documentation"},{value:"equipment_handover",label:"Equipment Handover"},{value:"completed",label:"Completed"}]},
 ];
 
-// Statuses that mean "this assignment is finished" — hidden from the tracker
-const TERMINAL_STATUSES = ["completed","equipment_handover"];
+// Statuses that mean "this assignment is finished" — hidden from the tracker.
+// equipment_handover is now a mid-sequence Done phase (before Completed),
+// so it stays visible until the project is marked Completed.
+const TERMINAL_STATUSES = ["completed"];
 
 function calcLockDays(from?:string, till?:string):number {
   if(!from||!till)return 0;
@@ -313,7 +318,7 @@ export default function TeamProjectTracker() {
   };
   const filteredEngineers=useMemo(()=>!engSearch.trim()?masterEngineers:masterEngineers.filter(e=>e.name.toLowerCase().includes(engSearch.toLowerCase())),[masterEngineers,engSearch]);
 
-  // Data — hide assignments that are finished (completed or handed over)
+  // Data — hide assignments that are finished (marked Completed)
   const activeAssignments=useMemo(()=>assignments.filter(a=>!TERMINAL_STATUSES.includes(a.currentStatus)),[assignments]);
   const projectRows=useMemo(()=>groupByProject(activeAssignments),[activeAssignments]);
   const filtered=useMemo(()=>projectRows.filter(p=>{

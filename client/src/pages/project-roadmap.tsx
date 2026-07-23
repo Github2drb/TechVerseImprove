@@ -24,40 +24,43 @@ import { useAuth } from "@/components/auth-provider";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 
 // ── Full phase order — single source of truth ─────────────────────────────────
-// Installation now happens AFTER testing (F.A.T / S.A.T), inside the Done group.
-// Final phase = Equipment Handover → project is considered completed.
+// Testing ends at F.A.T. Installation is its own group (S.A.T happens on site
+// AFTER installation, so it belongs to Installation, not Testing).
+// Done group = Dispatch → Documentation → Handover → Completed.
+// Final phase = Completed → project is considered fully completed.
 const PHASES = [
-  { key:"Design Stage",              label:"Design",           short:"DES",  group:"Design",      color:"#7c3aed" },
-  { key:"Electrical Design",         label:"Elec. Design",     short:"ELD",  group:"Design",      color:"#6366f1" },
-  { key:"Procurement Stage",         label:"Procurement",      short:"PRO",  group:"Procurement", color:"#f59e0b" },
-  { key:"Waiting for Materials",     label:"Waiting Mats.",    short:"WFM",  group:"Procurement", color:"#f97316" },
-  { key:"Mechanical Assembly Stage", label:"Mech. Assembly",   short:"MAS",  group:"Assembly",    color:"#3b82f6" },
-  { key:"Electrical Assembly Stage", label:"Elec. Assembly",   short:"EAS",  group:"Assembly",    color:"#06b6d4" },
-  { key:"PLC Power Up Stage",        label:"PLC Power Up",     short:"PLU",  group:"Testing",     color:"#eab308" },
-  { key:"IO Check Stage",            label:"IO Check",         short:"IOC",  group:"Testing",     color:"#84cc16" },
-  { key:"Trials Stage",              label:"Trials",           short:"TRL",  group:"Testing",     color:"#14b8a6" },
-  { key:"F.A.T",                     label:"F.A.T",            short:"FAT",  group:"Testing",     color:"#d946ef" },
-  { key:"S.A.T",                     label:"S.A.T",            short:"SAT",  group:"Testing",     color:"#8b5cf6" },
-  { key:"Completed",                 label:"Completed",        short:"CMP",  group:"Done",        color:"#22c55e" },
-  { key:"Dispatch Stage",            label:"Dispatch",         short:"DSP",  group:"Done",        color:"#10b981" },
-  { key:"Installation Pending",      label:"Install Pending",  short:"INP",  group:"Done",        color:"#f43f5e" },
-  { key:"Installation in Progress",  label:"Installing",       short:"INS",  group:"Done",        color:"#ec4899" },
-  { key:"Installation Completed",    label:"Install Complete", short:"ICP",  group:"Done",        color:"#059669" },
-  { key:"Documentation",             label:"Documentation",    short:"DOC",  group:"Done",        color:"#0284c7" },
-  { key:"Equipment Handover",        label:"Handover",         short:"EHO",  group:"Done",        color:"#16a34a" },
+  { key:"Design Stage",              label:"Design",           short:"DES",  group:"Design",       color:"#7c3aed" },
+  { key:"Electrical Design",         label:"Elec. Design",     short:"ELD",  group:"Design",       color:"#6366f1" },
+  { key:"Procurement Stage",         label:"Procurement",      short:"PRO",  group:"Procurement",  color:"#f59e0b" },
+  { key:"Waiting for Materials",     label:"Waiting Mats.",    short:"WFM",  group:"Procurement",  color:"#f97316" },
+  { key:"Mechanical Assembly Stage", label:"Mech. Assembly",   short:"MAS",  group:"Assembly",     color:"#3b82f6" },
+  { key:"Electrical Assembly Stage", label:"Elec. Assembly",   short:"EAS",  group:"Assembly",     color:"#06b6d4" },
+  { key:"PLC Power Up Stage",        label:"PLC Power Up",     short:"PLU",  group:"Testing",      color:"#eab308" },
+  { key:"IO Check Stage",            label:"IO Check",         short:"IOC",  group:"Testing",      color:"#84cc16" },
+  { key:"Trials Stage",              label:"Trials",           short:"TRL",  group:"Testing",      color:"#14b8a6" },
+  { key:"F.A.T",                     label:"F.A.T",            short:"FAT",  group:"Testing",      color:"#d946ef" },
+  { key:"Installation Pending",      label:"Install Pending",  short:"INP",  group:"Installation", color:"#f43f5e" },
+  { key:"Installation in Progress",  label:"Installing",       short:"INS",  group:"Installation", color:"#ec4899" },
+  { key:"Installation Completed",    label:"Install Complete", short:"ICP",  group:"Installation", color:"#059669" },
+  { key:"S.A.T",                     label:"S.A.T",            short:"SAT",  group:"Installation", color:"#8b5cf6" },
+  { key:"Dispatch Stage",            label:"Dispatch",         short:"DSP",  group:"Done",         color:"#10b981" },
+  { key:"Documentation",             label:"Documentation",    short:"DOC",  group:"Done",         color:"#0284c7" },
+  { key:"Equipment Handover",        label:"Handover",         short:"EHO",  group:"Done",         color:"#16a34a" },
+  { key:"Completed",                 label:"Completed",        short:"CMP",  group:"Done",         color:"#22c55e" },
 ];
 
 // Final phase — selecting this marks the project as completed
-const FINAL_PHASE = "Equipment Handover";
+const FINAL_PHASE = "Completed";
 
-const PHASE_GROUPS = ["Design","Procurement","Assembly","Testing","Done"];
+const PHASE_GROUPS = ["Design","Procurement","Assembly","Testing","Installation","Done"];
 
 const GROUP_COLORS: Record<string,string> = {
-  Design:      "#7c3aed",
-  Procurement: "#f59e0b",
-  Assembly:    "#3b82f6",
-  Testing:     "#14b8a6",
-  Done:        "#22c55e",
+  Design:       "#7c3aed",
+  Procurement:  "#f59e0b",
+  Assembly:     "#3b82f6",
+  Testing:      "#14b8a6",
+  Installation: "#ec4899",
+  Done:         "#22c55e",
 };
 
 // ── Offline software track — runs PARALLEL to the main hardware roadmap ───────
@@ -239,7 +242,7 @@ function ProjectCard({
   const currentIdx = getPhaseIndex(project.currentStatus);
   const progress   = getProgress(project.currentStatus);
   const phase      = PHASES[currentIdx];
-  // Equipment Handover is the completion trigger — project considered completed
+  // Completed is the completion trigger — project considered fully done
   const isCompleted= project.currentStatus === FINAL_PHASE;
 
   return (
@@ -414,7 +417,7 @@ function SummaryBar({ projects }: { projects: ProjectActivity[] }) {
     : 0;
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
       <div className="col-span-2 sm:col-span-1 border rounded-xl p-3 bg-card">
         <p className="text-xs text-muted-foreground">Overall Avg.</p>
         <p className="text-2xl font-bold mt-0.5" style={{ color: "#3b82f6" }}>{avgProgress}%</p>
@@ -474,11 +477,12 @@ export default function ProjectRoadmap() {
 
   // Merge engineer names + apply savedStatuses overrides
   const projects = useMemo(() => {
-    // Hide projects that have reached Equipment Handover (project completed).
-    // Dispatch is now a mid-sequence phase — do NOT hide dispatched projects.
+    // Hide projects that have reached Completed (project fully done).
+    // Handover / Documentation / Dispatch are mid-sequence Done phases —
+    // do NOT hide them; they still need to be advanced to Completed.
     const active = rawProjects.filter(p => {
-      const s = (savedStatuses[p.projectName] ?? p.currentStatus ?? "").toLowerCase();
-      return !s.includes("equipment handover");
+      const s = (savedStatuses[p.projectName] ?? p.currentStatus ?? "").trim().toLowerCase();
+      return s !== "completed";
     });
     return active.map(p => {
       const asgn = assignments.find(a =>

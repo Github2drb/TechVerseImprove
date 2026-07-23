@@ -26,8 +26,10 @@ interface ProjectActivity {
 }
 
 // ── Status options — full project lifecycle (matches Roadmap 18-phase order) ──
-// Installation now happens AFTER testing (F.A.T / S.A.T), inside Completion.
-// Final status = Equipment Handover → project is considered completed.
+// Testing ends at F.A.T. Installation is its own group — S.A.T happens on site
+// AFTER installation, so it belongs to Installation, not Testing.
+// Done group = Dispatch → Documentation → Handover → Completed.
+// Final status = Completed → project is considered fully completed.
 const STATUS_OPTIONS = [
   // Design & Procurement
   { value:"Design Stage",             label:"Design Stage",             icon:Clock,        color:"bg-purple-500/20 text-purple-700 dark:text-purple-300"  },
@@ -42,23 +44,25 @@ const STATUS_OPTIONS = [
   { value:"IO Check Stage",           label:"IO Check",                 icon:Clock,        color:"bg-lime-500/20 text-lime-700 dark:text-lime-300"        },
   { value:"Trials Stage",             label:"Trials Stage",             icon:Clock,        color:"bg-pink-500/20 text-pink-700 dark:text-pink-300"        },
   { value:"F.A.T",                    label:"F.A.T",                    icon:Clock,        color:"bg-fuchsia-500/20 text-fuchsia-700 dark:text-fuchsia-300"},
-  { value:"S.A.T",                    label:"S.A.T",                    icon:Clock,        color:"bg-violet-500/20 text-violet-700 dark:text-violet-300"  },
-  // Completion & Installation
-  { value:"Completed",                label:"Completed",                icon:CheckCircle,  color:"bg-green-500/20 text-green-700 dark:text-green-300"     },
-  { value:"Dispatch Stage",           label:"Dispatch Stage",           icon:CheckCircle,  color:"bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"},
+  // Installation
   { value:"Installation Pending",     label:"Installation Pending",     icon:Clock,        color:"bg-rose-500/20 text-rose-700 dark:text-rose-300"        },
   { value:"Installation in Progress", label:"Installation in Progress", icon:Clock,        color:"bg-pink-500/20 text-pink-700 dark:text-pink-300"        },
   { value:"Installation Completed",   label:"Installation Completed",   icon:CheckCircle,  color:"bg-teal-500/20 text-teal-700 dark:text-teal-300"        },
+  { value:"S.A.T",                    label:"S.A.T",                    icon:Clock,        color:"bg-violet-500/20 text-violet-700 dark:text-violet-300"  },
+  // Done
+  { value:"Dispatch Stage",           label:"Dispatch Stage",           icon:CheckCircle,  color:"bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"},
   { value:"Documentation",            label:"Documentation",            icon:FileText,     color:"bg-sky-500/20 text-sky-700 dark:text-sky-300"           },
   { value:"Equipment Handover",       label:"Equipment Handover",       icon:CheckCircle,  color:"bg-green-500/20 text-green-700 dark:text-green-300"     },
+  { value:"Completed",                label:"Completed",                icon:CheckCircle,  color:"bg-green-500/20 text-green-700 dark:text-green-300"     },
 ];
 
 // Group labels for visual separation in dropdown
 const STATUS_GROUPS = [
-  { label:"Design & Procurement",       from:"Design Stage",              to:"Waiting for Materials"      },
-  { label:"Assembly",                   from:"Mechanical Assembly Stage",  to:"Electrical Assembly Stage"  },
-  { label:"Testing & Commissioning",    from:"PLC Power Up Stage",         to:"S.A.T"                      },
-  { label:"Completion & Installation",  from:"Completed",                  to:"Equipment Handover"         },
+  { label:"Design & Procurement",    from:"Design Stage",              to:"Waiting for Materials"      },
+  { label:"Assembly",                from:"Mechanical Assembly Stage",  to:"Electrical Assembly Stage"  },
+  { label:"Testing & Commissioning", from:"PLC Power Up Stage",         to:"F.A.T"                      },
+  { label:"Installation",            from:"Installation Pending",       to:"S.A.T"                      },
+  { label:"Done",                    from:"Dispatch Stage",             to:"Completed"                  },
 ];
 
 function generateDateRange(startDate: Date, endDate: Date): string[] {
@@ -164,13 +168,13 @@ export default function ProjectStatus() {
     staleTime: 30000,
   });
 
-  // Filter: hide only projects that reached Equipment Handover (project completed).
-  // "Completed" and "Installation Completed" are now mid-sequence phases —
-  // installation/documentation work still happens after them, so keep them visible.
+  // Filter: hide only projects that reached Completed (project fully done).
+  // "Equipment Handover", "Documentation" and "Installation Completed" are
+  // mid-sequence phases — work still happens after them, so keep them visible.
   const projects = useMemo(() =>
     rawProjects.filter(p => {
-      const s = (p.currentStatus ?? "").toLowerCase();
-      return !s.includes("equipment handover");
+      const s = (p.currentStatus ?? "").trim().toLowerCase();
+      return s !== "completed";
     }),
     [rawProjects]
   );
@@ -355,7 +359,7 @@ export default function ProjectStatus() {
                 {projects.length} Active Projects
                 {rawProjects.length > projects.length && (
                   <span className="text-sm font-normal text-muted-foreground ml-2">
-                    ({rawProjects.length - projects.length} handed-over hidden)
+                    ({rawProjects.length - projects.length} completed hidden)
                   </span>
                 )}
               </CardTitle>
