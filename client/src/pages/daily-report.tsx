@@ -78,11 +78,14 @@ export default function DailyReport() {
   const [saveStatus, setSaveStatus] = useState<"idle"|"saving"|"saved"|"error">("idle");
 
   // Popup for cell assignment
-  const [popup, setPopup] = useState<{engId:string;day:number;top:number;left:number}|null>(null);
+  const [popup, setPopup] = useState<{engId:string;day:number;top:number;left:number;maxH:number}|null>(null);
   const popupRef = useRef<HTMLDivElement>(null);
 
   // Table scroll ref — used to auto-scroll to today on load
   const tableRef = useRef<HTMLDivElement>(null);
+  // Ref to today's actual column header cell — used to measure its real
+  // rendered position instead of guessing pixel widths (which drifts).
+  const todayCellRef = useRef<HTMLTableCellElement | null>(null);
 
   // Admin: new site input
   const [newSite, setNewSite] = useState("");
@@ -143,22 +146,28 @@ export default function DailyReport() {
     })();
   },[]);
 
-  // Scroll table so today's column is visible, right after the sticky Engineer column.
-  // Measures the actual rendered column offset instead of assuming a fixed width,
-  // so it stays correct regardless of column min-width/border/padding drift.
-  const scrollToToday = (smooth = true) => {
+  // Scroll table so today's column lands just past the sticky "Engineer"
+  // column. Measures today's cell's ACTUAL rendered position (not an assumed
+  // pixel width) so it lands correctly regardless of container width, zoom,
+  // or border-collapse rounding — the previous hardcoded-math version drifted
+  // and could even get clamped to the wrong end of the table on wide screens.
+  const scrollToToday = () => {
     const container = tableRef.current;
-    if (!container) return;
-    const cell = container.querySelector<HTMLElement>(`[data-day="${todayDay}"]`);
-    if (!cell) return;
-    const stickyColWidth = (container.querySelector<HTMLElement>("th.sticky")?.offsetWidth) ?? 160;
-    const target = Math.max(cell.offsetLeft - stickyColWidth, 0);
-    container.scrollTo({ left: target, behavior: smooth ? "smooth" : "auto" });
+    const cell = todayCellRef.current;
+    if (!container || !cell) return;
+    const STICKY_COL_W = 160; // matches the sticky Engineer column's min-w
+    const MARGIN = 12;
+    const containerRect = container.getBoundingClientRect();
+    const cellRect = cell.getBoundingClientRect();
+    // How far the cell's left edge is from where it *should* be (just right
+    // of the sticky column), relative to the container's current scroll.
+    const delta = (cellRect.left - containerRect.left) - STICKY_COL_W - MARGIN;
+    container.scrollTo({ left: container.scrollLeft + delta, behavior: "smooth" });
   };
 
   // Auto-scroll on load
   useEffect(()=>{
-    if (!loading) setTimeout(()=>scrollToToday(false), 80);
+    if (!loading) setTimeout(scrollToToday, 80);
   },[loading]);
 
   // Close popup on outside click
@@ -236,10 +245,25 @@ export default function DailyReport() {
   const openPopup=(engId:string,day:number,e:React.MouseEvent<HTMLTableCellElement>)=>{
     if (!adminMode) return;
     const rect=e.currentTarget.getBoundingClientRect();
-    const POPUP_H=410, POPUP_W=224;
-    let top=rect.top-POPUP_H-6; if(top<8) top=rect.bottom+6;
-    let left=rect.left; if(left+POPUP_W>window.innerWidth-8) left=window.innerWidth-POPUP_W-8; if(left<8) left=8;
-    setPopup({engId,day,top,left});
+    const PREFERRED_H=410, POPUP_W=224, PAD=8, GAP=6;
+    const spaceAbove=rect.top-GAP-PAD;
+    const spaceBelow=window.innerHeight-rect.bottom-GAP-PAD;
+
+    // Pick whichever side has more room, then clamp height to what's actually
+    // available so the list is never cut off — it'll scroll internally instead.
+    let top:number, maxH:number;
+    if (spaceAbove>=PREFERRED_H || spaceAbove>=spaceBelow) {
+      maxH=Math.min(PREFERRED_H, Math.max(spaceAbove,120));
+      top=Math.max(PAD, rect.top-GAP-maxH);
+    } else {
+      maxH=Math.min(PREFERRED_H, Math.max(spaceBelow,120));
+      top=rect.bottom+GAP;
+    }
+    // Final safety clamp in case of very short viewports
+    if (top+maxH>window.innerHeight-PAD) top=Math.max(PAD, window.innerHeight-maxH-PAD);
+
+    let left=rect.left; if(left+POPUP_W>window.innerWidth-PAD) left=window.innerWidth-POPUP_W-PAD; if(left<PAD) left=PAD;
+    setPopup({engId,day,top,left,maxH});
   };
 
   const assignSite=(engId:string,day:number,value:string)=>{
@@ -363,7 +387,7 @@ export default function DailyReport() {
           <span className="inline-flex items-center gap-1 bg-indigo-100 text-indigo-700 border border-indigo-300 dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-700 text-xs font-medium px-2 py-0.5 rounded">🏢 Site</span>
           <span className="inline-flex items-center gap-1 bg-stone-100 text-stone-700 border border-stone-300 dark:bg-stone-800 dark:text-stone-300 dark:border-stone-600 text-xs font-medium px-2 py-0.5 rounded">3D CAD U1</span>
           {LEAVE_CODES.map(lv=><span key={lv.code} className={`${lv.color} border text-xs font-medium px-2 py-0.5 rounded`}>{lv.code}</span>)}
-          <button onClick={()=>scrollToToday(true)} className="inline-flex items-center gap-1 bg-red-100 text-red-600 border border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800 text-xs font-medium px-2 py-0.5 rounded hover:bg-red-200 transition-colors cursor-pointer">📅 Today</button>
+          <button onClick={scrollToToday} className="inline-flex items-center gap-1 bg-red-100 text-red-600 border border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800 text-xs font-medium px-2 py-0.5 rounded hover:bg-red-200 transition-colors cursor-pointer">📅 Today</button>
         </div>
 
         {loading&&<div className="flex items-center justify-center py-20"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"/><span className="ml-3 text-muted-foreground text-sm">Loading team data…</span></div>}
@@ -377,7 +401,7 @@ export default function DailyReport() {
                 <tr className="border-b">
                   <th className="sticky left-0 z-20 bg-muted border-r px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground whitespace-nowrap min-w-[160px]">Engineer</th>
                   {days.map(d=>(
-                    <th key={d} data-day={d} className={`border-r px-1 pt-2 pb-0.5 text-center text-[10px] font-semibold uppercase tracking-wide min-w-[58px]
+                    <th key={d} className={`border-r px-1 pt-2 pb-0.5 text-center text-[10px] font-semibold uppercase tracking-wide min-w-[58px]
                       ${d===todayDay?"bg-red-500 text-white":isWeekend(year,month,d)?"bg-muted/60 text-muted-foreground/40":"bg-muted text-muted-foreground"}`}>
                       {getDayLabel(year,month,d)}
                     </th>
@@ -386,7 +410,7 @@ export default function DailyReport() {
                 <tr className="border-b">
                   <th className="sticky left-0 z-20 bg-muted border-r px-3 py-1.5"/>
                   {days.map(d=>(
-                    <th key={d} className={`border-r px-1 pb-2 pt-0.5 text-center text-xs font-bold min-w-[58px]
+                    <th key={d} ref={d===todayDay?todayCellRef:undefined} className={`border-r px-1 pb-2 pt-0.5 text-center text-xs font-bold min-w-[58px]
                       ${d===todayDay?"bg-red-600 text-white":isWeekend(year,month,d)?"bg-muted/60 text-muted-foreground/30":"bg-muted text-muted-foreground"}`}>
                       {d}
                     </th>
@@ -438,8 +462,8 @@ export default function DailyReport() {
 
       {/* Cell assignment popup */}
       {popup&&(
-        <div ref={popupRef} className="fixed z-50 bg-background border rounded-xl shadow-2xl w-56 py-2 overflow-hidden"
-          style={{top:popup.top,left:popup.left}}>
+        <div ref={popupRef} className="fixed z-50 bg-background border rounded-xl shadow-2xl w-56 py-2 overflow-y-auto"
+          style={{top:popup.top,left:popup.left,maxHeight:popup.maxH}}>
           <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground px-3 pb-1">Assign · Day {popup.day}</p>
           <p className="text-[10px] text-muted-foreground/60 px-3 pt-1">Sites</p>
           {siteList.map(site=>{
