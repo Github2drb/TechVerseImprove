@@ -83,6 +83,9 @@ export default function DailyReport() {
 
   // Table scroll ref — used to auto-scroll to today on load
   const tableRef = useRef<HTMLDivElement>(null);
+  // Ref to today's actual column header cell — used to measure its real
+  // rendered position instead of guessing pixel widths (which drifts).
+  const todayCellRef = useRef<HTMLTableCellElement | null>(null);
 
   // Admin: new site input
   const [newSite, setNewSite] = useState("");
@@ -144,13 +147,22 @@ export default function DailyReport() {
   },[]);
 
   // Scroll table so today's column lands just past the sticky "Engineer"
-  // column, instead of directly underneath it (where it was invisible).
+  // column. Measures today's cell's ACTUAL rendered position (not an assumed
+  // pixel width) so it lands correctly regardless of container width, zoom,
+  // or border-collapse rounding — the previous hardcoded-math version drifted
+  // and could even get clamped to the wrong end of the table on wide screens.
   const scrollToToday = () => {
-    if (!tableRef.current) return;
+    const container = tableRef.current;
+    const cell = todayCellRef.current;
+    if (!container || !cell) return;
     const STICKY_COL_W = 160; // matches the sticky Engineer column's min-w
-    const DAY_COL_W = 62;     // matches each day column's min-w
-    const target = Math.max(0, (todayDay - 1) * DAY_COL_W - STICKY_COL_W - 12);
-    tableRef.current.scrollTo({ left: target, behavior: "smooth" });
+    const MARGIN = 12;
+    const containerRect = container.getBoundingClientRect();
+    const cellRect = cell.getBoundingClientRect();
+    // How far the cell's left edge is from where it *should* be (just right
+    // of the sticky column), relative to the container's current scroll.
+    const delta = (cellRect.left - containerRect.left) - STICKY_COL_W - MARGIN;
+    container.scrollTo({ left: container.scrollLeft + delta, behavior: "smooth" });
   };
 
   // Auto-scroll on load
@@ -398,7 +410,7 @@ export default function DailyReport() {
                 <tr className="border-b">
                   <th className="sticky left-0 z-20 bg-muted border-r px-3 py-1.5"/>
                   {days.map(d=>(
-                    <th key={d} className={`border-r px-1 pb-2 pt-0.5 text-center text-xs font-bold min-w-[58px]
+                    <th key={d} ref={d===todayDay?todayCellRef:undefined} className={`border-r px-1 pb-2 pt-0.5 text-center text-xs font-bold min-w-[58px]
                       ${d===todayDay?"bg-red-600 text-white":isWeekend(year,month,d)?"bg-muted/60 text-muted-foreground/30":"bg-muted text-muted-foreground"}`}>
                       {d}
                     </th>
