@@ -78,7 +78,7 @@ export default function DailyReport() {
   const [saveStatus, setSaveStatus] = useState<"idle"|"saving"|"saved"|"error">("idle");
 
   // Popup for cell assignment
-  const [popup, setPopup] = useState<{engId:string;day:number;top:number;left:number}|null>(null);
+  const [popup, setPopup] = useState<{engId:string;day:number;top:number;left:number;maxH:number}|null>(null);
   const popupRef = useRef<HTMLDivElement>(null);
 
   // Table scroll ref — used to auto-scroll to today on load
@@ -143,10 +143,14 @@ export default function DailyReport() {
     })();
   },[]);
 
-  // Scroll table so today is the first visible column
+  // Scroll table so today's column lands just past the sticky "Engineer"
+  // column, instead of directly underneath it (where it was invisible).
   const scrollToToday = () => {
     if (!tableRef.current) return;
-    tableRef.current.scrollLeft = (todayDay - 1) * 62;
+    const STICKY_COL_W = 160; // matches the sticky Engineer column's min-w
+    const DAY_COL_W = 62;     // matches each day column's min-w
+    const target = Math.max(0, (todayDay - 1) * DAY_COL_W - STICKY_COL_W - 12);
+    tableRef.current.scrollTo({ left: target, behavior: "smooth" });
   };
 
   // Auto-scroll on load
@@ -229,10 +233,25 @@ export default function DailyReport() {
   const openPopup=(engId:string,day:number,e:React.MouseEvent<HTMLTableCellElement>)=>{
     if (!adminMode) return;
     const rect=e.currentTarget.getBoundingClientRect();
-    const POPUP_H=410, POPUP_W=224;
-    let top=rect.top-POPUP_H-6; if(top<8) top=rect.bottom+6;
-    let left=rect.left; if(left+POPUP_W>window.innerWidth-8) left=window.innerWidth-POPUP_W-8; if(left<8) left=8;
-    setPopup({engId,day,top,left});
+    const PREFERRED_H=410, POPUP_W=224, PAD=8, GAP=6;
+    const spaceAbove=rect.top-GAP-PAD;
+    const spaceBelow=window.innerHeight-rect.bottom-GAP-PAD;
+
+    // Pick whichever side has more room, then clamp height to what's actually
+    // available so the list is never cut off — it'll scroll internally instead.
+    let top:number, maxH:number;
+    if (spaceAbove>=PREFERRED_H || spaceAbove>=spaceBelow) {
+      maxH=Math.min(PREFERRED_H, Math.max(spaceAbove,120));
+      top=Math.max(PAD, rect.top-GAP-maxH);
+    } else {
+      maxH=Math.min(PREFERRED_H, Math.max(spaceBelow,120));
+      top=rect.bottom+GAP;
+    }
+    // Final safety clamp in case of very short viewports
+    if (top+maxH>window.innerHeight-PAD) top=Math.max(PAD, window.innerHeight-maxH-PAD);
+
+    let left=rect.left; if(left+POPUP_W>window.innerWidth-PAD) left=window.innerWidth-POPUP_W-PAD; if(left<PAD) left=PAD;
+    setPopup({engId,day,top,left,maxH});
   };
 
   const assignSite=(engId:string,day:number,value:string)=>{
@@ -431,8 +450,8 @@ export default function DailyReport() {
 
       {/* Cell assignment popup */}
       {popup&&(
-        <div ref={popupRef} className="fixed z-50 bg-background border rounded-xl shadow-2xl w-56 py-2 overflow-hidden"
-          style={{top:popup.top,left:popup.left}}>
+        <div ref={popupRef} className="fixed z-50 bg-background border rounded-xl shadow-2xl w-56 py-2 overflow-y-auto"
+          style={{top:popup.top,left:popup.left,maxHeight:popup.maxH}}>
           <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground px-3 pb-1">Assign · Day {popup.day}</p>
           <p className="text-[10px] text-muted-foreground/60 px-3 pt-1">Sites</p>
           {siteList.map(site=>{
