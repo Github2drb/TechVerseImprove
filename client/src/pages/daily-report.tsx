@@ -143,15 +143,22 @@ export default function DailyReport() {
     })();
   },[]);
 
-  // Scroll table so today is the first visible column
-  const scrollToToday = () => {
-    if (!tableRef.current) return;
-    tableRef.current.scrollLeft = (todayDay - 1) * 62;
+  // Scroll table so today's column is visible, right after the sticky Engineer column.
+  // Measures the actual rendered column offset instead of assuming a fixed width,
+  // so it stays correct regardless of column min-width/border/padding drift.
+  const scrollToToday = (smooth = true) => {
+    const container = tableRef.current;
+    if (!container) return;
+    const cell = container.querySelector<HTMLElement>(`[data-day="${todayDay}"]`);
+    if (!cell) return;
+    const stickyColWidth = (container.querySelector<HTMLElement>("th.sticky")?.offsetWidth) ?? 160;
+    const target = Math.max(cell.offsetLeft - stickyColWidth, 0);
+    container.scrollTo({ left: target, behavior: smooth ? "smooth" : "auto" });
   };
 
   // Auto-scroll on load
   useEffect(()=>{
-    if (!loading) setTimeout(scrollToToday, 80);
+    if (!loading) setTimeout(()=>scrollToToday(false), 80);
   },[loading]);
 
   // Close popup on outside click
@@ -356,7 +363,7 @@ export default function DailyReport() {
           <span className="inline-flex items-center gap-1 bg-indigo-100 text-indigo-700 border border-indigo-300 dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-700 text-xs font-medium px-2 py-0.5 rounded">🏢 Site</span>
           <span className="inline-flex items-center gap-1 bg-stone-100 text-stone-700 border border-stone-300 dark:bg-stone-800 dark:text-stone-300 dark:border-stone-600 text-xs font-medium px-2 py-0.5 rounded">3D CAD U1</span>
           {LEAVE_CODES.map(lv=><span key={lv.code} className={`${lv.color} border text-xs font-medium px-2 py-0.5 rounded`}>{lv.code}</span>)}
-          <button onClick={scrollToToday} className="inline-flex items-center gap-1 bg-red-100 text-red-600 border border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800 text-xs font-medium px-2 py-0.5 rounded hover:bg-red-200 transition-colors cursor-pointer">📅 Today</button>
+          <button onClick={()=>scrollToToday(true)} className="inline-flex items-center gap-1 bg-red-100 text-red-600 border border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800 text-xs font-medium px-2 py-0.5 rounded hover:bg-red-200 transition-colors cursor-pointer">📅 Today</button>
         </div>
 
         {loading&&<div className="flex items-center justify-center py-20"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"/><span className="ml-3 text-muted-foreground text-sm">Loading team data…</span></div>}
@@ -370,7 +377,7 @@ export default function DailyReport() {
                 <tr className="border-b">
                   <th className="sticky left-0 z-20 bg-muted border-r px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground whitespace-nowrap min-w-[160px]">Engineer</th>
                   {days.map(d=>(
-                    <th key={d} className={`border-r px-1 pt-2 pb-0.5 text-center text-[10px] font-semibold uppercase tracking-wide min-w-[58px]
+                    <th key={d} data-day={d} className={`border-r px-1 pt-2 pb-0.5 text-center text-[10px] font-semibold uppercase tracking-wide min-w-[58px]
                       ${d===todayDay?"bg-red-500 text-white":isWeekend(year,month,d)?"bg-muted/60 text-muted-foreground/40":"bg-muted text-muted-foreground"}`}>
                       {getDayLabel(year,month,d)}
                     </th>

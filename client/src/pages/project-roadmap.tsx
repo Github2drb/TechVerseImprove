@@ -24,9 +24,10 @@ import { useAuth } from "@/components/auth-provider";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 
 // ── Full phase order — single source of truth ─────────────────────────────────
-// Testing ends at F.A.T. Installation is its own group (S.A.T happens on site
-// AFTER installation, so it belongs to Installation, not Testing).
-// Done group = Dispatch → Documentation → Handover → Completed.
+// Testing ends at Dispatch Stage (factory-side work). Installation and
+// Commissioning is its own group — on-site work from mechanical/electrical
+// install through customer trials, ending at Installation Completed.
+// Done group = S.A.T → Documentation → Handover → Project Signoff → Completed.
 // Final phase = Completed → project is considered fully completed.
 const PHASES = [
   { key:"Design Stage",              label:"Design",           short:"DES",  group:"Design",       color:"#7c3aed" },
@@ -39,27 +40,32 @@ const PHASES = [
   { key:"IO Check Stage",            label:"IO Check",         short:"IOC",  group:"Testing",      color:"#84cc16" },
   { key:"Trials Stage",              label:"Trials",           short:"TRL",  group:"Testing",      color:"#14b8a6" },
   { key:"F.A.T",                     label:"F.A.T",            short:"FAT",  group:"Testing",      color:"#d946ef" },
-  { key:"Installation Pending",      label:"Install Pending",  short:"INP",  group:"Installation", color:"#f43f5e" },
-  { key:"Installation in Progress",  label:"Installing",       short:"INS",  group:"Installation", color:"#ec4899" },
-  { key:"Installation Completed",    label:"Install Complete", short:"ICP",  group:"Installation", color:"#059669" },
-  { key:"S.A.T",                     label:"S.A.T",            short:"SAT",  group:"Installation", color:"#8b5cf6" },
-  { key:"Dispatch Stage",            label:"Dispatch",         short:"DSP",  group:"Done",         color:"#10b981" },
+  { key:"Dispatch Stage",            label:"Dispatch",         short:"DSP",  group:"Testing",      color:"#10b981" },
+  { key:"Mechanical Installation",   label:"Mech. Install",    short:"MIN",  group:"Installation and Commissioning", color:"#f43f5e" },
+  { key:"Electrical Installation",   label:"Elec. Install",    short:"EIN",  group:"Installation and Commissioning", color:"#ec4899" },
+  { key:"Equipment Power up",        label:"Power Up",         short:"EPU",  group:"Installation and Commissioning", color:"#0d9488" },
+  { key:"Dry Cycle Test",            label:"Dry Cycle",        short:"DCT",  group:"Installation and Commissioning", color:"#06b6d4" },
+  { key:"Auto Cycle Test",           label:"Auto Cycle",       short:"ACT",  group:"Installation and Commissioning", color:"#8b5cf6" },
+  { key:"Customer Trials",           label:"Cust. Trials",     short:"CTR",  group:"Installation and Commissioning", color:"#d946ef" },
+  { key:"Installation Completed",    label:"Install Complete", short:"ICP",  group:"Installation and Commissioning", color:"#059669" },
+  { key:"S.A.T",                     label:"S.A.T",            short:"SAT",  group:"Done",         color:"#8b5cf6" },
   { key:"Documentation",             label:"Documentation",    short:"DOC",  group:"Done",         color:"#0284c7" },
   { key:"Equipment Handover",        label:"Handover",         short:"EHO",  group:"Done",         color:"#16a34a" },
+  { key:"Project Signoff",           label:"Signoff",          short:"SGN",  group:"Done",         color:"#4f46e5" },
   { key:"Completed",                 label:"Completed",        short:"CMP",  group:"Done",         color:"#22c55e" },
 ];
 
 // Final phase — selecting this marks the project as completed
 const FINAL_PHASE = "Completed";
 
-const PHASE_GROUPS = ["Design","Procurement","Assembly","Testing","Installation","Done"];
+const PHASE_GROUPS = ["Design","Procurement","Assembly","Testing","Installation and Commissioning","Done"];
 
 const GROUP_COLORS: Record<string,string> = {
   Design:       "#7c3aed",
   Procurement:  "#f59e0b",
   Assembly:     "#3b82f6",
   Testing:      "#14b8a6",
-  Installation: "#ec4899",
+  "Installation and Commissioning": "#ec4899",
   Done:         "#22c55e",
 };
 
