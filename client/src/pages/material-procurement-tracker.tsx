@@ -251,11 +251,14 @@ interface MaterialRowItemProps {
 function MaterialRowItem({ material, onUpdate, onDelete, disabled }: MaterialRowItemProps) {
   const status = getMaterialStatus(material);
   const crossed = status.deliveryCrossed;
-  const labelCls = crossed ? "text-[10px] text-white/80" : "text-[10px] text-muted-foreground";
+  // NOTE: when a row is highlighted red (delivery crossed target), use dark
+  // text instead of white — white-on-red has poor contrast and is hard to
+  // read. Black/near-black text on the red-600 background is far more legible.
+  const labelCls = crossed ? "text-[10px] text-black/80 font-medium" : "text-[10px] text-muted-foreground";
 
   return (
     <div className={`rounded-xl border p-4 space-y-3 transition-colors ${
-      crossed ? "border-red-700 bg-red-600 text-white" :
+      crossed ? "border-red-700 bg-red-600 text-black" :
       status.integrationOverdue ? "border-red-500/40 bg-red-500/5" :
       status.overallAlert ? "border-amber-500/40 bg-amber-500/5" :
       status.received ? "border-green-500/30 bg-green-500/5" : "border-border"
@@ -269,7 +272,7 @@ function MaterialRowItem({ material, onUpdate, onDelete, disabled }: MaterialRow
               onChange={e => onUpdate(material.id, "name", e.target.value)}
               disabled={disabled}
               placeholder="Material name"
-              className={`h-8 text-sm font-medium border-0 bg-transparent px-0 focus-visible:ring-0 focus-visible:bg-muted/50 focus-visible:px-2 ${crossed ? "text-white placeholder:text-white/60" : ""}`}
+              className={`h-8 text-sm font-medium border-0 bg-transparent px-0 focus-visible:ring-0 focus-visible:bg-muted/50 focus-visible:px-2 ${crossed ? "text-black placeholder:text-black/60" : ""}`}
               style={{ minWidth: "180px", maxWidth: "320px" }}
             />
             {status.received && <Badge className="bg-green-500 text-white text-[10px]"><CheckCircle2 className="h-3 w-3 mr-1"/>Received</Badge>}
@@ -277,7 +280,7 @@ function MaterialRowItem({ material, onUpdate, onDelete, disabled }: MaterialRow
             {!status.received && !status.deliveryCrossed && (status.receiptDueSoon || status.committedDueSoon) && <Badge className="bg-amber-500 text-white text-[10px]"><Clock className="h-3 w-3 mr-1"/>Due soon</Badge>}
             {status.integrationOverdue && <Badge className="bg-red-500 text-white text-[10px]"><Wrench className="h-3 w-3 mr-1"/>Integration overdue</Badge>}
             {status.integrationPending && !status.integrationOverdue && <Badge className="bg-blue-500 text-white text-[10px]"><Wrench className="h-3 w-3 mr-1"/>Integration in progress</Badge>}
-            {material.currentStatus && <Badge variant="outline" className={`text-[10px] ${crossed ? "border-white/60 text-white" : ""}`}>{material.currentStatus}</Badge>}
+            {material.currentStatus && <Badge variant="outline" className={`text-[10px] ${crossed ? "border-black/40 text-black bg-white/40" : ""}`}>{material.currentStatus}</Badge>}
           </div>
           <div className="flex items-center gap-2 mt-1.5">
             <Input
@@ -297,7 +300,7 @@ function MaterialRowItem({ material, onUpdate, onDelete, disabled }: MaterialRow
           </div>
         </div>
         {!disabled && (
-          <Button variant="ghost" size="icon" className={`h-7 w-7 flex-shrink-0 ${crossed ? "text-white hover:text-white hover:bg-red-700" : "text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"}`}
+          <Button variant="ghost" size="icon" className={`h-7 w-7 flex-shrink-0 ${crossed ? "text-black hover:text-black hover:bg-red-700/40" : "text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"}`}
             onClick={() => onDelete(material.id)}>
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
@@ -345,7 +348,7 @@ function MaterialRowItem({ material, onUpdate, onDelete, disabled }: MaterialRow
             onValueChange={v => onUpdate(material.id, "currentStatus", v)}
             disabled={disabled}
           >
-            <SelectTrigger className={`h-8 text-xs ${crossed ? "bg-white/10 border-white/40 text-white" : ""}`}>
+            <SelectTrigger className={`h-8 text-xs ${crossed ? "bg-white/70 border-black/30 text-black" : ""}`}>
               <SelectValue placeholder="Status..."/>
             </SelectTrigger>
             <SelectContent>
@@ -388,7 +391,7 @@ function MaterialRowItem({ material, onUpdate, onDelete, disabled }: MaterialRow
 
 // ── Project-wise overdue list — TOP LEVEL component ────────────────────────────
 // Lists materials (grouped by project) whose delivery has crossed the scheduled
-// target date. Rendered with red background and white font as required.
+// target date. Rendered with a red background; text kept dark for legibility.
 interface OverdueListProps {
   groups: OverdueProjectGroup[];
   isLoading: boolean;
@@ -408,8 +411,8 @@ function OverdueMaterialsList({ groups, isLoading }: OverdueListProps) {
   const total = groups.reduce((n, g) => n + g.materials.length, 0);
   return (
     <Card className="mb-6 border-red-700 overflow-hidden">
-      <CardHeader className="bg-red-600 text-white py-3">
-        <CardTitle className="text-sm flex items-center gap-2">
+      <CardHeader className="bg-red-600 text-black py-3">
+        <CardTitle className="text-sm flex items-center gap-2 text-black">
           <Bell className="h-4 w-4"/>
           Delivery Crossed Scheduled Target — {total} material{total !== 1 ? "s" : ""} across {groups.length} project{groups.length !== 1 ? "s" : ""}
         </CardTitle>
@@ -417,12 +420,12 @@ function OverdueMaterialsList({ groups, isLoading }: OverdueListProps) {
       <CardContent className="p-0">
         {groups.map(g => (
           <div key={g.projectName} className="border-t border-red-700/40 first:border-t-0">
-            <div className="bg-red-700 text-white px-4 py-2 text-xs font-semibold uppercase tracking-wide">
+            <div className="bg-red-700 text-black font-semibold px-4 py-2 text-xs uppercase tracking-wide">
               {g.projectName}
             </div>
             <table className="w-full text-xs">
               <thead>
-                <tr className="bg-red-500 text-white">
+                <tr className="bg-red-500 text-black">
                   <th className="text-left px-4 py-2 font-medium">Material</th>
                   <th className="text-left px-3 py-2 font-medium">Qty</th>
                   <th className="text-left px-3 py-2 font-medium">Target Receipt</th>
@@ -437,7 +440,7 @@ function OverdueMaterialsList({ groups, isLoading }: OverdueListProps) {
                   const dCommit = daysFromToday(m.scmCommittedDate);
                   const worst = Math.min(dTarget ?? 0, dCommit ?? 0);
                   return (
-                    <tr key={m.id} className="bg-red-600 text-white border-t border-red-700/40">
+                    <tr key={m.id} className="bg-red-600 text-black border-t border-red-700/40">
                       <td className="px-4 py-2 font-medium">{m.name}</td>
                       <td className="px-3 py-2">{m.qty} {m.unit}</td>
                       <td className="px-3 py-2">{fmtDate(m.targetReceipt)}</td>
@@ -698,7 +701,7 @@ export default function MaterialProcurementTracker() {
           )}
         </div>
 
-        {/* Project-wise overdue deliveries (all projects, red background + white font) */}
+        {/* Project-wise overdue deliveries (all projects, red background + dark font) */}
         <OverdueMaterialsList groups={overdueGroups} isLoading={overdueLoading} />
 
         {/* Project selector */}
@@ -832,7 +835,7 @@ export default function MaterialProcurementTracker() {
               <p>• PR Created turns <span className="text-red-500 font-medium">red</span> if not filled within 3 days of BOM Created date</p>
               <p>• PO Created turns <span className="text-red-500 font-medium">red</span> if not filled within 3 days of PR Approved date</p>
               <p>• Target Receipt / SCM Committed Date turn <span className="text-red-500 font-medium">red</span> once the date passes without an Actual Receipt</p>
-              <p>• A material whose delivery has crossed the scheduled target date is highlighted with a <span className="text-red-500 font-medium">red background and white font</span>, and listed project-wise at the top of the page</p>
+              <p>• A material whose delivery has crossed the scheduled target date is highlighted with a <span className="text-red-500 font-medium">red background and dark font</span>, and listed project-wise at the top of the page</p>
               <p>• "Due soon" appears within 3 days of the Target Receipt or SCM Committed date</p>
               <p>• On entering the Actual Receipt date, the <strong>HW Integration Target</strong> is set automatically to Actual Receipt + {HW_INTEGRATION_DAYS} days (minimum time for Electrical Assembly, hardware testing and configuration in the logic)</p>
               <p>• HW Integration turns <span className="text-red-500 font-medium">red</span> if not marked done by the integration target date</p>
