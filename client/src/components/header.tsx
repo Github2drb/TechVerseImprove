@@ -1,4 +1,4 @@
-import { Search, BookOpen, Bell } from "lucide-react";
+import { Search, BookOpen, Bell, ClipboardCheck } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "./theme-toggle";
 import { NotificationBell } from "./notification-bell";
@@ -46,7 +46,7 @@ export function Header({ searchQuery, onSearchChange }: HeaderProps) {
 
         {/* Nav links */}
         <nav className="hidden md:flex items-center gap-1">
-          {navLink("/daily-report", "Daily Report")}
+          {navLink("/project-commissioning", "Commissioning", <ClipboardCheck className="h-4 w-4" />)}
           {navLink("/blog",          "Knowledge Base", <BookOpen className="h-4 w-4" />)}
           {navLink("/notifications",  "Notifications",  <Bell className="h-4 w-4" />)}
         </nav>
