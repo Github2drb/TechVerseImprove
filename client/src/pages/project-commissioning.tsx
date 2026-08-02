@@ -1,11 +1,11 @@
 // client/src/pages/project-commissioning.tsx
 // Project Commissioning Tracker — replaces the old Daily Report page.
 // Station-wise electrical/mechanical constraints, trial readiness, 3-phase
-// commissioning checklists, plus a LIVE schedule forecast and engineer rating
-// that recalculates on every edit against the Internal / Customer target dates
-// entered in the Project Tracker "Edit Assignment" dialog.
+// commissioning checklists, per-station photo evidence, plus a LIVE schedule
+// forecast and engineer rating that recalculates on every edit against the
+// Internal / Customer target dates from the Project Tracker.
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Header } from "@/components/header";
@@ -21,9 +21,10 @@ import {
   ClipboardCheck, Plus, Trash2, Save, Zap, Wrench, Clock,
   PlugZap, ListChecks, Hand, CheckCircle2, Cable, X,
   CalendarClock, Users, TrendingUp, AlertTriangle, Award, Star, Info,
+  ImagePlus, Loader2, Camera,
 } from "lucide-react";
 import {
-  computeForecast, computeRating, formatDate, splitEngineers, namesMatch,
+  computeForecast, computeRating, formatDate, splitEngineers,
   type CalcRow, type CalcPhase,
 } from "@/lib/commissioning-calc";
 
@@ -38,6 +39,13 @@ type StationStatus =
   | "trials_in_progress"
   | "completed";
 
+export interface ImageRef {
+  name: string;
+  url: string;
+  uploadedBy?: string;
+  uploadedAt?: string;
+}
+
 interface StationRow {
   id: string;
   label: string;
@@ -47,6 +55,7 @@ interface StationRow {
   trialTime: string;
   status: StationStatus;
   notes: string;
+  images?: ImageRef[];
 }
 
 interface ChecklistItem {
@@ -83,6 +92,219 @@ interface WeeklyAssignment {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Image helpers
+// ─────────────────────────────────────────────────────────────────────────────
+const MAX_IMAGE_EDGE = 1600;   // longest side after resize
+const IMAGE_QUALITY = 0.82;    // JPEG quality
+
+/**
+ * Downscale + re-encode a photo in the browser before upload.
+ * A 12 MP phone photo (~5 MB) becomes roughly 200–400 KB, which keeps the
+ * GitHub repo small and the upload fast on site Wi-Fi.
+ * Falls back to the raw file if the browser cannot decode it.
+ */
+async function compressImage(file: File): Promise<{ base64: string; fileName: string }> {
+  const readAsDataURL = (f: File) =>
+    new Promise<string>((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(String(fr.result));
+      fr.onerror = () => reject(new Error("Could not read file"));
+      fr.readAsDataURL(f);
+    });
+
+  const dataUrl = await readAsDataURL(file);
+  const safeName = file.name.replace(/[^A-Za-z0-9._-]/g, "_") || "photo.jpg";
+
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error("decode failed"));
+      i.src = dataUrl;
+    });
+    const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(img.width, img.height));
+    const w = Math.max(1, Math.round(img.width * scale));
+    const h = Math.max(1, Math.round(img.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("no canvas context");
+    ctx.drawImage(img, 0, 0, w, h);
+    const out = canvas.toDataURL("image/jpeg", IMAGE_QUALITY);
+    if (!out.startsWith("data:image/jpeg")) throw new Error("encode failed");
+    return { base64: out.split(",")[1] ?? "", fileName: safeName.replace(/\.[^.]+$/, "") + ".jpg" };
+  } catch {
+    // Browser could not decode (e.g. HEIC) — send the original bytes through
+    return { base64: dataUrl.split(",")[1] ?? "", fileName: safeName };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Full-screen image viewer — close button only, no minimise (top-level component)
+// ─────────────────────────────────────────────────────────────────────────────
+interface LightboxProps {
+  images: ImageRef[];
+  index: number;
+  onClose: () => void;
+  onNavigate: (i: number) => void;
+}
+
+function ImageLightbox({ images, index, onClose, onNavigate }: LightboxProps) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+      if (e.key === "ArrowRight" && index < images.length - 1) onNavigate(index + 1);
+      if (e.key === "ArrowLeft" && index > 0) onNavigate(index - 1);
+    };
+    document.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [index, images.length, onClose, onNavigate]);
+
+  const img = images[index];
+  if (!img) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[200] flex flex-col bg-black/95"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      data-testid="image-lightbox"
+    >
+      {/* Top bar — close only */}
+      <div className="flex items-center justify-between gap-3 px-4 py-3 text-white">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium">{img.name}</p>
+          {img.uploadedBy && (
+            <p className="truncate text-xs text-white/60">
+              Uploaded by {img.uploadedBy}
+              {img.uploadedAt ? ` · ${new Date(img.uploadedAt).toLocaleString()}` : ""}
+            </p>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          {images.length > 1 && (
+            <span className="text-xs text-white/70">{index + 1} / {images.length}</span>
+          )}
+          <button
+            type="button"
+            onClick={e => { e.stopPropagation(); onClose(); }}
+            aria-label="Close image"
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/25"
+            data-testid="button-close-lightbox"
+          >
+            <X className="h-6 w-6" />
+          </button>
+        </div>
+      </div>
+
+      {/* Image */}
+      <div className="flex flex-1 items-center justify-center overflow-hidden p-2 sm:p-6">
+        <img
+          src={img.url}
+          alt={img.name}
+          onClick={e => e.stopPropagation()}
+          className="max-h-full max-w-full object-contain"
+        />
+      </div>
+
+      {/* Prev / next */}
+      {images.length > 1 && (
+        <div className="flex items-center justify-center gap-3 pb-5">
+          <Button
+            variant="secondary" size="sm" disabled={index === 0}
+            onClick={e => { e.stopPropagation(); onNavigate(index - 1); }}
+          >
+            Previous
+          </Button>
+          <Button
+            variant="secondary" size="sm" disabled={index === images.length - 1}
+            onClick={e => { e.stopPropagation(); onNavigate(index + 1); }}
+          >
+            Next
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-row image cell (top-level component)
+// ─────────────────────────────────────────────────────────────────────────────
+interface ImageCellProps {
+  rowId: string;
+  images: ImageRef[];
+  uploading: boolean;
+  onUpload: (rowId: string, files: FileList | null) => void;
+  onDelete: (rowId: string, name: string) => void;
+  onOpen: (images: ImageRef[], index: number) => void;
+}
+
+function ImageCell({ rowId, images, uploading, onUpload, onDelete, onOpen }: ImageCellProps) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap gap-1.5">
+        {images.map((img, i) => (
+          <div key={img.name} className="group relative">
+            <button
+              type="button"
+              onClick={() => onOpen(images, i)}
+              className="block h-14 w-14 overflow-hidden rounded-md border transition-shadow hover:ring-2 hover:ring-primary"
+              title="Click to view full screen"
+              data-testid={`thumb-${img.name}`}
+            >
+              <img src={img.url} alt={img.name} loading="lazy" className="h-full w-full object-cover" />
+            </button>
+            <button
+              type="button"
+              onClick={() => onDelete(rowId, img.name)}
+              aria-label="Delete image"
+              className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ))}
+
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          disabled={uploading}
+          className="flex h-14 w-14 flex-col items-center justify-center gap-0.5 rounded-md border border-dashed text-muted-foreground transition-colors hover:border-primary hover:text-primary disabled:opacity-50"
+          title="Add photos of equipment, station or control panel"
+          data-testid={`upload-${rowId}`}
+        >
+          {uploading
+            ? <Loader2 className="h-4 w-4 animate-spin" />
+            : <><ImagePlus className="h-4 w-4" /><span className="text-[9px] leading-none">Add</span></>}
+        </button>
+
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={e => { onUpload(rowId, e.target.files); e.target.value = ""; }}
+        />
+      </div>
+      {images.length > 0 && (
+        <p className="text-[10px] text-muted-foreground">{images.length} photo{images.length === 1 ? "" : "s"}</p>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Status metadata
 // ─────────────────────────────────────────────────────────────────────────────
 const STATUS_META: Record<StationStatus, { label: string; cls: string }> = {
@@ -116,7 +338,7 @@ function mkRow(label: string, description: string): StationRow {
   return {
     id: uid(), label, description,
     electricalConstraint: "", mechanicalConstraint: "",
-    trialTime: "", status: "not_started", notes: "",
+    trialTime: "", status: "not_started", notes: "", images: [],
   };
 }
 
@@ -167,20 +389,12 @@ const DEFAULT_PHASE_DEFS: Array<{ title: string; subtitle: string; items: string
   {
     title: "IO List Testing",
     subtitle: "IO duly tested along with Electrical and Mechanical Integration",
-    items: [
-      "Field IO",
-      "Servo Check",
-      "VFD → Motor Rotation Check",
-      "Vision Check",
-    ],
+    items: ["Field IO", "Servo Check", "VFD → Motor Rotation Check", "Vision Check"],
   },
   {
     title: "Manual Testing",
     subtitle: "Set Feedback Sensors and Actuation",
-    items: [
-      "XY Gantry Pick and Place Position Check",
-      "Pneumatic Actuation and Feedback Check",
-    ],
+    items: ["XY Gantry Pick and Place Position Check", "Pneumatic Actuation and Feedback Check"],
   },
 ];
 
@@ -192,9 +406,7 @@ function defaultCommInterface(): StationRow[] {
 }
 function defaultPhases(): Phase[] {
   return DEFAULT_PHASE_DEFS.map(p => ({
-    id: uid(),
-    title: p.title,
-    subtitle: p.subtitle,
+    id: uid(), title: p.title, subtitle: p.subtitle,
     items: p.items.map(text => ({ id: uid(), text, done: false })),
   }));
 }
@@ -206,7 +418,7 @@ const PHASE_ICONS = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase checklist card (top-level component — never define inside another)
+// Phase checklist card (top-level component)
 // ─────────────────────────────────────────────────────────────────────────────
 interface PhaseCardProps {
   phase: Phase;
@@ -309,12 +521,19 @@ interface StationTableProps {
   subtitle: string;
   icon: React.ReactNode;
   rows: StationRow[];
+  uploadingRowId: string | null;
   onPatchRow: (rowId: string, patch: Partial<StationRow>) => void;
   onAddRow: () => void;
   onDeleteRow: (rowId: string) => void;
+  onUploadImages: (rowId: string, files: FileList | null) => void;
+  onDeleteImage: (rowId: string, name: string) => void;
+  onOpenImage: (images: ImageRef[], index: number) => void;
 }
 
-function StationTable({ title, subtitle, icon, rows, onPatchRow, onAddRow, onDeleteRow }: StationTableProps) {
+function StationTable({
+  title, subtitle, icon, rows, uploadingRowId,
+  onPatchRow, onAddRow, onDeleteRow, onUploadImages, onDeleteImage, onOpenImage,
+}: StationTableProps) {
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -333,16 +552,19 @@ function StationTable({ title, subtitle, icon, rows, onPatchRow, onAddRow, onDel
       </CardHeader>
       <CardContent className="pt-0">
         <div className="overflow-x-auto rounded-lg border">
-          <table className="w-full min-w-[1100px] text-sm">
+          <table className="w-full min-w-[1320px] text-sm">
             <thead>
               <tr className="border-b bg-muted/50 text-left text-xs uppercase text-muted-foreground">
                 <th className="w-14 px-2 py-2">#</th>
-                <th className="min-w-[220px] px-2 py-2">Station / Description</th>
-                <th className="min-w-[220px] px-2 py-2">
+                <th className="min-w-[210px] px-2 py-2">Station / Description</th>
+                <th className="min-w-[200px] px-2 py-2">
                   <span className="flex items-center gap-1"><Zap className="h-3.5 w-3.5 text-amber-500" /> Electrical Constraint</span>
                 </th>
-                <th className="min-w-[220px] px-2 py-2">
+                <th className="min-w-[200px] px-2 py-2">
                   <span className="flex items-center gap-1"><Wrench className="h-3.5 w-3.5 text-sky-500" /> Mechanical Constraint</span>
+                </th>
+                <th className="min-w-[150px] px-2 py-2">
+                  <span className="flex items-center gap-1"><Camera className="h-3.5 w-3.5 text-emerald-500" /> Photos</span>
                 </th>
                 <th className="w-36 px-2 py-2">
                   <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> Time to Trials*</span>
@@ -395,6 +617,16 @@ function StationTable({ title, subtitle, icon, rows, onPatchRow, onAddRow, onDel
                     />
                   </td>
                   <td className="px-2 py-2">
+                    <ImageCell
+                      rowId={row.id}
+                      images={row.images ?? []}
+                      uploading={uploadingRowId === row.id}
+                      onUpload={onUploadImages}
+                      onDelete={onDeleteImage}
+                      onOpen={onOpenImage}
+                    />
+                  </td>
+                  <td className="px-2 py-2">
                     <Input
                       value={row.trialTime}
                       onChange={e => onPatchRow(row.id, { trialTime: e.target.value })}
@@ -429,7 +661,7 @@ function StationTable({ title, subtitle, icon, rows, onPatchRow, onAddRow, onDel
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                  <td colSpan={8} className="px-4 py-6 text-center text-sm text-muted-foreground">
                     No rows yet — click "Add Row" to start.
                   </td>
                 </tr>
@@ -457,9 +689,7 @@ function VariancePill({ label, target, varianceDays, score }: {
       <div className="rounded-lg border border-dashed p-3">
         <p className="text-xs font-medium text-muted-foreground">{label}</p>
         <p className="mt-1 text-sm text-muted-foreground">Not set</p>
-        <p className="text-[11px] text-muted-foreground">
-          Enter it in Project Tracker → Edit Assignment
-        </p>
+        <p className="text-[11px] text-muted-foreground">Enter it in Project Tracker → Edit Assignment</p>
       </div>
     );
   }
@@ -489,11 +719,12 @@ export default function ProjectCommissioning() {
   const [draft, setDraft] = useState<CommissioningProject | null>(null);
   const [dirty, setDirty] = useState(false);
   const [newProject, setNewProject] = useState("");
+  const [uploadingRowId, setUploadingRowId] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<{ images: ImageRef[]; index: number } | null>(null);
   const { user, isAdmin } = useAuth();
   const { toast } = useToast();
 
-  const userName: string =
-    (user as any)?.name ?? (user as any)?.username ?? "Engineer";
+  const userName: string = (user as any)?.name ?? (user as any)?.username ?? "Engineer";
 
   // Tracked projects list
   const { data: tracked = [] } = useQuery<string[]>({
@@ -518,7 +749,7 @@ export default function ProjectCommissioning() {
     return names.filter(n => !trackedLower.has(n.trim().toLowerCase()));
   }, [projectNamesRaw, tracked]);
 
-  // Selected project data
+  // Selected project data — images ride along inside each row
   const projectUrl = selected ? `/api/commissioning-tracker/${encodeURIComponent(selected)}` : "";
   const { data: projectData, isLoading: projectLoading } = useQuery<CommissioningProject>({
     queryKey: [projectUrl],
@@ -532,12 +763,14 @@ export default function ProjectCommissioning() {
     const isNew =
       (projectData.stations?.length ?? 0) === 0 &&
       (projectData.phases?.length ?? 0) === 0;
+    const withImages = (rows?: StationRow[]) =>
+      (rows ?? []).map(r => ({ ...r, images: Array.isArray(r.images) ? r.images : [] }));
     setDraft({
       projectName: projectData.projectName || selected,
-      stations: isNew ? defaultStations() : projectData.stations ?? [],
+      stations: isNew ? defaultStations() : withImages(projectData.stations),
       commInterface: (projectData.commInterface?.length ?? 0) === 0 && isNew
         ? defaultCommInterface()
-        : projectData.commInterface ?? [],
+        : withImages(projectData.commInterface),
       phases: isNew ? defaultPhases() : projectData.phases ?? [],
       lastUpdated: projectData.lastUpdated,
       updatedBy: projectData.updatedBy,
@@ -606,6 +839,105 @@ export default function ProjectCommissioning() {
         p.id !== phaseId ? p : { ...p, items: p.items.filter(i => i.id !== itemId) }),
     }));
 
+  // ── Persist helper (used by Save button AND image upload/delete) ───────
+  const persist = useCallback(async (payload: CommissioningProject, quiet = false) => {
+    await apiRequest("POST", `/api/commissioning-tracker/${encodeURIComponent(selected)}`, {
+      ...payload,
+      projectName: selected,
+      updatedBy: userName,
+    });
+    setDirty(false);
+    queryClient.invalidateQueries({ queryKey: ["/api/commissioning-tracker"] });
+    queryClient.invalidateQueries({ queryKey: [projectUrl] });
+    queryClient.invalidateQueries({ queryKey: ["/api/commissioning-performance"] });
+    if (!quiet) {
+      toast({ title: "Saved", description: `Commissioning data for "${selected}" updated. Skill Matrix rating refreshed.` });
+    }
+  }, [selected, userName, projectUrl, toast]);
+
+  // ── Image upload / delete ──────────────────────────────────────────────
+  const findRowSection = (rowId: string, d: CommissioningProject): "stations" | "commInterface" | null => {
+    if (d.stations.some(r => r.id === rowId)) return "stations";
+    if (d.commInterface.some(r => r.id === rowId)) return "commInterface";
+    return null;
+  };
+
+  const handleUploadImages = async (rowId: string, files: FileList | null) => {
+    if (!files || files.length === 0 || !draft || !selected) return;
+    setUploadingRowId(rowId);
+    const uploaded: ImageRef[] = [];
+    let failures = 0;
+
+    for (const file of Array.from(files)) {
+      if (!file.type.startsWith("image/") && !/\.(jpe?g|png|webp|gif|bmp|heic)$/i.test(file.name)) {
+        failures++;
+        continue;
+      }
+      try {
+        const { base64, fileName } = await compressImage(file);
+        const res = await apiRequest("POST", "/api/commissioning-images", {
+          projectName: selected, rowId, fileName, dataBase64: base64,
+        });
+        const json = await res.json();
+        if (!json?.url) throw new Error(json?.error ?? "Upload failed");
+        uploaded.push({
+          name: json.name, url: json.url,
+          uploadedBy: userName, uploadedAt: new Date().toISOString(),
+        });
+      } catch (err: any) {
+        failures++;
+        toast({ title: `Could not upload ${file.name}`, description: err?.message ?? "Unknown error", variant: "destructive" });
+      }
+    }
+
+    if (uploaded.length > 0) {
+      // Build the next draft synchronously so it can be persisted immediately —
+      // this guarantees the photo link survives even if the page is closed.
+      const section = findRowSection(rowId, draft);
+      if (section) {
+        const next: CommissioningProject = {
+          ...draft,
+          [section]: draft[section].map(r =>
+            r.id === rowId ? { ...r, images: [...(r.images ?? []), ...uploaded] } : r),
+        } as CommissioningProject;
+        setDraft(next);
+        try {
+          await persist(next, true);
+          toast({ title: `${uploaded.length} photo${uploaded.length === 1 ? "" : "s"} uploaded`, description: "Saved to the project." });
+        } catch (err: any) {
+          setDirty(true);
+          toast({ title: "Photos uploaded but not linked", description: "Click Save Changes to finish.", variant: "destructive" });
+        }
+      }
+    } else if (failures > 0) {
+      toast({ title: "No photos were uploaded", variant: "destructive" });
+    }
+    setUploadingRowId(null);
+  };
+
+  const handleDeleteImage = async (rowId: string, name: string) => {
+    if (!draft || !selected) return;
+    if (!window.confirm("Delete this photo permanently from the repository?")) return;
+    const section = findRowSection(rowId, draft);
+    if (!section) return;
+    const next: CommissioningProject = {
+      ...draft,
+      [section]: draft[section].map(r =>
+        r.id === rowId ? { ...r, images: (r.images ?? []).filter(i => i.name !== name) } : r),
+    } as CommissioningProject;
+    setDraft(next);
+    try {
+      await apiRequest("DELETE", `/api/commissioning-images/${encodeURIComponent(name)}`);
+      await persist(next, true);
+      toast({ title: "Photo deleted" });
+    } catch (err: any) {
+      setDirty(true);
+      toast({ title: "Delete failed", description: err?.message ?? "Unknown error", variant: "destructive" });
+    }
+  };
+
+  const openLightbox = (images: ImageRef[], index: number) => setLightbox({ images, index });
+
   // ── Assignment context for the selected project ────────────────────────
   const projectContext = useMemo(() => {
     if (!selected) return { engineers: [] as string[], internalTarget: null as string | null, customerTarget: null as string | null };
@@ -630,22 +962,17 @@ export default function ProjectCommissioning() {
     return { forecast, rating };
   }, [draft, projectContext]);
 
+  const totalPhotos = useMemo(() => {
+    if (!draft) return 0;
+    return [...draft.stations, ...draft.commInterface]
+      .reduce((n, r) => n + (r.images?.length ?? 0), 0);
+  }, [draft]);
+
   // ── Mutations ──────────────────────────────────────────────────────────
   const saveMutation = useMutation({
     mutationFn: async () => {
       if (!draft || !selected) throw new Error("Nothing to save");
-      return apiRequest("POST", `/api/commissioning-tracker/${encodeURIComponent(selected)}`, {
-        ...draft,
-        projectName: selected,
-        updatedBy: userName,
-      });
-    },
-    onSuccess: () => {
-      setDirty(false);
-      queryClient.invalidateQueries({ queryKey: ["/api/commissioning-tracker"] });
-      queryClient.invalidateQueries({ queryKey: [projectUrl] });
-      queryClient.invalidateQueries({ queryKey: ["/api/commissioning-performance"] });
-      toast({ title: "Saved", description: `Commissioning data for "${selected}" updated. Skill Matrix rating refreshed.` });
+      return persist(draft);
     },
     onError: (e: any) =>
       toast({ title: "Save failed", description: e?.message ?? "Unknown error", variant: "destructive" }),
@@ -698,7 +1025,7 @@ export default function ProjectCommissioning() {
               Project Commissioning Tracker
             </h1>
             <p className="text-sm text-muted-foreground">
-              Station-wise constraints, trial readiness and commissioning checklists per project.
+              Station-wise constraints, photo evidence, trial readiness and commissioning checklists per project.
             </p>
           </div>
           {draft?.lastUpdated && (
@@ -766,7 +1093,7 @@ export default function ProjectCommissioning() {
               <p className="font-medium">Select a tracked project or start tracking a new one.</p>
               <p className="mt-1 text-sm">
                 Each project gets the standard station template, communication-interface list and
-                the 3-phase commissioning checklist — all fully editable.
+                the 3-phase commissioning checklist — all fully editable, with photo evidence per station.
               </p>
             </CardContent>
           </Card>
@@ -787,9 +1114,7 @@ export default function ProjectCommissioning() {
                     <CalendarClock className="h-5 w-5 text-primary" />
                     Schedule Forecast
                   </CardTitle>
-                  <Badge variant="outline" className="text-[11px]">
-                    Live · recalculates as you type
-                  </Badge>
+                  <Badge variant="outline" className="text-[11px]">Live · recalculates as you type</Badge>
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Based on today ({formatDate(new Date())}), pending "Time to Trials" estimates and the
@@ -920,7 +1245,7 @@ export default function ProjectCommissioning() {
             </Card>
 
             {/* Summary chips */}
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
               <Card><CardContent className="p-3 text-center">
                 <p className="text-2xl font-bold">{analysis.forecast.totalRows}</p>
                 <p className="text-xs text-muted-foreground">Total Line Items</p>
@@ -939,7 +1264,11 @@ export default function ProjectCommissioning() {
               </CardContent></Card>
               <Card><CardContent className="p-3 text-center">
                 <p className="text-2xl font-bold">{analysis.forecast.checklistDone}/{analysis.forecast.checklistTotal}</p>
-                <p className="text-xs text-muted-foreground">Checklist Items Done</p>
+                <p className="text-xs text-muted-foreground">Checklist Done</p>
+              </CardContent></Card>
+              <Card><CardContent className="p-3 text-center">
+                <p className="text-2xl font-bold text-emerald-600">{totalPhotos}</p>
+                <p className="text-xs text-muted-foreground">Photos Attached</p>
               </CardContent></Card>
             </div>
 
@@ -961,12 +1290,16 @@ export default function ProjectCommissioning() {
             {/* Station table */}
             <StationTable
               title="Stations"
-              subtitle="Electrical & mechanical constraints per station — filled by the PLC programmer."
+              subtitle="Electrical & mechanical constraints and photo evidence per station — filled by the PLC programmer."
               icon={<CheckCircle2 className="h-4 w-4" />}
               rows={draft.stations}
+              uploadingRowId={uploadingRowId}
               onPatchRow={patchRow("stations")}
               onAddRow={addRow("stations")}
               onDeleteRow={deleteRow("stations")}
+              onUploadImages={handleUploadImages}
+              onDeleteImage={handleDeleteImage}
+              onOpenImage={openLightbox}
             />
 
             {/* Communication interface table */}
@@ -975,9 +1308,13 @@ export default function ProjectCommissioning() {
               subtitle="Integration, safety and data-interface checks across the line."
               icon={<Cable className="h-4 w-4" />}
               rows={draft.commInterface}
+              uploadingRowId={uploadingRowId}
               onPatchRow={patchRow("commInterface")}
               onAddRow={addRow("commInterface")}
               onDeleteRow={deleteRow("commInterface")}
+              onUploadImages={handleUploadImages}
+              onDeleteImage={handleDeleteImage}
+              onOpenImage={openLightbox}
             />
 
             <div className="h-16" />
@@ -1003,6 +1340,16 @@ export default function ProjectCommissioning() {
             </Button>
           </div>
         </div>
+      )}
+
+      {/* Full-screen image viewer */}
+      {lightbox && (
+        <ImageLightbox
+          images={lightbox.images}
+          index={lightbox.index}
+          onClose={() => setLightbox(null)}
+          onNavigate={i => setLightbox(lb => (lb ? { ...lb, index: i } : lb))}
+        />
       )}
     </div>
   );
