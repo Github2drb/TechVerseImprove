@@ -10,7 +10,6 @@ import TeamProjectTracker from "@/pages/team-project-tracker";
 import ProjectStatus from "@/pages/project-status";
 import SkillMatrix from "@/pages/skill-matrix";
 import Analytics from "@/pages/analytics";
-import EngineerReports from "@/pages/engineer-reports";
 import EngineerManagement from "@/pages/engineer-management";
 import ProjectDetail from "@/pages/project-detail";
 import TeamSheet from "@/pages/team-sheet";
@@ -37,7 +36,6 @@ function AppRoutes() {
       <Route path="/project-status" component={ProjectStatus} />
       <Route path="/skill-matrix" component={SkillMatrix} />
       <Route path="/analytics" component={Analytics} />
-      <Route path="/engineer-reports" component={EngineerReports} />
       <Route path="/engineer-management" component={EngineerManagement} />
       <Route path="/project/:id" component={ProjectDetail} />
       <Route path="/teamsheet" component={TeamSheet} />
