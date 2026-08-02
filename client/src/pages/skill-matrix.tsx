@@ -13,7 +13,187 @@ import {
   ArrowLeft, Award, Star, TrendingUp, Users,
   CheckCircle2, Clock, AlertTriangle, Target,
   ChevronDown, ChevronUp, Copy, Check, FolderOpen, ClipboardList, Activity,
+  CalendarClock, Wrench,
 } from "lucide-react";
+
+// ─── Commissioning delivery performance (from /api/commissioning-performance) ───
+interface CommProjectRating {
+  projectName: string;
+  overall: number;
+  level: string;
+  forecastDate: string;
+  internalTarget: string | null;
+  customerTarget: string | null;
+  internalVarianceDays: number | null;
+  customerVarianceDays: number | null;
+  stationProgress: number;
+  checklistProgress: number;
+  effectiveDays: number;
+}
+interface CommEngineerRating {
+  name: string;
+  overall: number;
+  level: string;
+  projectCount: number;
+  atRiskCount: number;
+  projects: CommProjectRating[];
+}
+interface CommPerformance {
+  generatedAt: string;
+  today: string;
+  projects: any[];
+  engineers: CommEngineerRating[];
+}
+
+const COMM_LEVEL_CLS: Record<string, string> = {
+  Expert:     "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300",
+  Proficient: "bg-blue-500/20 text-blue-700 dark:text-blue-300",
+  Developing: "bg-amber-500/20 text-amber-700 dark:text-amber-300",
+  Learning:   "bg-gray-500/20 text-gray-700 dark:text-gray-300",
+};
+
+function fmtDate(d: string | null | undefined): string {
+  if (!d) return "—";
+  const x = new Date(d.length === 10 ? d + "T00:00:00" : d);
+  if (isNaN(x.getTime())) return "—";
+  return x.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function varianceText(v: number | null): { text: string; cls: string } {
+  if (v === null) return { text: "no target set", cls: "text-muted-foreground" };
+  if (v > 0) return { text: `${v} day${v === 1 ? "" : "s"} late`, cls: "text-red-600 dark:text-red-400" };
+  if (v === 0) return { text: "on target", cls: "text-green-600 dark:text-green-400" };
+  return { text: `${Math.abs(v)} day${Math.abs(v) === 1 ? "" : "s"} early`, cls: "text-green-600 dark:text-green-400" };
+}
+
+// ─── Commissioning section (top-level component) ───
+function CommissioningPerformanceSection() {
+  const [openName, setOpenName] = useState<string | null>(null);
+  const { data, isLoading } = useQuery<CommPerformance>({
+    queryKey: ["/api/commissioning-performance"],
+  });
+
+  if (isLoading) return <Skeleton className="h-40 w-full" />;
+
+  const engineers = data?.engineers ?? [];
+
+  return (
+    <Card data-testid="card-commissioning-performance">
+      <CardHeader>
+        <div className="flex gap-3">
+          <div className="w-1 rounded-full bg-indigo-500 shrink-0" />
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Wrench className="h-5 w-5" />Commissioning Delivery Performance
+            </CardTitle>
+            <CardDescription>
+              Scored from the Project Commissioning tracker: forecast completion date vs the Internal and
+              Customer target dates set in Project Tracker → Edit Assignment, plus station and checklist
+              progress. Internal 30% · Customer 30% · Stations 25% · Checklist 15%.
+              This is separate from the weekly attendance/task score above.
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {engineers.length === 0 ? (
+          <div className="py-8 text-center text-sm text-muted-foreground">
+            <CalendarClock className="mx-auto mb-2 h-8 w-8 opacity-40" />
+            <p>No commissioning data yet.</p>
+            <p className="mt-1">
+              Track a project on the{" "}
+              <Link href="/project-commissioning" className="text-primary underline">
+                Project Commissioning
+              </Link>{" "}
+              page and make sure engineers are assigned to it in the Project Tracker.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {engineers.map(e => {
+              const isOpen = openName === e.name;
+              return (
+                <div key={e.name} className="overflow-hidden rounded-lg bg-muted/40">
+                  <button
+                    type="button"
+                    onClick={() => setOpenName(isOpen ? null : e.name)}
+                    className="flex w-full items-center justify-between p-3 text-left transition-colors hover:bg-muted/70"
+                    data-testid={`button-comm-expand-${e.name}`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-500/20 text-xs font-medium">
+                        {e.name.split(/\s+/).map(p => p[0]).join("").slice(0, 2).toUpperCase()}
+                      </div>
+                      <span className="font-medium">{e.name}</span>
+                      <Badge variant="outline" className="text-xs font-normal">
+                        {e.projectCount} project{e.projectCount === 1 ? "" : "s"}
+                      </Badge>
+                      {e.atRiskCount > 0 && (
+                        <Badge className="bg-red-500/20 text-xs text-red-700 dark:text-red-300">
+                          <AlertTriangle className="mr-1 h-3 w-3" />{e.atRiskCount} at risk
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge className={COMM_LEVEL_CLS[e.level] ?? COMM_LEVEL_CLS.Learning}>
+                        {e.overall}% · {e.level}
+                      </Badge>
+                      {isOpen
+                        ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                        : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                    </div>
+                  </button>
+
+                  {isOpen && (
+                    <div className="space-y-3 border-t px-4 pb-4 pt-4">
+                      {e.projects.map(p => {
+                        const iv = varianceText(p.internalVarianceDays);
+                        const cv = varianceText(p.customerVarianceDays);
+                        return (
+                          <div key={p.projectName} className="rounded-md bg-background/60 p-3">
+                            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                              <p className="text-sm font-semibold">{p.projectName}</p>
+                              <Badge className={COMM_LEVEL_CLS[p.level] ?? COMM_LEVEL_CLS.Learning}>
+                                {p.overall}%
+                              </Badge>
+                            </div>
+                            <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+                              <div>
+                                <p className="text-muted-foreground">Forecast</p>
+                                <p className="font-medium">{fmtDate(p.forecastDate)}</p>
+                                <p className="text-muted-foreground">{p.effectiveDays} working days</p>
+                              </div>
+                              <div>
+                                <p className="text-muted-foreground">Internal Target</p>
+                                <p className="font-medium">{fmtDate(p.internalTarget)}</p>
+                                <p className={iv.cls}>{iv.text}</p>
+                              </div>
+                              <div>
+                                <p className="text-muted-foreground">Customer Target</p>
+                                <p className="font-medium">{fmtDate(p.customerTarget)}</p>
+                                <p className={cv.cls}>{cv.text}</p>
+                              </div>
+                              <div>
+                                <p className="text-muted-foreground">Progress</p>
+                                <p className="font-medium">{p.stationProgress}% stations</p>
+                                <p className="text-muted-foreground">{p.checklistProgress}% checklist</p>
+                              </div>
+                            </div>
+                            <Progress value={p.overall} className="mt-2 h-1.5" />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 interface EngineerSkill { id: string; name: string; initials: string; }
 interface EngineerTask {
@@ -248,7 +428,8 @@ export default function SkillMatrix() {
         <div className="space-y-2">
           <h1 className="text-3xl font-bold tracking-tight">Team Skill Matrix</h1>
           <p className="text-muted-foreground">
-            Real-time performance based on attendance, task completion and project activity logs.
+            Real-time performance based on attendance, task completion, project activity logs
+            and commissioning delivery against target dates.
           </p>
         </div>
 
@@ -265,6 +446,7 @@ export default function SkillMatrix() {
               <CardDescription>
                 Task Rate on this page = (completed tasks + completed projects) ÷ (assigned tasks + projects).
                 The weekly weighted score (Attendance 40% + Task Completion 40% + Activity Log 20%) is shown in the Star Performer banner above.
+                Commissioning Delivery (below) is scored separately against Internal and Customer target dates.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -297,6 +479,9 @@ export default function SkillMatrix() {
             </CardContent>
           </Card>
         )}
+
+        {/* ── COMMISSIONING DELIVERY PERFORMANCE ── */}
+        <CommissioningPerformanceSection />
 
         {/* ── Engineer task matrix table ── */}
         {isLoading ? (

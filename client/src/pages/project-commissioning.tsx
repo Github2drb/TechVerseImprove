@@ -1,7 +1,9 @@
 // client/src/pages/project-commissioning.tsx
 // Project Commissioning Tracker — replaces the old Daily Report page.
-// Station-wise electrical/mechanical constraints, trial readiness and
-// 3-phase commissioning checklists (Equipment Powerup, IO List Testing, Manual Testing).
+// Station-wise electrical/mechanical constraints, trial readiness, 3-phase
+// commissioning checklists, plus a LIVE schedule forecast and engineer rating
+// that recalculates on every edit against the Internal / Customer target dates
+// entered in the Project Tracker "Edit Assignment" dialog.
 
 import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -13,11 +15,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   ClipboardCheck, Plus, Trash2, Save, Zap, Wrench, Clock,
   PlugZap, ListChecks, Hand, CheckCircle2, Cable, X,
+  CalendarClock, Users, TrendingUp, AlertTriangle, Award, Star, Info,
 } from "lucide-react";
+import {
+  computeForecast, computeRating, formatDate, splitEngineers, namesMatch,
+  type CalcRow, type CalcPhase,
+} from "@/lib/commissioning-calc";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -65,6 +73,15 @@ interface CommissioningProject {
   updatedBy?: string;
 }
 
+interface WeeklyAssignment {
+  id: string;
+  engineerName: string;
+  projectName: string;
+  currentStatus?: string;
+  internalTarget?: string;
+  customerTarget?: string;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Status metadata
 // ─────────────────────────────────────────────────────────────────────────────
@@ -80,6 +97,13 @@ const STATUS_ORDER: StationStatus[] = [
   "not_started", "electrical_pending", "mechanical_pending",
   "ready_for_trials", "trials_in_progress", "completed",
 ];
+
+const LEVEL_CLS: Record<string, string> = {
+  Expert:     "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300",
+  Proficient: "bg-blue-500/20 text-blue-700 dark:text-blue-300",
+  Developing: "bg-amber-500/20 text-amber-700 dark:text-amber-300",
+  Learning:   "bg-gray-500/20 text-gray-700 dark:text-gray-300",
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Default templates (editable per project after loading)
@@ -374,7 +398,7 @@ function StationTable({ title, subtitle, icon, rows, onPatchRow, onAddRow, onDel
                     <Input
                       value={row.trialTime}
                       onChange={e => onPatchRow(row.id, { trialTime: e.target.value })}
-                      placeholder="e.g. 2 days"
+                      placeholder="2 days / 1 week / date"
                       className="h-8 text-sm"
                     />
                   </td>
@@ -415,9 +439,44 @@ function StationTable({ title, subtitle, icon, rows, onPatchRow, onAddRow, onDel
         </div>
         <p className="mt-2 text-[11px] text-muted-foreground">
           * Time required to take trials after mechanical and electrical completion.
+          Accepts "2", "2 days", "1 week", "1 month", "16 hrs" or an absolute date (2026-09-14 / 14-09-2026).
         </p>
       </CardContent>
     </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Variance pill (top-level component)
+// ─────────────────────────────────────────────────────────────────────────────
+function VariancePill({ label, target, varianceDays, score }: {
+  label: string; target: string | null; varianceDays: number | null; score: number | null;
+}) {
+  if (!target || varianceDays === null) {
+    return (
+      <div className="rounded-lg border border-dashed p-3">
+        <p className="text-xs font-medium text-muted-foreground">{label}</p>
+        <p className="mt-1 text-sm text-muted-foreground">Not set</p>
+        <p className="text-[11px] text-muted-foreground">
+          Enter it in Project Tracker → Edit Assignment
+        </p>
+      </div>
+    );
+  }
+  const late = varianceDays > 0;
+  return (
+    <div className={`rounded-lg border p-3 ${late
+      ? "border-red-300 bg-red-500/5 dark:border-red-900/60"
+      : "border-green-300 bg-green-500/5 dark:border-green-900/60"}`}>
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <p className="mt-0.5 text-sm font-semibold">{formatDate(target)}</p>
+      <p className={`text-xs font-medium ${late ? "text-red-600 dark:text-red-400" : "text-green-600 dark:text-green-400"}`}>
+        {late
+          ? `${varianceDays} working day${varianceDays === 1 ? "" : "s"} LATE`
+          : varianceDays === 0 ? "On target" : `${Math.abs(varianceDays)} day${Math.abs(varianceDays) === 1 ? "" : "s"} early`}
+      </p>
+      <p className="text-[11px] text-muted-foreground">Score {score}/100</p>
+    </div>
   );
 }
 
@@ -439,6 +498,11 @@ export default function ProjectCommissioning() {
   // Tracked projects list
   const { data: tracked = [] } = useQuery<string[]>({
     queryKey: ["/api/commissioning-tracker"],
+  });
+
+  // Weekly assignments — source of Internal / Customer target dates + engineers
+  const { data: assignments = [] } = useQuery<WeeklyAssignment[]>({
+    queryKey: ["/api/weekly-assignments"],
   });
 
   // All known project names (for "track new project" dropdown)
@@ -542,6 +606,30 @@ export default function ProjectCommissioning() {
         p.id !== phaseId ? p : { ...p, items: p.items.filter(i => i.id !== itemId) }),
     }));
 
+  // ── Assignment context for the selected project ────────────────────────
+  const projectContext = useMemo(() => {
+    if (!selected) return { engineers: [] as string[], internalTarget: null as string | null, customerTarget: null as string | null };
+    const key = selected.trim().toLowerCase();
+    const mine = assignments.filter(a => {
+      const an = (a.projectName ?? "").trim().toLowerCase();
+      return an === key || an.includes(key) || key.includes(an);
+    });
+    const engineers = Array.from(new Set(mine.flatMap(a => splitEngineers(a.engineerName))));
+    const internalTarget = mine.map(a => (a.internalTarget ?? "").trim()).filter(Boolean).sort().pop() ?? null;
+    const customerTarget = mine.map(a => (a.customerTarget ?? "").trim()).filter(Boolean).sort().pop() ?? null;
+    return { engineers, internalTarget, customerTarget };
+  }, [assignments, selected]);
+
+  // ── LIVE forecast + rating — recalculates on every keystroke/toggle ─────
+  const analysis = useMemo(() => {
+    if (!draft) return null;
+    const rows: CalcRow[] = [...draft.stations, ...draft.commInterface];
+    const phases: CalcPhase[] = draft.phases;
+    const forecast = computeForecast(rows, phases, projectContext.engineers.length, new Date());
+    const rating = computeRating(forecast, projectContext.internalTarget, projectContext.customerTarget);
+    return { forecast, rating };
+  }, [draft, projectContext]);
+
   // ── Mutations ──────────────────────────────────────────────────────────
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -556,7 +644,8 @@ export default function ProjectCommissioning() {
       setDirty(false);
       queryClient.invalidateQueries({ queryKey: ["/api/commissioning-tracker"] });
       queryClient.invalidateQueries({ queryKey: [projectUrl] });
-      toast({ title: "Saved", description: `Commissioning data for "${selected}" updated.` });
+      queryClient.invalidateQueries({ queryKey: ["/api/commissioning-performance"] });
+      toast({ title: "Saved", description: `Commissioning data for "${selected}" updated. Skill Matrix rating refreshed.` });
     },
     onError: (e: any) =>
       toast({ title: "Save failed", description: e?.message ?? "Unknown error", variant: "destructive" }),
@@ -571,6 +660,7 @@ export default function ProjectCommissioning() {
       setDraft(null);
       setDirty(false);
       queryClient.invalidateQueries({ queryKey: ["/api/commissioning-tracker"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/commissioning-performance"] });
     },
     onError: (e: any) =>
       toast({ title: "Delete failed", description: e?.message ?? "Admin only", variant: "destructive" }),
@@ -594,20 +684,6 @@ export default function ProjectCommissioning() {
     setNewProject("");
     selectProject(name);
   };
-
-  // ── Summary numbers ────────────────────────────────────────────────────
-  const summary = useMemo(() => {
-    if (!draft) return null;
-    const all = [...draft.stations, ...draft.commInterface];
-    const completed = all.filter(r => r.status === "completed").length;
-    const ready = all.filter(r => r.status === "ready_for_trials" || r.status === "trials_in_progress").length;
-    const constrained = all.filter(
-      r => r.electricalConstraint.trim() !== "" || r.mechanicalConstraint.trim() !== ""
-    ).length;
-    const checkTotal = draft.phases.reduce((n, p) => n + p.items.length, 0);
-    const checkDone = draft.phases.reduce((n, p) => n + p.items.filter(i => i.done).length, 0);
-    return { total: all.length, completed, ready, constrained, checkTotal, checkDone };
-  }, [draft]);
 
   return (
     <div className="min-h-screen bg-background" data-testid="page-project-commissioning">
@@ -701,33 +777,171 @@ export default function ProjectCommissioning() {
           </div>
         )}
 
-        {selected && draft && (
+        {selected && draft && analysis && (
           <>
+            {/* ── LIVE SCHEDULE FORECAST ─────────────────────────────── */}
+            <Card className="border-l-4 border-l-primary">
+              <CardHeader className="pb-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <CalendarClock className="h-5 w-5 text-primary" />
+                    Schedule Forecast
+                  </CardTitle>
+                  <Badge variant="outline" className="text-[11px]">
+                    Live · recalculates as you type
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Based on today ({formatDate(new Date())}), pending "Time to Trials" estimates and the
+                  engineers assigned to this project. Work week Mon–Sat (Sundays skipped).
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                  <div className="rounded-lg border p-3">
+                    <p className="text-xs text-muted-foreground">Pending Work</p>
+                    <p className="text-2xl font-bold">{analysis.forecast.totalPendingDays}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      man-days across {analysis.forecast.pendingRows} open item{analysis.forecast.pendingRows === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border p-3">
+                    <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <Users className="h-3 w-3" /> Engineers
+                    </p>
+                    <p className="text-2xl font-bold">{projectContext.engineers.length || 1}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {projectContext.engineers.length === 0 ? "none assigned — assuming 1" : "from Project Tracker"}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border p-3">
+                    <p className="text-xs text-muted-foreground">Days Required</p>
+                    <p className="text-2xl font-bold text-primary">{analysis.forecast.effectiveDays}</p>
+                    <p className="text-[11px] text-muted-foreground">working days from today</p>
+                  </div>
+                  <div className="rounded-lg border border-primary/40 bg-primary/5 p-3">
+                    <p className="text-xs text-muted-foreground">Approx. Completion</p>
+                    <p className="text-lg font-bold text-primary">{formatDate(analysis.forecast.forecastDate)}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {analysis.forecast.completedRows}/{analysis.forecast.totalRows} items done
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <VariancePill
+                    label="Internal Target Date"
+                    target={analysis.rating.internal.target}
+                    varianceDays={analysis.rating.internal.varianceDays}
+                    score={analysis.rating.internal.score}
+                  />
+                  <VariancePill
+                    label="Customer Target Date"
+                    target={analysis.rating.customer.target}
+                    varianceDays={analysis.rating.customer.varianceDays}
+                    score={analysis.rating.customer.score}
+                  />
+                </div>
+
+                {analysis.forecast.missingEstimates > 0 && (
+                  <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-500/10 p-3 text-xs dark:border-amber-900/60">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
+                    <p>
+                      <span className="font-semibold">{analysis.forecast.missingEstimates}</span> pending
+                      item{analysis.forecast.missingEstimates === 1 ? " has" : "s have"} no "Time to Trials"
+                      estimate — each assumed as 1 day. Fill them in for an accurate forecast.
+                    </p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* ── ENGINEER RATING ────────────────────────────────────── */}
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <TrendingUp className="h-5 w-5 text-primary" />
+                    Engineer Performance — this project
+                  </CardTitle>
+                  <Badge className={`${LEVEL_CLS[analysis.rating.level]} text-sm`}>
+                    {analysis.rating.level === "Expert" ? <Award className="mr-1 h-3.5 w-3.5" /> : <Star className="mr-1 h-3.5 w-3.5" />}
+                    {analysis.rating.overall}% · {analysis.rating.level}
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Saved ratings feed the "Commissioning Delivery" section of the Skill Matrix page.
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  {analysis.rating.components.map(c => (
+                    <div key={c.key} className="flex items-center gap-3">
+                      <span className="w-36 flex-shrink-0 text-xs text-muted-foreground">
+                        {c.label} <span className="opacity-60">({Math.round(c.weight * 100)}%)</span>
+                      </span>
+                      <Progress value={c.score} className="h-2 flex-1" />
+                      <span className="w-12 flex-shrink-0 text-right text-xs font-semibold">{c.score}%</span>
+                    </div>
+                  ))}
+                </div>
+
+                {projectContext.engineers.length > 0 ? (
+                  <div>
+                    <p className="mb-1.5 text-xs font-medium text-muted-foreground">
+                      ENGINEERS RATED ON THIS PROJECT ({projectContext.engineers.length})
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {projectContext.engineers.map(n => (
+                        <Badge key={n} className={LEVEL_CLS[analysis.rating.level]}>
+                          {n} · {analysis.rating.overall}%
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-start gap-2 rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+                    <Info className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                    <p>
+                      No engineers are assigned to this project in the Project Tracker, so no one can be
+                      rated. Assign engineers there and set the Internal / Customer target dates in the
+                      Edit Assignment dialog.
+                    </p>
+                  </div>
+                )}
+
+                {analysis.rating.components.length === 2 && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Internal and Customer target dates are not set for this project, so the rating uses
+                    only Station Progress and Checklist, reweighted to 100%.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
             {/* Summary chips */}
-            {summary && (
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-                <Card><CardContent className="p-3 text-center">
-                  <p className="text-2xl font-bold">{summary.total}</p>
-                  <p className="text-xs text-muted-foreground">Total Line Items</p>
-                </CardContent></Card>
-                <Card><CardContent className="p-3 text-center">
-                  <p className="text-2xl font-bold text-amber-600">{summary.constrained}</p>
-                  <p className="text-xs text-muted-foreground">With Constraints</p>
-                </CardContent></Card>
-                <Card><CardContent className="p-3 text-center">
-                  <p className="text-2xl font-bold text-blue-600">{summary.ready}</p>
-                  <p className="text-xs text-muted-foreground">Ready / In Trials</p>
-                </CardContent></Card>
-                <Card><CardContent className="p-3 text-center">
-                  <p className="text-2xl font-bold text-green-600">{summary.completed}</p>
-                  <p className="text-xs text-muted-foreground">Completed</p>
-                </CardContent></Card>
-                <Card><CardContent className="p-3 text-center">
-                  <p className="text-2xl font-bold">{summary.checkDone}/{summary.checkTotal}</p>
-                  <p className="text-xs text-muted-foreground">Checklist Items Done</p>
-                </CardContent></Card>
-              </div>
-            )}
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+              <Card><CardContent className="p-3 text-center">
+                <p className="text-2xl font-bold">{analysis.forecast.totalRows}</p>
+                <p className="text-xs text-muted-foreground">Total Line Items</p>
+              </CardContent></Card>
+              <Card><CardContent className="p-3 text-center">
+                <p className="text-2xl font-bold text-amber-600">{analysis.forecast.constrainedRows}</p>
+                <p className="text-xs text-muted-foreground">With Constraints</p>
+              </CardContent></Card>
+              <Card><CardContent className="p-3 text-center">
+                <p className="text-2xl font-bold text-blue-600">{analysis.forecast.pendingRows}</p>
+                <p className="text-xs text-muted-foreground">Still Pending</p>
+              </CardContent></Card>
+              <Card><CardContent className="p-3 text-center">
+                <p className="text-2xl font-bold text-green-600">{analysis.forecast.completedRows}</p>
+                <p className="text-xs text-muted-foreground">Completed</p>
+              </CardContent></Card>
+              <Card><CardContent className="p-3 text-center">
+                <p className="text-2xl font-bold">{analysis.forecast.checklistDone}/{analysis.forecast.checklistTotal}</p>
+                <p className="text-xs text-muted-foreground">Checklist Items Done</p>
+              </CardContent></Card>
+            </div>
 
             {/* Commissioning phase checklists */}
             <div className="grid gap-4 md:grid-cols-3">
@@ -775,7 +989,14 @@ export default function ProjectCommissioning() {
       {dirty && draft && (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 backdrop-blur">
           <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 md:px-6">
-            <p className="text-sm text-muted-foreground">Unsaved changes for “{selected}”</p>
+            <p className="text-sm text-muted-foreground">
+              Unsaved changes for “{selected}”
+              {analysis && (
+                <span className="ml-2 hidden sm:inline">
+                  · forecast {formatDate(analysis.forecast.forecastDate)} · rating {analysis.rating.overall}%
+                </span>
+              )}
+            </p>
             <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
               <Save className="mr-2 h-4 w-4" />
               {saveMutation.isPending ? "Saving…" : "Save Changes"}
