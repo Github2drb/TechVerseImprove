@@ -57,11 +57,11 @@ const navigationCards: NavigationCard[] = [
     gradient: "bg-gradient-to-br from-violet-500 to-violet-600",
   },
   {
-    id: "reports",
-    title: "Daily Reports",
-    description: "View all engineers' completed activities and daily task summaries.",
-    icon: "bar-chart",
-    href: "/engineer-reports",
+    id: "project-commissioning",
+    title: "Project Commissioning",
+    description: "Station-wise electrical & mechanical constraints, trial readiness and commissioning checklists.",
+    icon: "clipboard-list",
+    href: "/project-commissioning",
     status: "active",
     gradient: "bg-gradient-to-br from-indigo-500 to-indigo-600",
   },
@@ -192,17 +192,17 @@ export default function Dashboard() {
         </div>
 
         <ManagerOverview />
-        
+
         {visibleWidgets.includes("navigation") && renderWidget("navigation")}
 
        <NoticeBoardWidget />
-        
+
         <EngineerWorkspace />
 
         <TodayActivity />
 
         <EngineerDailyTasks teamMembers={teamMembers} isLoading={teamLoading} />
-        
+
         {visibleWidgets.filter(w => w !== "navigation").map((widgetId) => renderWidget(widgetId))}
       </main>
 
@@ -213,22 +213,22 @@ export default function Dashboard() {
               2024 DRB TechVerse. All rights reserved.
             </p>
             <div className="flex gap-4">
-              <a 
-                href="#" 
+              <a
+                href="#"
                 className="text-sm text-muted-foreground hover:text-foreground transition-colors"
                 data-testid="link-privacy"
               >
                 Privacy
               </a>
-              <a 
-                href="#" 
+              <a
+                href="#"
                 className="text-sm text-muted-foreground hover:text-foreground transition-colors"
                 data-testid="link-terms"
               >
                 Terms
               </a>
-              <a 
-                href="#" 
+              <a
+                href="#"
                 className="text-sm text-muted-foreground hover:text-foreground transition-colors"
                 data-testid="link-contact"
               >
