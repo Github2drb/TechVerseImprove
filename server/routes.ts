@@ -1,8 +1,6 @@
 // server/routes.ts — DRB TechVerse — CLEAN VERSION
 import { Router, Request, Response } from "express";
-import { randomUUID } from "crypto";
 import type { Server } from "http";
-import bcrypt from "bcryptjs";
 import {
   getProjectData, saveProjectAssignment, updateProjectAssignment, deleteProjectAssignment,
   getProjectActivities, upsertProjectActivity, getAnalyticsSummary,
@@ -11,32 +9,6 @@ import {
   readJsonFile, writeJsonFile,
 } from "./github";
 import webpush from "web-push";
-
-// SECURITY (Snyk: hardcoded password): default credentials now come from env.
-// Set DEFAULT_ADMIN_PASSWORD / DEFAULT_ENGINEER_PASSWORD in Render env vars to
-// keep the "auto-create missing accounts" behavior working. If unset, a random
-// unguessable value is used so no committed literal can ever be a password.
-const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD || randomUUID().replace(/-/g, "").slice(0, 16);
-const DEFAULT_ENGINEER_PASSWORD = process.env.DEFAULT_ENGINEER_PASSWORD || randomUUID().replace(/-/g, "").slice(0, 16);
-// SECURITY (Snyk: insecure randomness): IDs are generated with crypto, not Math.random().
-const secureId = (len: number) => randomUUID().replace(/-/g, "").slice(0, len);
-
-const loginAttempts = new Map<string, { count: number; lastAttempt: number }>();
-function checkRateLimit(ip: string): boolean {
-  const now = Date.now();
-  const record = loginAttempts.get(ip);
-  if (!record) { loginAttempts.set(ip, { count: 1, lastAttempt: now }); return true; }
-  // Reset after 15 minutes
-  if (now - record.lastAttempt > 15 * 60 * 1000) {
-    loginAttempts.set(ip, { count: 1, lastAttempt: now }); return true;
-  }
-  if (record.count >= 5) return false; // Block after 5 attempts
-  record.count++; record.lastAttempt = now; return true;
-}
-function sanitizeInput(s: unknown): string {
-  if (typeof s !== "string") return "";
-  return s.replace(/[<>&"']/g, "").trim().slice(0, 200);
-}
 
 // ── VAPID config (module level) ───────────────────────────────────────────────
 if (process.env.VAPID_PUBLIC_KEY) {
@@ -50,10 +22,7 @@ if (process.env.VAPID_PUBLIC_KEY) {
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 interface EngineerCredential {
   id: string; username: string; name: string; password: string;
-  role: "admin"|"engineer"|"stores"; company?: string;
-  mobile?: string;
-  email?: string;
-  callmebotApiKey?: string;
+  role: "admin"|"engineer"; company?: string;
   isActive: boolean; createdAt: string; lastLogin?: string;
 }
 interface CredFile { engineers: EngineerCredential[]; lastUpdated: string; }
@@ -137,103 +106,6 @@ function isAdmin(req: Request): boolean {
     return d?.role === "admin" || d?.username?.toLowerCase() === "admin";
   } catch { return false; }
 }
-function isStores(req: Request): boolean {
-  try {
-    const h = req.headers["x-admin-auth"];
-    if (!h) return false;
-    const d = JSON.parse(Buffer.from(h as string, "base64").toString("utf-8"));
-    return ["admin","stores"].includes(d?.role) || d?.username?.toLowerCase() === "admin";
-  } catch { return false; }
-}
-
-function daysBetweenServer(from: string, to: string): number {
-  const a = new Date(from); a.setHours(0,0,0,0);
-  const b = new Date(to);   b.setHours(0,0,0,0);
-  return Math.round((b.getTime() - a.getTime()) / 86400000);
-}
-
-async function sendWhatsApp(mobile: string, apiKey: string, message: string): Promise<void> {
-  try {
-    const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(mobile)}&text=${encodeURIComponent(message)}&apikey=${encodeURIComponent(apiKey)}`;
-    await fetch(url);
-  } catch (e: any) { console.error("[sendWhatsApp]", e.message); }
-}
-
-async function sendEmail(to: string, subject: string, html: string): Promise<void> {
-  if (!process.env.SMTP_USER || !process.env.SMTP_PASS) return;
-  try {
-    const nodemailer = await import("nodemailer");
-    const t = nodemailer.default.createTransport({
-      host: process.env.SMTP_HOST || "smtp.gmail.com",
-      port: parseInt(process.env.SMTP_PORT || "587"),
-      secure: false,
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-    });
-    await t.sendMail({ from: `"DRB TechVerse" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`, to, subject, html });
-  } catch (e: any) { console.error("[sendEmail]", e.message); }
-}
-
-async function getProjectEngineers(projectName: string): Promise<EngineerCredential[]> {
-  try {
-    const [waFile, authFile] = await Promise.all([
-      readJsonFile<WAFile>("weekly-assignments.json"),
-      readJsonFile<CredFile>("engineers_auth.json"),
-    ]);
-    const pnLower = projectName.trim().toLowerCase();
-    const engineerNames = new Set<string>();
-    (waFile?.assignments ?? [])
-      .filter(a => a.projectName.trim().toLowerCase() === pnLower)
-      .forEach(a => a.engineerName.split(",").forEach(n => engineerNames.add(n.trim().toLowerCase())));
-    return (authFile?.engineers ?? []).filter(e =>
-      engineerNames.has(e.name.toLowerCase()) || engineerNames.has(e.username.toLowerCase())
-    );
-  } catch { return []; }
-}
-
-async function notifyMaterialReceived(projectName: string, materialName: string): Promise<void> {
-  const engineers = await getProjectEngineers(projectName);
-  const dateStr = new Date().toLocaleDateString("en-IN", { day:"numeric", month:"long", year:"numeric" });
-  const waMsg = `✅ Material Received\n"${materialName}" for project ${projectName} has been marked as Received on ${dateStr}.\nLogin: https://drbtechverse.in`;
-  const html = `<div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden"><div style="background:#16a34a;color:white;padding:16px 20px"><h2 style="margin:0">✅ Material Received</h2></div><div style="padding:20px"><p><b>${materialName}</b> for project <b>${projectName}</b> has been marked as <b>Received</b>.</p><p>Date: ${dateStr}</p><a href="https://drbtechverse.in/material-tracker" style="display:inline-block;background:#16a34a;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;margin-top:12px">View Material Tracker</a></div></div>`;
-  await Promise.allSettled([
-    ...engineers.map(eng => sendPushToEngineer(eng.name, { title:"Material Received", body:`${materialName} — ${projectName}`, url:"/material-tracker", tag:"material-received" })),
-    ...engineers.map(async eng => {
-      if (eng.email) sendEmail(eng.email, `✅ Material Received — ${projectName}`, html).catch(console.error);
-      if (eng.mobile && eng.callmebotApiKey) sendWhatsApp(eng.mobile, eng.callmebotApiKey, waMsg).catch(console.error);
-    }),
-  ]);
-}
-
-async function checkAndSendMaterialAlerts(projectName: string, materials: Array<{name?:string;prApproved?:string;poCreated?:string;poApproved?:string;targetReceipt?:string;receiptStatus?:string}>): Promise<void> {
-  const today = new Date().toISOString().split("T")[0];
-  const issues: string[] = [];
-  for (const m of materials) {
-    if (!m.name) continue;
-    if (m.prApproved && !m.poCreated) {
-      const d = daysBetweenServer(m.prApproved, today);
-      if (d > 3) issues.push(`"${m.name}": PO not raised (${d}d since PR Approved)`);
-    }
-    if (m.poCreated && !m.poApproved) {
-      const d = daysBetweenServer(m.poCreated, today);
-      if (d > 3) issues.push(`"${m.name}": PO not approved (${d}d since PO Created)`);
-    }
-    if (m.targetReceipt && m.targetReceipt < today && (!m.receiptStatus || m.receiptStatus === "Not Received")) {
-      const d = daysBetweenServer(m.targetReceipt, today);
-      issues.push(`"${m.name}": Receipt overdue by ${d} day(s) (Target: ${m.targetReceipt})`);
-    }
-  }
-  if (issues.length === 0) return;
-  const engineers = await getProjectEngineers(projectName);
-  if (engineers.length === 0) return;
-  const subject = `⚠️ Material Alert — ${projectName}`;
-  const listItems = issues.map(i => `<li style="margin-bottom:6px">${i}</li>`).join("");
-  const html = `<div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden"><div style="background:#d97706;color:white;padding:16px 20px"><h2 style="margin:0">⚠️ Material Alert</h2></div><div style="padding:20px"><p><b>Project:</b> ${projectName}</p><ul style="padding-left:20px">${listItems}</ul><a href="https://drbtechverse.in/material-tracker" style="display:inline-block;background:#d97706;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;margin-top:12px">Open Material Tracker</a></div></div>`;
-  const waMsg = `⚠️ Material Alert — ${projectName}\n${issues.map(i=>`• ${i}`).join("\n")}`;
-  await Promise.allSettled(engineers.map(async eng => {
-    if (eng.email) sendEmail(eng.email, subject, html).catch(console.error);
-    if (eng.mobile && eng.callmebotApiKey) sendWhatsApp(eng.mobile, eng.callmebotApiKey, waMsg).catch(console.error);
-  }));
-}
 function projKey(name: string): string {
   const m = name.trim().match(/^([A-Z0-9]{1,4}-[A-Z0-9]{1,5}-\d{4,6})/i);
   return m ? m[1].toUpperCase() : name.trim().toUpperCase();
@@ -315,12 +187,12 @@ async function syncToDailyActivities(a: WeeklyAssignment): Promise<void> {
         const idx = f.engineerDailyData.findIndex(e => norm(e.engineerName) === norm(eng) && e.date === date);
         if (idx > -1) {
           if (!f.engineerDailyData[idx].targetTasks.some(t => t.text.includes(a.projectName))) {
-            f.engineerDailyData[idx].targetTasks.push({ id: `wa-${Date.now()}-${secureId(4)}`, text });
+            f.engineerDailyData[idx].targetTasks.push({ id: `wa-${Date.now()}-${Math.random().toString(36).substr(2,4)}`, text });
             changed = true;
           }
         } else {
           f.engineerDailyData.push({ engineerName: eng, date,
-            targetTasks: [{ id: `wa-${Date.now()}-${secureId(4)}`, text }],
+            targetTasks: [{ id: `wa-${Date.now()}-${Math.random().toString(36).substr(2,4)}`, text }],
             completedActivities: [] });
           changed = true;
         }
@@ -377,27 +249,13 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
   // ── AUTH ──────────────────────────────────────────────────────────────────
   r.post("/auth/login", async (req, res) => {
     try {
-      const ip = req.ip || req.socket.remoteAddress || "unknown";
-      if (!checkRateLimit(ip)) {
-        return res.status(429).json({ message: "Too many login attempts. Try again in 15 minutes." });
-      }
       const { username, password } = req.body;
       if (!username || !password) return res.status(400).json({ message: "Username and password required" });
       const f = await readJsonFile<CredFile>("engineers_auth.json");
       const list: EngineerCredential[] = f?.engineers ?? [];
       if (!list.find(e => e.username === "admin"))
-        list.push({ id:"admin-1", username:"admin", name:"Admin", password:DEFAULT_ADMIN_PASSWORD, role:"admin", isActive:true, createdAt:new Date().toISOString() });
-      const username_clean = sanitizeInput(username);
-      const password_clean = typeof password === "string" ? password.slice(0, 200) : "";
-      let found: EngineerCredential | undefined;
-      for (const e of list) {
-        if (e.username.toLowerCase() !== username_clean.toLowerCase()) continue;
-        if (e.isActive === false) continue;
-        const match = e.password.startsWith("$2")
-          ? await bcrypt.compare(password_clean, e.password)
-          : e.password === password_clean;
-        if (match) { found = e; break; }
-      }
+        list.push({ id:"admin-1", username:"admin", name:"Admin", password:"admin@drb", role:"admin", isActive:true, createdAt:new Date().toISOString() });
+      const found = list.find(e => e.username.toLowerCase()===username.toLowerCase() && e.password===password && e.isActive!==false);
       if (!found) return res.status(401).json({ message: "Invalid credentials" });
       found.lastLogin = new Date().toISOString();
       if (f) { f.lastUpdated=new Date().toISOString(); writeJsonFile("engineers_auth.json",f,"Update lastLogin").catch(()=>{}); }
@@ -422,7 +280,7 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
       if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
       const f = (await readJsonFile<CredFile>("engineers_auth.json"))??{engineers:[],lastUpdated:""};
       const eng: EngineerCredential = { id:req.body.id||`eng-${Date.now()}`, username:req.body.username,
-        name:req.body.name, password: await bcrypt.hash(req.body.password || DEFAULT_ENGINEER_PASSWORD, 10), role:req.body.role||"engineer",
+        name:req.body.name, password:req.body.password||"drb@123", role:req.body.role||"engineer",
         company:req.body.company, isActive:req.body.isActive!==false, createdAt:new Date().toISOString() };
       f.engineers.push(eng); f.lastUpdated=new Date().toISOString();
       await writeJsonFile("engineers_auth.json",f,`Add engineer: ${eng.username}`);
@@ -460,9 +318,9 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
       const f=ex??{engineers:[],lastUpdated:""}; const existing=new Set(f.engineers.map(e=>e.username.toLowerCase())); let created=0;
       for (const eng of (ml?.engineers??[])) {
         const u=norm(eng.name).replace(/\s+/g,".");
-        if (!existing.has(u)) { f.engineers.push({id:eng.id,name:eng.name,username:u,password:DEFAULT_ENGINEER_PASSWORD,role:"engineer",company:eng.name.match(/\(([^)]+)\)/)?.[1],isActive:true,createdAt:new Date().toISOString()}); created++; }
+        if (!existing.has(u)) { f.engineers.push({id:eng.id,name:eng.name,username:u,password:"drb@123",role:"engineer",company:eng.name.match(/\(([^)]+)\)/)?.[1],isActive:true,createdAt:new Date().toISOString()}); created++; }
       }
-      if (!existing.has("admin")) { f.engineers.push({id:"admin-1",name:"Admin",username:"admin",password:DEFAULT_ADMIN_PASSWORD,role:"admin",isActive:true,createdAt:new Date().toISOString()}); created++; }
+      if (!existing.has("admin")) { f.engineers.push({id:"admin-1",name:"Admin",username:"admin",password:"admin@drb",role:"admin",isActive:true,createdAt:new Date().toISOString()}); created++; }
       f.lastUpdated=new Date().toISOString(); await writeJsonFile("engineers_auth.json",f,"Initialize credentials");
       res.json({success:true,created});
     } catch (e: any) { res.status(500).json({ error: e.message }); }
@@ -475,7 +333,7 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
       if (!f) return res.status(404).json({message:"Not found"});
       const eng=f.engineers.find(e=>e.username.toLowerCase()===username.toLowerCase());
       if (!eng) return res.status(404).json({message:"Engineer not found"});
-      eng.password = await bcrypt.hash(newPassword, 10); f.lastUpdated=new Date().toISOString();
+      eng.password=newPassword; f.lastUpdated=new Date().toISOString();
       await writeJsonFile("engineers_auth.json",f,`Reset password: ${username}`);
       res.json({success:true});
     } catch (e: any) { res.status(500).json({ error: e.message }); }
@@ -563,7 +421,7 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
     try {
       const {engineer}=req.params; const {task,date}=req.body;
       const f=(await readJsonFile<DailyFile>("daily-activities.json"))??{engineerDailyData:[]};
-      const id=`t-${Date.now()}-${secureId(5)}`;
+      const id=`t-${Date.now()}-${Math.random().toString(36).substr(2,5)}`;
       const i=f.engineerDailyData.findIndex(e=>e.engineerName===engineer&&e.date===date);
       if (i>-1) f.engineerDailyData[i].targetTasks.push({id,text:task});
       else f.engineerDailyData.push({engineerName:engineer,date,targetTasks:[{id,text:task}],completedActivities:[]});
@@ -584,7 +442,7 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
     try {
       const {engineer}=req.params; const {activity,date}=req.body;
       const f=(await readJsonFile<DailyFile>("daily-activities.json"))??{engineerDailyData:[]};
-      const id=`a-${Date.now()}-${secureId(5)}`;
+      const id=`a-${Date.now()}-${Math.random().toString(36).substr(2,5)}`;
       const i=f.engineerDailyData.findIndex(e=>e.engineerName===engineer&&e.date===date);
       if (i>-1) f.engineerDailyData[i].completedActivities.push({id,text:activity});
       else f.engineerDailyData.push({engineerName:engineer,date,targetTasks:[],completedActivities:[{id,text:activity}]});
@@ -1152,9 +1010,7 @@ interface MaterialRow {
   id: string; name: string; qty: string; unit: string;
   bomDate?: string; prCreated?: string; prApproved?: string;
   poCreated?: string; poApproved?: string;
-  targetReceipt?: string; actualReceipt?: string;
-  receiptStatus?: "Not Received"|"Partially Received"|"Received";
-  notes?: string;
+  targetReceipt?: string; actualReceipt?: string; notes?: string;
 }
 interface ProjectMaterialData {
   projectName: string; bomPath: string; materials: MaterialRow[];
@@ -1183,57 +1039,23 @@ r.get("/material-tracker/:project", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-// Save data for one project (admin: all fields; stores: receipt fields only handled via PATCH)
+// Save data for one project
 r.post("/material-tracker/:project", async (req, res) => {
   try {
     if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
     const f = (await readJsonFile<MaterialTrackerFile>("material-tracker.json")) ?? { projects: {}, lastUpdated: "" };
     const key = matKey(req.params.project);
-    const prevMaterials: MaterialRow[] = f.projects[key]?.materials ?? [];
-    const newMaterials: MaterialRow[] = Array.isArray(req.body.materials) ? req.body.materials : [];
     f.projects[key] = {
       projectName: req.body.projectName || req.params.project,
       bomPath: req.body.bomPath || "",
-      materials: newMaterials,
+      materials: Array.isArray(req.body.materials) ? req.body.materials : [],
     };
     f.lastUpdated = new Date().toISOString();
     await writeJsonFile("material-tracker.json", f, `Material tracker update: ${req.params.project}`);
-    // Notify on newly-Received items
-    const prevMap = new Map(prevMaterials.map(m => [m.id, m]));
-    for (const m of newMaterials) {
-      if (m.receiptStatus === "Received" && prevMap.get(m.id)?.receiptStatus !== "Received") {
-        notifyMaterialReceived(req.body.projectName || req.params.project, m.name).catch(console.error);
-      }
-    }
-    // Auto-alert for PO missing / receipt overdue — background
-    checkAndSendMaterialAlerts(req.body.projectName || req.params.project, newMaterials).catch(console.error);
     res.json({ success: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-// Stores: update only receipt fields for a specific material
-r.patch("/material-tracker/:project/receipt", async (req, res) => {
-  try {
-    if (!isStores(req)) return res.status(403).json({ message: "Admin or Stores only" });
-    const { materialId, actualReceipt, receiptStatus } = req.body;
-    if (!materialId) return res.status(400).json({ message: "materialId required" });
-    const f = await readJsonFile<MaterialTrackerFile>("material-tracker.json");
-    if (!f) return res.status(404).json({ message: "Not found" });
-    const proj = f.projects[matKey(req.params.project)];
-    if (!proj) return res.status(404).json({ message: "Project not found" });
-    const mat = proj.materials.find(m => m.id === materialId);
-    if (!mat) return res.status(404).json({ message: "Material not found" });
-    const wasReceived = mat.receiptStatus === "Received";
-    if (actualReceipt !== undefined) mat.actualReceipt = actualReceipt;
-    if (receiptStatus !== undefined) mat.receiptStatus = receiptStatus as any;
-    f.lastUpdated = new Date().toISOString();
-    await writeJsonFile("material-tracker.json", f, `Receipt update: ${proj.projectName} — ${mat.name}`);
-    if (receiptStatus === "Received" && !wasReceived) {
-      notifyMaterialReceived(proj.projectName, mat.name).catch(console.error);
-    }
-    res.json({ success: true, material: mat });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
-});
 // Delete a project's material tracking
 r.delete("/material-tracker/:project", async (req, res) => {
   try {
@@ -1247,43 +1069,79 @@ r.delete("/material-tracker/:project", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
- // ── ADD TO server/routes.ts — paste before the HEALTH section ────────────────
-// Offline software track (PLC/HMI/Logic Test) — independent status per project,
-// parallel to the main 15-phase roadmap. Persists to project-offline-status.json.
+  // ── COMMISSIONING TRACKER — station-wise project commissioning detail ────
+  interface CommStationRow {
+    id: string; label: string; description: string;
+    electricalConstraint: string; mechanicalConstraint: string;
+    trialTime: string; status: string; notes: string;
+  }
+  interface CommChecklistItem { id: string; text: string; done: boolean; doneBy?: string; doneAt?: string; }
+  interface CommPhase { id: string; title: string; subtitle: string; items: CommChecklistItem[]; }
+  interface CommissioningProjectData {
+    projectName: string;
+    stations: CommStationRow[];
+    commInterface: CommStationRow[];
+    phases: CommPhase[];
+    lastUpdated?: string;
+    updatedBy?: string;
+  }
+  interface CommissioningFile {
+    projects: Record<string, CommissioningProjectData>; // key = projectName.toLowerCase().trim()
+    lastUpdated: string;
+  }
+  function commKey(name: string) { return name.trim().toLowerCase(); }
 
-interface OfflineStatusFile {
-  statuses: Record<string, string>; // key = projectName.toLowerCase().trim()
-  lastUpdated: string;
-}
-function offKey(name: string) { return name.trim().toLowerCase(); }
+  // List all tracked project names
+  r.get("/commissioning-tracker", async (_q, res) => {
+    try {
+      const f = await readJsonFile<CommissioningFile>("commissioning-tracker.json");
+      res.json(Object.values(f?.projects ?? {}).map(p => p.projectName));
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
 
-r.get("/project-activities/offline-status", async (_q, res) => {
-  try {
-    const f = await readJsonFile<OfflineStatusFile>("project-offline-status.json");
-    // Return keyed by the ORIGINAL project name casing where possible isn't tracked,
-    // so the frontend matches by its own projectName strings — we store lowercase
-    // keys, and the frontend looks up by its own projectName too, so we return a
-    // map using the same lowercase keys; the frontend's lookup uses projectName as-is,
-    // so to keep this simple we store and return using the exact projectName string
-    // the frontend sent at save time (see POST handler below).
-    res.json(f?.statuses ?? {});
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
-});
+  // Get commissioning data for one project (empty shell if not tracked yet)
+  r.get("/commissioning-tracker/:project", async (req, res) => {
+    try {
+      const f = await readJsonFile<CommissioningFile>("commissioning-tracker.json");
+      const data = f?.projects?.[commKey(req.params.project)];
+      if (!data) return res.json({ projectName: req.params.project, stations: [], commInterface: [], phases: [] });
+      res.json(data);
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
 
-r.post("/project-activities/offline-status", async (req, res) => {
-  try {
-    if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-    const { projectName, offlineStatus } = req.body;
-    if (!projectName || !offlineStatus) return res.status(400).json({ message: "projectName and offlineStatus required" });
-    const f = (await readJsonFile<OfflineStatusFile>("project-offline-status.json")) ?? { statuses: {}, lastUpdated: "" };
-    f.statuses[projectName] = offlineStatus; // keyed by exact projectName string used by frontend
-    f.lastUpdated = new Date().toISOString();
-    await writeJsonFile("project-offline-status.json", f, `Offline status: ${projectName} -> ${offlineStatus}`);
-    res.json({ success: true });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
-});
+  // Save commissioning data for one project (open to all logged-in engineers)
+  r.post("/commissioning-tracker/:project", async (req, res) => {
+    try {
+      const f = (await readJsonFile<CommissioningFile>("commissioning-tracker.json")) ?? { projects: {}, lastUpdated: "" };
+      const key = commKey(req.params.project);
+      f.projects[key] = {
+        projectName: req.body.projectName || req.params.project,
+        stations: Array.isArray(req.body.stations) ? req.body.stations : [],
+        commInterface: Array.isArray(req.body.commInterface) ? req.body.commInterface : [],
+        phases: Array.isArray(req.body.phases) ? req.body.phases : [],
+        lastUpdated: new Date().toISOString(),
+        updatedBy: typeof req.body.updatedBy === "string" ? req.body.updatedBy : "",
+      };
+      f.lastUpdated = new Date().toISOString();
+      await writeJsonFile("commissioning-tracker.json", f, `Commissioning update: ${req.params.project}`);
+      res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
 
-    // ── HEALTH ────────────────────────────────────────────────────────────────
+  // Remove a project from commissioning tracking (admin only)
+  r.delete("/commissioning-tracker/:project", async (req, res) => {
+    try {
+      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+      const f = await readJsonFile<CommissioningFile>("commissioning-tracker.json");
+      if (!f) return res.json({ success: true });
+      delete f.projects[commKey(req.params.project)];
+      f.lastUpdated = new Date().toISOString();
+      await writeJsonFile("commissioning-tracker.json", f, `Commissioning delete: ${req.params.project}`);
+      res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── HEALTH ────────────────────────────────────────────────────────────────
   r.get("/health", async (_q, res) => {
     const token=!!process.env.GITHUB_TOKEN; const data=await readJsonFile("data.json").catch(()=>null);
     res.json({ok:true,githubToken:token,dataReadable:data!==null,ts:new Date().toISOString()});
