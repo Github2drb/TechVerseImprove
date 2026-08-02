@@ -55,14 +55,18 @@ declare module "http" {
 
 app.set("trust proxy", 1);
 
+// NOTE: the default express.json() body limit is 100kb, which is far too small
+// for the base64 commissioning-station photos posted to /api/commissioning-images.
+// 25mb comfortably covers a compressed photo (typically 150–400 KB) with headroom.
 app.use(
   express.json({
+    limit: "25mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: false, limit: "25mb" }));
 
 app.use(
   session({
@@ -109,7 +113,8 @@ app.use((req, res, next) => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
+      // Image uploads/downloads return large payloads — never log their bodies
+      if (capturedJsonResponse && !path.startsWith("/api/commissioning-images")) {
         logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
       }
       log(logLine);

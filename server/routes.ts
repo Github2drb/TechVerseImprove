@@ -1070,10 +1070,12 @@ r.delete("/material-tracker/:project", async (req, res) => {
 });
 
   // ── COMMISSIONING TRACKER — station-wise project commissioning detail ────
+  interface CommImageRef { name: string; url: string; uploadedBy?: string; uploadedAt?: string; }
   interface CommStationRow {
     id: string; label: string; description: string;
     electricalConstraint: string; mechanicalConstraint: string;
     trialTime: string; status: string; notes: string;
+    images?: CommImageRef[];
   }
   interface CommChecklistItem { id: string; text: string; done: boolean; doneBy?: string; doneAt?: string; }
   interface CommPhase { id: string; title: string; subtitle: string; items: CommChecklistItem[]; }
@@ -1335,6 +1337,160 @@ r.delete("/material-tracker/:project", async (req, res) => {
 
       res.json({ generatedAt: new Date().toISOString(), today: cmISO(today), projects: projectsOut, engineers: engineersOut });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── COMMISSIONING IMAGES — stored in TechVerseImprove/blog-images ─────────
+  // Images are committed to the GitHub repo via the contents API and served
+  // back through this server (so the repo can stay private and no token is
+  // ever exposed to the browser).
+  const IMG_REPO = "Github2drb/TechVerseImprove";
+  const IMG_DIR = "blog-images";
+  const IMG_MAX_BYTES = 12 * 1024 * 1024; // 12 MB per image after client-side compression
+
+  function ghImgHeaders(): Record<string, string> {
+    const token = process.env.GITHUB_TOKEN || "";
+    const h: Record<string, string> = {
+      Accept: "application/vnd.github.v3+json",
+      "User-Agent": "DRBTechVerse/1.0",
+      "Cache-Control": "no-cache",
+    };
+    if (token) h["Authorization"] = `token ${token}`;
+    return h;
+  }
+  function imgSlug(s: string): string {
+    return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "x";
+  }
+  // Only a flat filename is ever accepted — blocks ../ path traversal
+  function isSafeImgName(n: string): boolean {
+    return /^[A-Za-z0-9._-]{1,120}$/.test(n) && !n.includes("..");
+  }
+  const IMG_MIME: Record<string, string> = {
+    jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png",
+    webp: "image/webp", gif: "image/gif", bmp: "image/bmp",
+  };
+  function imgExt(name: string): string {
+    const m = name.toLowerCase().match(/\.([a-z0-9]+)$/);
+    return m ? m[1] : "jpg";
+  }
+
+  // Upload one image. Body: { projectName, rowId, fileName, dataBase64 }
+  r.post("/commissioning-images", async (req, res) => {
+    try {
+      if (!process.env.GITHUB_TOKEN) {
+        return res.status(500).json({ error: "GITHUB_TOKEN is not configured on the server — cannot upload images." });
+      }
+      const { projectName, rowId, fileName, dataBase64 } = req.body ?? {};
+      const raw = String(dataBase64 ?? "").replace(/^data:[^;]+;base64,/, "");
+      if (!raw) return res.status(400).json({ error: "No image data received" });
+
+      const approxBytes = Math.floor((raw.length * 3) / 4);
+      if (approxBytes > IMG_MAX_BYTES) {
+        return res.status(413).json({ error: `Image is ${(approxBytes / 1048576).toFixed(1)} MB — the limit is 12 MB.` });
+      }
+
+      const ext = imgExt(String(fileName ?? "photo.jpg"));
+      if (!IMG_MIME[ext]) return res.status(400).json({ error: `Unsupported image type ".${ext}"` });
+
+      const name = `comm-${imgSlug(projectName)}-${imgSlug(rowId)}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
+      const url = `https://api.github.com/repos/${IMG_REPO}/contents/${IMG_DIR}/${encodeURIComponent(name)}`;
+      const gh = await fetch(url, {
+        method: "PUT",
+        headers: { ...ghImgHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: `Commissioning image: ${projectName ?? "project"} (${name})`,
+          content: raw,
+        }),
+      });
+      if (!gh.ok) {
+        const txt = await gh.text();
+        throw new Error(`GitHub upload HTTP ${gh.status}: ${txt.slice(0, 300)}`);
+      }
+      const meta: any = await gh.json();
+      res.json({
+        success: true,
+        name,
+        path: `${IMG_DIR}/${name}`,
+        url: `/api/commissioning-images/file/${encodeURIComponent(name)}`,
+        rawUrl: `https://raw.githubusercontent.com/${IMG_REPO}/main/${IMG_DIR}/${name}`,
+        sha: meta?.content?.sha ?? null,
+        sizeBytes: approxBytes,
+      });
+    } catch (e: any) {
+      console.error("[commissioning-images upload]", e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Serve an image back to the browser (works for private repos too)
+  r.get("/commissioning-images/file/:name", async (req, res) => {
+    try {
+      const name = req.params.name;
+      if (!isSafeImgName(name)) return res.status(400).send("Bad image name");
+      const url = `https://api.github.com/repos/${IMG_REPO}/contents/${IMG_DIR}/${encodeURIComponent(name)}`;
+      const gh = await fetch(url, { headers: ghImgHeaders() });
+      if (!gh.ok) return res.status(404).send("Image not found");
+      const meta: any = await gh.json();
+      if (!meta?.content) return res.status(404).send("Image has no content");
+      const buf = Buffer.from(String(meta.content).replace(/\n/g, ""), "base64");
+      res.setHeader("Content-Type", IMG_MIME[imgExt(name)] ?? "application/octet-stream");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      res.send(buf);
+    } catch (e: any) {
+      console.error("[commissioning-images file]", e.message);
+      res.status(500).send("Image fetch failed");
+    }
+  });
+
+  // List images already in blog-images for a project (recovery / audit)
+  r.get("/commissioning-images", async (req, res) => {
+    try {
+      const project = String(req.query.project ?? "");
+      const url = `https://api.github.com/repos/${IMG_REPO}/contents/${IMG_DIR}`;
+      const gh = await fetch(url, { headers: ghImgHeaders() });
+      if (!gh.ok) return res.json([]);
+      const list: any = await gh.json();
+      if (!Array.isArray(list)) return res.json([]);
+      const prefix = project ? `comm-${imgSlug(project)}-` : "comm-";
+      res.json(
+        list
+          .filter((f: any) => f?.type === "file" && typeof f.name === "string" && f.name.startsWith(prefix))
+          .map((f: any) => ({
+            name: f.name,
+            path: f.path,
+            url: `/api/commissioning-images/file/${encodeURIComponent(f.name)}`,
+            sizeBytes: f.size ?? 0,
+          }))
+      );
+    } catch (e: any) {
+      console.error("[commissioning-images list]", e.message);
+      res.json([]);
+    }
+  });
+
+  // Delete an image from the repo
+  r.delete("/commissioning-images/:name", async (req, res) => {
+    try {
+      const name = req.params.name;
+      if (!isSafeImgName(name)) return res.status(400).json({ error: "Bad image name" });
+      if (!process.env.GITHUB_TOKEN) return res.status(500).json({ error: "GITHUB_TOKEN is not configured on the server." });
+      const url = `https://api.github.com/repos/${IMG_REPO}/contents/${IMG_DIR}/${encodeURIComponent(name)}`;
+      const head = await fetch(url, { headers: ghImgHeaders() });
+      if (!head.ok) return res.json({ success: true }); // already gone
+      const meta: any = await head.json();
+      const del = await fetch(url, {
+        method: "DELETE",
+        headers: { ...ghImgHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ message: `Remove commissioning image ${name}`, sha: meta.sha }),
+      });
+      if (!del.ok) {
+        const txt = await del.text();
+        throw new Error(`GitHub delete HTTP ${del.status}: ${txt.slice(0, 200)}`);
+      }
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error("[commissioning-images delete]", e.message);
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // ── HEALTH ────────────────────────────────────────────────────────────────
