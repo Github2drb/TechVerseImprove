@@ -17,7 +17,7 @@ import TeamSheet from "@/pages/team-sheet";
 import NotFound from "@/pages/not-found";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import DailyReport from "@/pages/daily-report";
+import ProjectCommissioning from "@/pages/project-commissioning";
 import ISA101Page from "@/pages/ISA101Page";
 import BlogPage from "@/pages/blog";
 import ProjectRoadmap from "@/pages/project-roadmap";
@@ -41,7 +41,7 @@ function AppRoutes() {
       <Route path="/engineer-management" component={EngineerManagement} />
       <Route path="/project/:id" component={ProjectDetail} />
       <Route path="/teamsheet" component={TeamSheet} />
-      <Route path="/daily-report" component={DailyReport} />
+      <Route path="/project-commissioning" component={ProjectCommissioning} />
       <Route path="/knowledge/isa-101-hmi-standards" component={ISA101Page} />
       <Route path="/blog" component={BlogPage} />
       <Route path="/notifications" component={NotificationsPage} />
