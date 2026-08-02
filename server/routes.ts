@@ -1141,6 +1141,202 @@ r.delete("/material-tracker/:project", async (req, res) => {
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
+  // ── COMMISSIONING PERFORMANCE — forecast + engineer rating ───────────────
+  // Mirrors client/src/lib/commissioning-calc.ts exactly. Work week = Mon–Sat.
+  const CM_WEEK_UNIT = 6;        // "1 week"  = 6 working days
+  const CM_MONTH_UNIT = 26;      // "1 month" = 26 working days
+  const CM_HOURS_PER_DAY = 8;
+  const CM_DEFAULT_DAYS = 1;     // assumed when a pending row has no estimate
+  const CM_LATE_PENALTY = 5;     // points lost per working day late
+  const CM_W = { internal: 0.30, customer: 0.30, stations: 0.25, checklist: 0.15 };
+
+  function cmStartOfDay(d: Date | string): Date {
+    const x = typeof d === "string" ? new Date(d + (d.length === 10 ? "T00:00:00" : "")) : new Date(d);
+    x.setHours(0, 0, 0, 0);
+    return x;
+  }
+  function cmIsWorkingDay(d: Date): boolean { return d.getDay() !== 0; }
+  function cmAddWorkingDays(from: Date, n: number): Date {
+    const d = cmStartOfDay(from);
+    let remaining = Math.max(0, Math.ceil(n));
+    while (remaining > 0) { d.setDate(d.getDate() + 1); if (cmIsWorkingDay(d)) remaining--; }
+    return d;
+  }
+  function cmWorkingDaysBetween(a: Date, b: Date): number {
+    const start = cmStartOfDay(a); const end = cmStartOfDay(b);
+    if (start.getTime() === end.getTime()) return 0;
+    const forward = end > start;
+    const from = forward ? start : end; const to = forward ? end : start;
+    let count = 0; const cur = new Date(from);
+    while (cur < to) { cur.setDate(cur.getDate() + 1); if (cmIsWorkingDay(cur)) count++; }
+    return forward ? count : -count;
+  }
+  function cmISO(d: Date): string {
+    const x = cmStartOfDay(d);
+    return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+  }
+  function cmParseTrialDays(raw: string | undefined | null, today: Date): number | null {
+    const s = (raw ?? "").trim();
+    if (!s) return null;
+    const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (iso) {
+      const t = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+      if (!isNaN(t.getTime())) return Math.max(0, cmWorkingDaysBetween(today, t));
+    }
+    const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if (dmy) {
+      let year = Number(dmy[3]); if (year < 100) year += 2000;
+      const t = new Date(year, Number(dmy[2]) - 1, Number(dmy[1]));
+      if (!isNaN(t.getTime())) return Math.max(0, cmWorkingDaysBetween(today, t));
+    }
+    const num = s.match(/(\d+(?:\.\d+)?)/);
+    if (!num) return null;
+    const value = parseFloat(num[1]);
+    if (!isFinite(value) || value < 0) return null;
+    const lower = s.toLowerCase();
+    if (/\b(hour|hours|hr|hrs)\b/.test(lower) || /\d\s*h\b/.test(lower)) return Math.ceil(value / CM_HOURS_PER_DAY);
+    if (/\b(month|months|mon|mo)\b/.test(lower)) return Math.ceil(value * CM_MONTH_UNIT);
+    if (/\b(week|weeks|wk|wks)\b/.test(lower) || /\d\s*w\b/.test(lower)) return Math.ceil(value * CM_WEEK_UNIT);
+    return Math.ceil(value);
+  }
+  function cmNorm(s: string): string { return s.trim().replace(/\s*\([^)]*\)\s*/g, "").trim().toLowerCase(); }
+  function cmNamesMatch(a: string, b: string): boolean {
+    const na = cmNorm(a); const nb = cmNorm(b);
+    if (!na || !nb) return false;
+    if (na === nb) return true;
+    if (nb.startsWith(na) || na.startsWith(nb)) return true;
+    return na.split(/\s+/)[0] === nb.split(/\s+/)[0];
+  }
+  function cmSplitEngineers(field?: string | null): string[] {
+    return (field ?? "").split(",").map(n => n.trim()).filter(Boolean);
+  }
+  function cmScheduleScore(forecast: Date | null, target?: string | null) {
+    const t = (target ?? "").trim();
+    if (!t || !forecast) return { target: null as string | null, varianceDays: null as number | null, score: null as number | null };
+    const td = cmStartOfDay(t);
+    if (isNaN(td.getTime())) return { target: null as string | null, varianceDays: null as number | null, score: null as number | null };
+    const variance = cmWorkingDaysBetween(td, forecast);
+    return { target: t, varianceDays: variance, score: variance <= 0 ? 100 : Math.max(0, 100 - variance * CM_LATE_PENALTY) };
+  }
+  function cmLevel(score: number): string {
+    return score >= 90 ? "Expert" : score >= 75 ? "Proficient" : score >= 50 ? "Developing" : "Learning";
+  }
+
+  r.get("/commissioning-performance", async (_q, res) => {
+    try {
+      const [cf, waFile] = await Promise.all([
+        readJsonFile<CommissioningFile>("commissioning-tracker.json"),
+        readJsonFile<{ assignments: any[] }>("weekly-assignments.json"),
+      ]);
+      const today = cmStartOfDay(new Date());
+      const assignments = waFile?.assignments ?? [];
+      const projectsOut: any[] = [];
+
+      for (const proj of Object.values(cf?.projects ?? {})) {
+        const rows = [...(proj.stations ?? []), ...(proj.commInterface ?? [])];
+        if (rows.length === 0) continue;
+
+        // Assignments for this project (fuzzy name match on project name)
+        const pKey = commKey(proj.projectName);
+        const projAssignments = assignments.filter((a: any) => {
+          const an = (a.projectName ?? "").trim().toLowerCase();
+          return an === pKey || an.includes(pKey) || pKey.includes(an);
+        });
+        const engineers = Array.from(new Set(
+          projAssignments.flatMap((a: any) => cmSplitEngineers(a.engineerName))
+        ));
+        // Latest non-empty target dates across this project's assignments
+        const internalTarget = projAssignments.map((a: any) => (a.internalTarget ?? "").trim()).filter(Boolean).sort().pop() ?? null;
+        const customerTarget = projAssignments.map((a: any) => (a.customerTarget ?? "").trim()).filter(Boolean).sort().pop() ?? null;
+
+        const completedRows = rows.filter(x => x.status === "completed").length;
+        const pending = rows.filter(x => x.status !== "completed");
+        let totalPendingDays = 0; let missingEstimates = 0;
+        for (const x of pending) {
+          const d = cmParseTrialDays(x.trialTime, today);
+          if (d === null) { missingEstimates++; totalPendingDays += CM_DEFAULT_DAYS; } else { totalPendingDays += d; }
+        }
+        const engineerCount = Math.max(1, engineers.length);
+        const effectiveDays = Math.ceil(totalPendingDays / engineerCount);
+        const forecastDate = cmAddWorkingDays(today, effectiveDays);
+
+        const phases = proj.phases ?? [];
+        const checklistTotal = phases.reduce((n, p) => n + (p.items?.length ?? 0), 0);
+        const checklistDone = phases.reduce((n, p) => n + (p.items ?? []).filter(i => i.done).length, 0);
+        const stationProgress = rows.length > 0 ? Math.round((completedRows / rows.length) * 100) : 0;
+        const checklistProgress = checklistTotal > 0 ? Math.round((checklistDone / checklistTotal) * 100) : 0;
+
+        const internal = cmScheduleScore(forecastDate, internalTarget);
+        const customer = cmScheduleScore(forecastDate, customerTarget);
+        const parts: Array<{ key: string; label: string; score: number; weight: number }> = [];
+        if (internal.score !== null) parts.push({ key: "internal", label: "Internal Target", score: internal.score, weight: CM_W.internal });
+        if (customer.score !== null) parts.push({ key: "customer", label: "Customer Target", score: customer.score, weight: CM_W.customer });
+        parts.push({ key: "stations", label: "Station Progress", score: stationProgress, weight: CM_W.stations });
+        parts.push({ key: "checklist", label: "Checklist", score: checklistProgress, weight: CM_W.checklist });
+        const tw = parts.reduce((n, p) => n + p.weight, 0);
+        const overall = tw > 0 ? Math.round(parts.reduce((n, p) => n + p.score * p.weight, 0) / tw) : 0;
+
+        projectsOut.push({
+          projectName: proj.projectName,
+          engineers,
+          totalRows: rows.length,
+          completedRows,
+          pendingRows: pending.length,
+          totalPendingDays,
+          missingEstimates,
+          engineerCount,
+          effectiveDays,
+          forecastDate: cmISO(forecastDate),
+          internalTarget: internal.target,
+          internalVarianceDays: internal.varianceDays,
+          internalScore: internal.score,
+          customerTarget: customer.target,
+          customerVarianceDays: customer.varianceDays,
+          customerScore: customer.score,
+          stationProgress,
+          checklistProgress,
+          checklistDone,
+          checklistTotal,
+          overall,
+          level: cmLevel(overall),
+          components: parts,
+          lastUpdated: proj.lastUpdated ?? null,
+          updatedBy: proj.updatedBy ?? null,
+        });
+      }
+
+      // Per-engineer roll-up: average score across the commissioning projects they are on
+      const engMap = new Map<string, { name: string; projects: any[] }>();
+      for (const p of projectsOut) {
+        for (const name of p.engineers) {
+          const k = cmNorm(name);
+          if (!engMap.has(k)) engMap.set(k, { name, projects: [] });
+          engMap.get(k)!.projects.push({
+            projectName: p.projectName, overall: p.overall, level: p.level,
+            forecastDate: p.forecastDate, internalTarget: p.internalTarget, customerTarget: p.customerTarget,
+            internalVarianceDays: p.internalVarianceDays, customerVarianceDays: p.customerVarianceDays,
+            stationProgress: p.stationProgress, checklistProgress: p.checklistProgress,
+            effectiveDays: p.effectiveDays,
+          });
+        }
+      }
+      const engineersOut = Array.from(engMap.values()).map(e => {
+        const avg = e.projects.length > 0
+          ? Math.round(e.projects.reduce((n, p) => n + p.overall, 0) / e.projects.length) : 0;
+        const atRisk = e.projects.filter(p =>
+          (p.internalVarianceDays !== null && p.internalVarianceDays > 0) ||
+          (p.customerVarianceDays !== null && p.customerVarianceDays > 0)
+        ).length;
+        return {
+          name: e.name, overall: avg, level: cmLevel(avg),
+          projectCount: e.projects.length, atRiskCount: atRisk, projects: e.projects,
+        };
+      }).sort((a, b) => b.overall - a.overall);
+
+      res.json({ generatedAt: new Date().toISOString(), today: cmISO(today), projects: projectsOut, engineers: engineersOut });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
   // ── HEALTH ────────────────────────────────────────────────────────────────
   r.get("/health", async (_q, res) => {
     const token=!!process.env.GITHUB_TOKEN; const data=await readJsonFile("data.json").catch(()=>null);
