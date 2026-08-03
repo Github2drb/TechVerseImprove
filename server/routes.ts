@@ -468,6 +468,83 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// INSERT BLOCK — paste this into server/routes.ts
+//
+// WHERE: right after the last weekly-assignments route —
+//   r.delete("/weekly-assignments/:id/tasks/:taskId", ...) { ... });
+// — and BEFORE the comment:
+//   // ── PROJECT NAMES ─────────────────────────────────────────────────────────
+//
+// Uses the existing top-level `isAdmin`, `norm`, `readJsonFile`, `writeJsonFile`
+// helpers already defined earlier in routes.ts — no new imports needed.
+// Data is stored in a NEW file: project-engineer-status.json (auto-created on
+// first save, same as every other tracker file in this repo).
+// ═══════════════════════════════════════════════════════════════════════════
+
+  // ── PROJECT ENGINEER STATUS — independent per-engineer status/timeline ───
+  // Overlay on top of weekly-assignments.json. An engineer's individual
+  // progress on a shared project can be marked here without touching the
+  // project-level currentStatus/timeline on the underlying assignment
+  // record(s) — several engineers can be on very different phases of the
+  // same project (e.g. one engineer's wiring is done and F.A.T continues
+  // for others). Consumed by Project Tracker (engineer tab) and Skill
+  // Matrix (workload + Engineers Needing Support).
+  interface PEStatusEntry {
+    displayName: string; currentStatus: string;
+    resourceLockedFrom?: string; resourceLockedTill?: string;
+    internalTarget?: string; customerTarget?: string;
+    updatedAt: string; updatedBy?: string;
+  }
+  interface PEStatusProject { projectName: string; engineers: Record<string, PEStatusEntry>; }
+  interface PEStatusFile { projects: Record<string, PEStatusProject>; lastUpdated: string; }
+  function peProjKey(name: string) { return name.trim().toLowerCase(); }
+
+  r.get("/project-engineer-status", async (_q, res) => {
+    try {
+      const f = await readJsonFile<PEStatusFile>("project-engineer-status.json");
+      res.json(f?.projects ?? {});
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  r.post("/project-engineer-status/:project/:engineer", async (req, res) => {
+    try {
+      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+      const f = (await readJsonFile<PEStatusFile>("project-engineer-status.json")) ?? { projects: {}, lastUpdated: "" };
+      const pKey = peProjKey(req.params.project);
+      const eKey = norm(req.params.engineer);
+      if (!f.projects[pKey]) f.projects[pKey] = { projectName: req.params.project, engineers: {} };
+      f.projects[pKey].engineers[eKey] = {
+        displayName: req.params.engineer,
+        currentStatus: req.body.currentStatus || "not_started",
+        resourceLockedFrom: req.body.resourceLockedFrom || undefined,
+        resourceLockedTill: req.body.resourceLockedTill || undefined,
+        internalTarget: req.body.internalTarget || undefined,
+        customerTarget: req.body.customerTarget || undefined,
+        updatedAt: new Date().toISOString(),
+        updatedBy: req.body.updatedBy || undefined,
+      };
+      f.lastUpdated = new Date().toISOString();
+      await writeJsonFile("project-engineer-status.json", f, `Engineer status: ${req.params.engineer} on ${req.params.project}`);
+      res.json({ success: true, entry: f.projects[pKey].engineers[eKey] });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  r.delete("/project-engineer-status/:project/:engineer", async (req, res) => {
+    try {
+      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+      const f = await readJsonFile<PEStatusFile>("project-engineer-status.json");
+      if (!f) return res.json({ success: true });
+      const pKey = peProjKey(req.params.project);
+      if (f.projects[pKey]) {
+        delete f.projects[pKey].engineers[norm(req.params.engineer)];
+        if (Object.keys(f.projects[pKey].engineers).length === 0) delete f.projects[pKey];
+      }
+      f.lastUpdated = new Date().toISOString();
+      await writeJsonFile("project-engineer-status.json", f, `Remove engineer status: ${req.params.engineer} on ${req.params.project}`);
+      res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
   // ── WEEKLY ASSIGNMENTS ────────────────────────────────────────────────────
   r.get("/weekly-assignments", async (req, res) => {
     try {
