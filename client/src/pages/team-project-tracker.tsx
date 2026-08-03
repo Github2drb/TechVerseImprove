@@ -36,6 +36,20 @@ interface EngineerRowData {
 }
 interface ProjectRow { projectName: string; engineers: EngineerRowData[]; }
 
+// ── Per-engineer status/timeline overlay ────────────────────────────────────
+// Independent of the shared project-level currentStatus above — lets one
+// engineer's own phase be marked (e.g. "completed") without touching what
+// the rest of the team sees for the project. Fetched from
+// /api/project-engineer-status, written via /api/project-engineer-status/:project/:engineer.
+interface EngineerStatusEntry {
+  displayName: string; currentStatus: string;
+  resourceLockedFrom?: string; resourceLockedTill?: string;
+  internalTarget?: string; customerTarget?: string;
+  updatedAt?: string; updatedBy?: string;
+}
+interface EngineerStatusProject { projectName: string; engineers: Record<string, EngineerStatusEntry>; }
+type EngineerStatusMap = Record<string, EngineerStatusProject>; // key = projectName.trim().toLowerCase()
+
 // ── Status config ─────────────────────────────────────────────────────────────
 // Testing ends at F.A.T. Installation is its own group — S.A.T happens on site
 // AFTER installation, so it belongs to Installation, not Testing.
@@ -140,6 +154,18 @@ function daysFromToday(d?:string):number{
   const now=new Date(); now.setHours(0,0,0,0);
   return Math.ceil((t.getTime()-now.getTime())/864e5);
 }
+// Look up an engineer's individual override for a given project, if one exists.
+function getEngineerOverride(map:EngineerStatusMap, projectName:string, engineerName:string):EngineerStatusEntry|undefined{
+  const proj=map[projectName.trim().toLowerCase()];
+  if(!proj)return undefined;
+  return proj.engineers[normName(engineerName)];
+}
+// Status actually shown for an engineer row — override wins, falls back to
+// the shared project-level status so nothing changes for engineers who have
+// never had an individual status set.
+function effectiveStatusFor(eng:EngineerRowData, projectName:string, map:EngineerStatusMap):string{
+  return getEngineerOverride(map,projectName,eng.name)?.currentStatus || eng.currentStatus;
+}
 
 // ── Detail panel info row ─────────────────────────────────────────────────────
 function InfoRow({icon,label,value,accent}:{icon:React.ReactNode;label:string;value:React.ReactNode;accent?:boolean}){
@@ -167,6 +193,107 @@ function StatusSelectItems(){
         {g.items.map(i=><SelectItem key={i.value} value={i.value}>{i.label}</SelectItem>)}
       </div>
     ))}</>
+  );
+}
+
+// ── Engineer individual status panel — TOP LEVEL component (same reason as above) ──
+// Shows the effective status for the currently selected engineer tab and,
+// for admins, lets them set/clear an override that is independent of the
+// shared project-level "Current Status" field.
+interface EngineerStatusPanelProps {
+  isAdmin: boolean;
+  engineer: EngineerRowData;
+  override?: EngineerStatusEntry;
+  onSave: (data:{currentStatus:string;resourceLockedFrom?:string;resourceLockedTill?:string;internalTarget?:string;customerTarget?:string})=>void;
+  onClear: ()=>void;
+  saving: boolean;
+}
+function EngineerStatusPanel({isAdmin, engineer, override, onSave, onClear, saving}: EngineerStatusPanelProps){
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState({
+    currentStatus: override?.currentStatus || engineer.currentStatus,
+    resourceLockedFrom: override?.resourceLockedFrom || "",
+    resourceLockedTill: override?.resourceLockedTill || "",
+    internalTarget: override?.internalTarget || "",
+    customerTarget: override?.customerTarget || "",
+  });
+
+  // Re-sync the draft whenever the selected engineer or their saved override changes
+  useEffect(()=>{
+    setDraft({
+      currentStatus: override?.currentStatus || engineer.currentStatus,
+      resourceLockedFrom: override?.resourceLockedFrom || "",
+      resourceLockedTill: override?.resourceLockedTill || "",
+      internalTarget: override?.internalTarget || "",
+      customerTarget: override?.customerTarget || "",
+    });
+    setEditing(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[engineer.assignmentId, engineer.name, override?.updatedAt]);
+
+  const effectiveStatus = override?.currentStatus || engineer.currentStatus;
+
+  return(
+    <div className="pt-4">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          {engineer.name.split(" ")[0]}&apos;s Individual Status
+        </p>
+        {isAdmin&&!editing&&(
+          <button type="button" onClick={()=>setEditing(true)} className="text-xs text-primary hover:underline flex items-center gap-1">
+            <Edit2 className="h-3 w-3"/>{override?"Edit":"Set individually"}
+          </button>
+        )}
+      </div>
+
+      {!editing?(
+        <div className="flex items-center gap-2 flex-wrap">
+          <Badge className={`${statusColors[effectiveStatus]??statusColors.not_started} text-xs`}>
+            {statusLabels[effectiveStatus]??effectiveStatus}
+          </Badge>
+          {override?(
+            <span className="text-[11px] text-muted-foreground">
+              individually updated{override.updatedAt?` · ${fmtDate(override.updatedAt)}`:""}
+            </span>
+          ):(
+            <span className="text-[11px] text-muted-foreground">following project status</span>
+          )}
+        </div>
+      ):(
+        <div className="space-y-3 rounded-lg border p-3 bg-muted/30">
+          <div className="grid gap-1.5">
+            <Label className="text-xs">Status for {engineer.name}</Label>
+            <Select value={draft.currentStatus} onValueChange={v=>setDraft(p=>({...p,currentStatus:v}))}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue/></SelectTrigger>
+              <SelectContent className="max-h-72 overflow-y-auto"><StatusSelectItems/></SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="grid gap-1"><Label className="text-xs">Locked From</Label>
+              <Input type="date" className="h-8 text-xs" value={draft.resourceLockedFrom} onChange={e=>setDraft(p=>({...p,resourceLockedFrom:e.target.value}))}/></div>
+            <div className="grid gap-1"><Label className="text-xs">Locked Till</Label>
+              <Input type="date" className="h-8 text-xs" value={draft.resourceLockedTill} onChange={e=>setDraft(p=>({...p,resourceLockedTill:e.target.value}))}/></div>
+            <div className="grid gap-1"><Label className="text-xs">Internal Target</Label>
+              <Input type="date" className="h-8 text-xs" value={draft.internalTarget} onChange={e=>setDraft(p=>({...p,internalTarget:e.target.value}))}/></div>
+            <div className="grid gap-1"><Label className="text-xs">Customer Target</Label>
+              <Input type="date" className="h-8 text-xs" value={draft.customerTarget} onChange={e=>setDraft(p=>({...p,customerTarget:e.target.value}))}/></div>
+          </div>
+          <div className="flex items-center justify-between gap-2 pt-1">
+            {override?(
+              <button type="button" onClick={()=>{onClear();setEditing(false);}} className="text-xs text-red-500 hover:underline">
+                Clear override
+              </button>
+            ):<span/>}
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={()=>setEditing(false)}>Cancel</Button>
+              <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={()=>{onSave(draft);setEditing(false);}}>
+                {saving?"Saving…":"Save"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -301,6 +428,12 @@ export default function TeamProjectTracker() {
     queryKey:["/api/engineers-master-list"],
     queryFn:async()=>{const r=await fetch("/api/engineers-master-list");if(!r.ok)throw new Error("failed");return r.json();},
   });
+  // Independent per-engineer status/timeline overrides (see interfaces above)
+  const {data:engineerStatusMap={}}=useQuery<EngineerStatusMap>({
+    queryKey:["/api/project-engineer-status"],
+    queryFn:async()=>{const r=await fetch("/api/project-engineer-status");if(!r.ok)throw new Error("failed");return r.json();},
+    staleTime:0, refetchOnMount:true,
+  });
 
   // Engineer picker
   const [pickerOpen,  setPickerOpen]  = useState(false);
@@ -358,6 +491,19 @@ export default function TeamProjectTracker() {
     mutationFn:async(id:string)=>apiRequest("DELETE",`/api/weekly-assignments/${encodeURIComponent(id)}`,undefined,true),
     onSuccess:()=>{queryClient.invalidateQueries({queryKey:["/api/weekly-assignments"]});toast({title:"Deleted"});setDeleteOpen(false);setDeletingA(null);setSelectedEng(null);},
     onError:(e:any)=>toast({title:e?.message||"Delete failed",variant:"destructive"}),
+  });
+  // Save/clear an individual engineer's status+timeline override for the selected project
+  const engineerStatusMutation=useMutation({
+    mutationFn:async({projectName,engineerName,data}:{projectName:string;engineerName:string;data:{currentStatus:string;resourceLockedFrom?:string;resourceLockedTill?:string;internalTarget?:string;customerTarget?:string}})=>
+      apiRequest("POST",`/api/project-engineer-status/${encodeURIComponent(projectName)}/${encodeURIComponent(engineerName)}`,data,true),
+    onSuccess:()=>{queryClient.invalidateQueries({queryKey:["/api/project-engineer-status"]});toast({title:"Individual status updated"});},
+    onError:(e:any)=>toast({title:e?.message||"Update failed",variant:"destructive"}),
+  });
+  const clearEngineerStatusMutation=useMutation({
+    mutationFn:async({projectName,engineerName}:{projectName:string;engineerName:string})=>
+      apiRequest("DELETE",`/api/project-engineer-status/${encodeURIComponent(projectName)}/${encodeURIComponent(engineerName)}`,undefined,true),
+    onSuccess:()=>{queryClient.invalidateQueries({queryKey:["/api/project-engineer-status"]});toast({title:"Cleared — following project status"});},
+    onError:(e:any)=>toast({title:e?.message||"Clear failed",variant:"destructive"}),
   });
 
   const handleEdit=(assignmentId:string)=>{
@@ -617,12 +763,26 @@ export default function TeamProjectTracker() {
                               : <span className="text-muted-foreground text-xs italic">No constraints noted</span>}
                           />
 
+                          {/* Independent per-engineer status — does not change the shared
+                              project-level "Current Status" above */}
+                          <EngineerStatusPanel
+                            isAdmin={isAdmin}
+                            engineer={selectedEng}
+                            override={getEngineerOverride(engineerStatusMap, selectedProject.projectName, selectedEng.name)}
+                            saving={engineerStatusMutation.isPending}
+                            onSave={(data)=>engineerStatusMutation.mutate({projectName:selectedProject.projectName, engineerName:selectedEng.name, data})}
+                            onClear={()=>clearEngineerStatusMutation.mutate({projectName:selectedProject.projectName, engineerName:selectedEng.name})}
+                          />
+
                           {/* All engineers on this project */}
                           {selectedProject.engineers.length>1&&(
                             <div className="pt-4">
                               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">All Engineers on Project</p>
                               <div className="space-y-2">
-                                {selectedProject.engineers.map(eng=>(
+                                {selectedProject.engineers.map(eng=>{
+                                  const engOverride=getEngineerOverride(engineerStatusMap, selectedProject.projectName, eng.name);
+                                  const engEffStatus=effectiveStatusFor(eng, selectedProject.projectName, engineerStatusMap);
+                                  return(
                                   <div key={eng.assignmentId}
                                     onClick={()=>setSelectedEng(eng)}
                                     className={`flex items-center justify-between gap-3 p-2.5 rounded-xl border cursor-pointer transition-colors hover:bg-muted/50
@@ -637,9 +797,12 @@ export default function TeamProjectTracker() {
                                       </div>
                                     </div>
                                     <div className="flex items-center gap-2 flex-shrink-0">
-                                      <Badge className={`${statusColors[eng.currentStatus]??statusColors.not_started} text-[10px]`}>
-                                        {statusLabels[eng.currentStatus]??eng.currentStatus}
+                                      <Badge className={`${statusColors[engEffStatus]??statusColors.not_started} text-[10px]`}>
+                                        {statusLabels[engEffStatus]??engEffStatus}
                                       </Badge>
+                                      {engOverride&&(
+                                        <span className="text-primary text-[10px]" title="Individually updated">●</span>
+                                      )}
                                       {isAdmin&&(
                                         <button onClick={e=>{e.stopPropagation();handleEdit(eng.assignmentId);}}
                                           className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground">
@@ -648,7 +811,8 @@ export default function TeamProjectTracker() {
                                       )}
                                     </div>
                                   </div>
-                                ))}
+                                  );
+                                })}
                               </div>
                             </div>
                           )}

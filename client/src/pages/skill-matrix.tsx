@@ -206,6 +206,15 @@ interface WeeklyAssignment {
   resourceLockedFrom?: string; resourceLockedTill?: string;
 }
 
+// ─── Per-engineer status overrides (Project Tracker → engineer tab) ───
+// Lets one engineer's own progress on a shared project be marked
+// independently of the project-level currentStatus above. Fetched from
+// /api/project-engineer-status. Purely additive — projects/engineers with
+// no override behave exactly as before.
+interface EngineerStatusEntry { displayName: string; currentStatus: string; }
+interface EngineerStatusProject { projectName: string; engineers: Record<string, EngineerStatusEntry>; }
+type EngineerStatusMap = Record<string, EngineerStatusProject>;
+
 // ─── Name matching (handles "Santosh N, Harsha" combined records and "(Company)" suffixes) ───
 function norm(s: string): string {
   return s.trim().replace(/\s*\([^)]*\)\s*/g, "").trim().toLowerCase();
@@ -224,6 +233,15 @@ function assignmentIncludesEngineer(assignmentEngineerField: string, engineerNam
     .map(n => n.trim())
     .filter(Boolean)
     .some(n => namesMatch(n, engineerName));
+}
+// Look up this engineer's individual override for a given project, if any —
+// tries an exact normalized-name key first, falls back to fuzzy matching.
+function findEngineerOverride(map: EngineerStatusMap, projectName: string, engineerName: string): EngineerStatusEntry | undefined {
+  const proj = map[projectName.trim().toLowerCase()];
+  if (!proj) return undefined;
+  const direct = proj.engineers[norm(engineerName)];
+  if (direct) return direct;
+  return Object.values(proj.engineers).find(e => namesMatch(e.displayName, engineerName));
 }
 
 // ─── Performance level ───
@@ -337,6 +355,9 @@ export default function SkillMatrix() {
   const { data: assignments = [], isLoading: assignmentsLoading } = useQuery<WeeklyAssignment[]>({
     queryKey: ["/api/weekly-assignments"],
   });
+  const { data: engineerStatusMap = {} } = useQuery<EngineerStatusMap>({
+    queryKey: ["/api/project-engineer-status"],
+  });
 
   const isLoading = configLoading || tasksLoading || assignmentsLoading;
 
@@ -351,13 +372,28 @@ export default function SkillMatrix() {
     const inProgressTasks  = tasks?.inProgress || 0;
     const targetTasksCount = tasks?.targetTasks?.length || 0;
     const activitiesCount  = tasks?.customActivities?.length || 0;
-    const completedAssignments = engineerAssignments.filter(a => a.currentStatus === "completed").length;
+
+    // Projects this engineer has individually marked "completed" on their own
+    // tab in Project Tracker — independent of the shared project-level
+    // currentStatus on the assignment record(s) themselves.
+    const individuallyCompletedProjects = new Set(
+      engineerAssignments
+        .map(a => a.projectName.trim())
+        .filter(name => findEngineerOverride(engineerStatusMap, name, engineer.name)?.currentStatus === "completed")
+        .map(name => norm(name))
+    );
+
+    const completedAssignments = engineerAssignments.filter(a =>
+      a.currentStatus === "completed" || individuallyCompletedProjects.has(norm(a.projectName))
+    ).length;
     const totalAssignments     = engineerAssignments.length;
 
-    // Active (non-completed) project names — deduplicated — the core of the HR capacity argument
+    // Active (non-completed) project names — deduplicated — the core of the HR capacity argument.
+    // A project the engineer has individually marked complete no longer counts as active load
+    // for them, even if the shared project-level status is still open for the rest of the team.
     const activeProjectNames = Array.from(new Set(
       engineerAssignments
-        .filter(a => a.currentStatus !== "completed")
+        .filter(a => a.currentStatus !== "completed" && !individuallyCompletedProjects.has(norm(a.projectName)))
         .map(a => a.projectName.trim())
         .filter(Boolean)
     ));
@@ -445,6 +481,8 @@ export default function SkillMatrix() {
               </CardTitle>
               <CardDescription>
                 Task Rate on this page = (completed tasks + completed projects) ÷ (assigned tasks + projects).
+                Projects an engineer has individually marked complete on their own tab in Project Tracker count
+                as completed here even if the shared project-level status is still open for the rest of the team.
                 The weekly weighted score (Attendance 40% + Task Completion 40% + Activity Log 20%) is shown in the Star Performer banner above.
                 Commissioning Delivery (below) is scored separately against Internal and Customer target dates.
               </CardDescription>
