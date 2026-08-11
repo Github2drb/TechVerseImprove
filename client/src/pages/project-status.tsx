@@ -25,10 +25,11 @@ interface ProjectActivity {
   activities: Record<string, string>;
 }
 
-// ── Status options — full project lifecycle (matches Roadmap 18-phase order) ──
-// Testing ends at F.A.T. Installation is its own group — S.A.T happens on site
-// AFTER installation, so it belongs to Installation, not Testing.
-// Done group = Dispatch → Documentation → Handover → Completed.
+// ── Status options — full project lifecycle (matches Roadmap phase order) ──
+// Testing ends at Dispatch Stage (factory-side work). Installation and
+// Commissioning is its own group — it's all on-site work, from mechanical/
+// electrical install through customer trials, ending at Installation Completed.
+// Done group = S.A.T → Documentation → Handover → Project Signoff → Completed.
 // Final status = Completed → project is considered fully completed.
 const STATUS_OPTIONS = [
   // Design & Procurement
@@ -39,30 +40,35 @@ const STATUS_OPTIONS = [
   // Assembly
   { value:"Mechanical Assembly Stage",label:"Mechanical Assembly",      icon:Clock,        color:"bg-blue-500/20 text-blue-700 dark:text-blue-300"        },
   { value:"Electrical Assembly Stage",label:"Electrical Assembly",      icon:Clock,        color:"bg-cyan-500/20 text-cyan-700 dark:text-cyan-300"        },
-  // Testing & Commissioning
+  // Testing
   { value:"PLC Power Up Stage",       label:"PLC Power Up",             icon:Clock,        color:"bg-yellow-500/20 text-yellow-700 dark:text-yellow-300"  },
   { value:"IO Check Stage",           label:"IO Check",                 icon:Clock,        color:"bg-lime-500/20 text-lime-700 dark:text-lime-300"        },
   { value:"Trials Stage",             label:"Trials Stage",             icon:Clock,        color:"bg-pink-500/20 text-pink-700 dark:text-pink-300"        },
   { value:"F.A.T",                    label:"F.A.T",                    icon:Clock,        color:"bg-fuchsia-500/20 text-fuchsia-700 dark:text-fuchsia-300"},
-  // Installation
-  { value:"Installation Pending",     label:"Installation Pending",     icon:Clock,        color:"bg-rose-500/20 text-rose-700 dark:text-rose-300"        },
-  { value:"Installation in Progress", label:"Installation in Progress", icon:Clock,        color:"bg-pink-500/20 text-pink-700 dark:text-pink-300"        },
-  { value:"Installation Completed",   label:"Installation Completed",   icon:CheckCircle,  color:"bg-teal-500/20 text-teal-700 dark:text-teal-300"        },
-  { value:"S.A.T",                    label:"S.A.T",                    icon:Clock,        color:"bg-violet-500/20 text-violet-700 dark:text-violet-300"  },
-  // Done
   { value:"Dispatch Stage",           label:"Dispatch Stage",           icon:CheckCircle,  color:"bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"},
+  // Installation and Commissioning
+  { value:"Mechanical Installation",  label:"Mechanical Installation",  icon:Clock,        color:"bg-rose-500/20 text-rose-700 dark:text-rose-300"        },
+  { value:"Electrical Installation",  label:"Electrical Installation",  icon:Clock,        color:"bg-pink-500/20 text-pink-700 dark:text-pink-300"        },
+  { value:"Equipment Power up",       label:"Equipment Power up",       icon:Clock,        color:"bg-teal-500/20 text-teal-700 dark:text-teal-300"        },
+  { value:"Dry Cycle Test",           label:"Dry Cycle Test",           icon:Clock,        color:"bg-cyan-500/20 text-cyan-700 dark:text-cyan-300"        },
+  { value:"Auto Cycle Test",          label:"Auto Cycle Test",          icon:Clock,        color:"bg-violet-500/20 text-violet-700 dark:text-violet-300"  },
+  { value:"Customer Trials",          label:"Customer Trials",          icon:Clock,        color:"bg-fuchsia-500/20 text-fuchsia-700 dark:text-fuchsia-300"},
+  { value:"Installation Completed",   label:"Installation Completed",   icon:CheckCircle,  color:"bg-green-500/20 text-green-700 dark:text-green-300"     },
+  // Done
+  { value:"S.A.T",                    label:"S.A.T",                    icon:Clock,        color:"bg-purple-500/20 text-purple-700 dark:text-purple-300"  },
   { value:"Documentation",            label:"Documentation",            icon:FileText,     color:"bg-sky-500/20 text-sky-700 dark:text-sky-300"           },
   { value:"Equipment Handover",       label:"Equipment Handover",       icon:CheckCircle,  color:"bg-green-500/20 text-green-700 dark:text-green-300"     },
+  { value:"Project Signoff",          label:"Project Signoff",          icon:CheckCircle,  color:"bg-indigo-500/20 text-indigo-700 dark:text-indigo-300"  },
   { value:"Completed",                label:"Completed",                icon:CheckCircle,  color:"bg-green-500/20 text-green-700 dark:text-green-300"     },
 ];
 
 // Group labels for visual separation in dropdown
 const STATUS_GROUPS = [
-  { label:"Design & Procurement",    from:"Design Stage",              to:"Waiting for Materials"      },
-  { label:"Assembly",                from:"Mechanical Assembly Stage",  to:"Electrical Assembly Stage"  },
-  { label:"Testing & Commissioning", from:"PLC Power Up Stage",         to:"F.A.T"                      },
-  { label:"Installation",            from:"Installation Pending",       to:"S.A.T"                      },
-  { label:"Done",                    from:"Dispatch Stage",             to:"Completed"                  },
+  { label:"Design & Procurement",          from:"Design Stage",             to:"Waiting for Materials"     },
+  { label:"Assembly",                      from:"Mechanical Assembly Stage", to:"Electrical Assembly Stage" },
+  { label:"Testing",                       from:"PLC Power Up Stage",        to:"Dispatch Stage"            },
+  { label:"Installation and Commissioning",from:"Mechanical Installation",   to:"Installation Completed"    },
+  { label:"Done",                          from:"S.A.T",                    to:"Completed"                 },
 ];
 
 function generateDateRange(startDate: Date, endDate: Date): string[] {
