@@ -26,6 +26,9 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 // ── Full phase order — single source of truth ─────────────────────────────────
 // Testing ends at F.A.T. Installation is its own group (S.A.T happens on site
 // AFTER installation, so it belongs to Installation, not Testing).
+// "Dispatch to Site" sits between Install Pending and Installing — equipment
+// leaving the shop for site, distinct from the final "Dispatch" (DSP) phase
+// later in the Done group, which happens after S.A.T.
 // Done group = Dispatch → Documentation → Handover → Completed.
 // Final phase = Completed → project is considered fully completed.
 const PHASES = [
@@ -40,6 +43,7 @@ const PHASES = [
   { key:"Trials Stage",              label:"Trials",           short:"TRL",  group:"Testing",      color:"#14b8a6" },
   { key:"F.A.T",                     label:"F.A.T",            short:"FAT",  group:"Testing",      color:"#d946ef" },
   { key:"Installation Pending",      label:"Install Pending",  short:"INP",  group:"Installation", color:"#f43f5e" },
+  { key:"Dispatch to Site",          label:"Dispatch to Site", short:"DTS",  group:"Installation", color:"#fb7185" },
   { key:"Installation in Progress",  label:"Installing",       short:"INS",  group:"Installation", color:"#ec4899" },
   { key:"Installation Completed",    label:"Install Complete", short:"ICP",  group:"Installation", color:"#059669" },
   { key:"S.A.T",                     label:"S.A.T",            short:"SAT",  group:"Installation", color:"#8b5cf6" },
@@ -68,7 +72,9 @@ const GROUP_COLORS: Record<string,string> = {
 // (not one after another) — both usually start once Electrical Design is
 // complete. Offline Testing can only begin once both PLC and HMI are done.
 // The offline track then merges back into the main roadmap at the
-// "PLC Power Up Stage" (Equipment Power-Up) step.
+// "PLC Power Up Stage" (Equipment Power-Up) step. Once merged, the PLC/HMI
+// indicators are no longer shown as "lit" — the "✓ Merged at Power-Up" badge
+// communicates completion instead, and the toggles lock (no further edits).
 interface OfflineState {
   plc: boolean;
   hmi: boolean;
@@ -314,8 +320,14 @@ function ProjectCard({
           const bothDone = off.plc && off.hmi;
           const hasMerged = currentIdx >= PLC_POWER_UP_IDX && PLC_POWER_UP_IDX !== -1;
 
-          const togglePlc = () => { if (!canStart) return; onOfflineChange(project.projectName, serializeOfflineState({ ...off, plc: !off.plc })); };
-          const toggleHmi = () => { if (!canStart) return; onOfflineChange(project.projectName, serializeOfflineState({ ...off, hmi: !off.hmi })); };
+          // Once merged at PLC Power Up, the PLC/HMI indicators stop showing as
+          // "lit" and lock against further edits — the "✓ Merged at Power-Up"
+          // badge is the source of truth for completion from this point on.
+          const plcDisplayState = hasMerged ? "pending" : (off.plc ? "done" : "pending");
+          const hmiDisplayState = hasMerged ? "pending" : (off.hmi ? "done" : "pending");
+
+          const togglePlc = () => { if (!canStart || hasMerged) return; onOfflineChange(project.projectName, serializeOfflineState({ ...off, plc: !off.plc })); };
+          const toggleHmi = () => { if (!canStart || hasMerged) return; onOfflineChange(project.projectName, serializeOfflineState({ ...off, hmi: !off.hmi })); };
           const cycleTesting = () => {
             if (!canStart || !bothDone) return;
             const next = off.testing === "not_started" ? "in_progress" : off.testing === "in_progress" ? "done" : "not_started";
@@ -339,8 +351,8 @@ function ProjectCard({
                 <div className="flex items-center gap-2 flex-wrap">
                   {/* PLC + HMI run simultaneously — grouped together, same level */}
                   <div className="flex flex-col gap-1.5 border-r border-orange-500/20 pr-2.5">
-                    <OfflineToggleCircle label="PLC Logic"  color="#f97316" state={off.plc ? "done" : "pending"} disabled={!isAdmin} onClick={togglePlc}/>
-                    <OfflineToggleCircle label="HMI Screens" color="#fb923c" state={off.hmi ? "done" : "pending"} disabled={!isAdmin} onClick={toggleHmi}/>
+                    <OfflineToggleCircle label="PLC Logic"  color="#f97316" state={plcDisplayState} disabled={!isAdmin || hasMerged} onClick={togglePlc}/>
+                    <OfflineToggleCircle label="HMI Screens" color="#fb923c" state={hmiDisplayState} disabled={!isAdmin || hasMerged} onClick={toggleHmi}/>
                   </div>
                   <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/40 flex-shrink-0"/>
                   {/* Testing — only enabled once both PLC and HMI are done */}
