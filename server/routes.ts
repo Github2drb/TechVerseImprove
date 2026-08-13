@@ -1146,6 +1146,161 @@ r.delete("/material-tracker/:project", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
+interface StationImage {
+  url: string;
+  caption?: string;
+  uploadedAt: string;
+}
+ 
+interface StationDoc {
+  id: string;
+  name: string;
+  status: string;
+  electricalParts: string;
+  process: string;
+  inputs: string;
+  outputs: string;
+  images: StationImage[];
+}
+ 
+interface EquipmentDoc {
+  projectName: string;
+  synopsis: string;
+  plcArchitecture: string;
+  safetyLayout: string;
+  hasMultipleStations: boolean;
+  stations: StationDoc[];
+  updatedAt: string;
+  updatedBy?: string;
+}
+ 
+function blankEquipmentDoc(projectName: string): EquipmentDoc {
+  return {
+    projectName,
+    synopsis: "",
+    plcArchitecture: "",
+    safetyLayout: "",
+    hasMultipleStations: false,
+    stations: [],
+    updatedAt: new Date().toISOString(),
+  };
+}
+ 
+function slugify(s: string): string {
+  return s
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+ 
+// ---- Image upload helper (GitHub Contents API, base64) -------------------
+// Adjust DATA_REPO_OWNER / DATA_REPO_NAME / GITHUB_TOKEN to match the
+// constants already used by readJsonFile/writeJsonFile in this file.
+ 
+const DATA_REPO_OWNER = "Github2drb";
+const DATA_REPO_NAME = "Controls_Team_Tracker";
+ 
+async function uploadImageToGithub(
+  path: string,          // e.g. "equipment-images/acme-line-1/station-1-1699999999-photo.jpg"
+  base64Content: string, // raw base64, no "data:image/..;base64," prefix
+  commitMessage: string
+): Promise<string> {
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) throw new Error("GITHUB_TOKEN not set");
+ 
+  const url = `https://api.github.com/repos/${DATA_REPO_OWNER}/${DATA_REPO_NAME}/contents/${path}`;
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      message: commitMessage,
+      content: base64Content,
+    }),
+  });
+ 
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`GitHub upload failed (${res.status}): ${text}`);
+  }
+ 
+  return `https://raw.githubusercontent.com/${DATA_REPO_OWNER}/${DATA_REPO_NAME}/main/${path}`;
+}
+ 
+// ---- Routes ---------------------------------------------------------------
+// Paste inside registerRoutes(r) where `r` is the existing router.
+ 
+// GET /api/equipment-docs/:project — fetch one project's doc (public)
+r.get("/equipment-docs/:project", async (req, res) => {
+  try {
+    const projectName = decodeURIComponent(req.params.project);
+    const all = await readJsonFile<EquipmentDoc[]>("equipment-docs.json").catch(() => []);
+    const doc = (all || []).find((d) => d.projectName === projectName);
+    res.json(doc ?? blankEquipmentDoc(projectName));
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || "Failed to load equipment doc" });
+  }
+});
+ 
+// POST /api/equipment-docs/:project — upsert full doc (Admin)
+r.post("/equipment-docs/:project", async (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ error: "Admin only" });
+  try {
+    const projectName = decodeURIComponent(req.params.project);
+    const body = req.body as Partial<EquipmentDoc>;
+    const all = (await readJsonFile<EquipmentDoc[]>("equipment-docs.json").catch(() => [])) || [];
+ 
+    const idx = all.findIndex((d) => d.projectName === projectName);
+    const existing = idx >= 0 ? all[idx] : blankEquipmentDoc(projectName);
+ 
+    const updated: EquipmentDoc = {
+      ...existing,
+      ...body,
+      projectName,
+      stations: body.stations ?? existing.stations,
+      updatedAt: new Date().toISOString(),
+      updatedBy: (req.headers["x-admin-auth"] ? "admin" : undefined),
+    };
+ 
+    if (idx >= 0) all[idx] = updated;
+    else all.push(updated);
+ 
+    await writeJsonFile("equipment-docs.json", all, `Update equipment doc: ${projectName}`);
+    res.json(updated);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || "Failed to save equipment doc" });
+  }
+});
+ 
+// POST /api/equipment-docs/:project/image — upload a station image (Admin)
+// body: { stationId: string; filename: string; base64: string }  (base64 = raw, no data-URI prefix)
+r.post("/equipment-docs/:project/image", async (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ error: "Admin only" });
+  try {
+    const projectName = decodeURIComponent(req.params.project);
+    const { stationId, filename, base64 } = req.body as {
+      stationId: string;
+      filename: string;
+      base64: string;
+    };
+    if (!stationId || !filename || !base64) {
+      return res.status(400).json({ error: "stationId, filename and base64 are required" });
+    }
+ 
+    const safeName = filename.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+    const path = `equipment-images/${slugify(projectName)}/${stationId}-${Date.now()}-${safeName}`;
+    const url = await uploadImageToGithub(path, base64, `Add station image: ${projectName} / ${stationId}`);
+ 
+    res.json({ url, uploadedAt: new Date().toISOString() });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || "Failed to upload image" });
+  }
+});
+
   // ── COMMISSIONING TRACKER — station-wise project commissioning detail ────
   interface CommImageRef { name: string; url: string; uploadedBy?: string; uploadedAt?: string; }
   interface CommStationRow {
