@@ -290,6 +290,7 @@ function StationCard({
 
 export default function ProjectDeepDive() {
   const { toast } = useToast();
+  const [searchQuery, setSearchQuery] = useState<string>("");
   const [selectedProject, setSelectedProject] = useState<string>("");
   const [doc, setDoc] = useState<EquipmentDoc | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -412,7 +413,7 @@ export default function ProjectDeepDive() {
 
   return (
     <div className="min-h-screen bg-background">
-      <Header />
+      <Header searchQuery={searchQuery} onSearchChange={setSearchQuery} />
       <div className="container mx-auto px-4 py-6 max-w-5xl space-y-6">
         <div>
           <h1 className="text-2xl font-bold">Project Deep Dive</h1>
