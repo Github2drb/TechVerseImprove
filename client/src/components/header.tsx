@@ -10,7 +10,7 @@ interface HeaderProps {
   searchQuery: string;
   onSearchChange: (query: string) => void;
 }
-
+<Link href="/project-deep-dive">Project Deep Dive</Link>
 export function Header({ searchQuery, onSearchChange }: HeaderProps) {
   const [location] = useLocation();
 
