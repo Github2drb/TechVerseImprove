@@ -22,6 +22,7 @@ import BlogPage from "@/pages/blog";
 import ProjectRoadmap from "@/pages/project-roadmap";
 import NotificationsPage from "@/pages/notifications";
 import MaterialProcurementTracker from "@/pages/material-procurement-tracker";
+import ProjectDeepDive from "@/pages/project-deep-dive";
 
 function AppRoutes() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -44,6 +45,7 @@ function AppRoutes() {
       <Route path="/blog" component={BlogPage} />
       <Route path="/notifications" component={NotificationsPage} />
       <Route path="/project-roadmap" component={ProjectRoadmap} />
+      <Route path="/project-deep-dive" component={ProjectDeepDive} />
       <Route component={NotFound} />
     </Switch>
   );
