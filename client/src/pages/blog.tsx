@@ -38,6 +38,18 @@ const EMPTY_POST: Omit<BlogPost, "id" | "createdAt"> = {
 
 interface DraftMeta { key: string; code: string; name: string; savedAt: string }
 
+// ── Sanitizer config ─────────────────────────────────────────────────────────
+// DOMPurify's default allowlist excludes <style> elements (they're normally
+// blocked because inline CSS can be abused for data-exfiltration/keylogging
+// attacks). The Controls Project Allocation form ships its own <style> block
+// for all of its layout/theming, so without this override DOMPurify silently
+// deletes that block on every render — the form still works (inputs/tables
+// survive, since those tags + their id/type/value/placeholder attributes are
+// already allowed by default) but renders completely unstyled. ADD_TAGS lets
+// the element through; DOMPurify still sanitizes its contents for anything
+// dangerous (e.g. url(javascript:...)), so this does not reopen an XSS hole.
+const BLOG_SANITIZE_CONFIG = { ADD_TAGS: ["style"] };
+
 // ── Auth helpers ──────────────────────────────────────────────────────────────
 function getAdminHeader(): string {
   try {
@@ -892,7 +904,10 @@ export default function BlogPage() {
           className="prose prose-sm dark:prose-invert max-w-none"
           dangerouslySetInnerHTML={{
             // SECURITY (Snyk CWE-79): sanitize stored HTML before rendering.
-            __html: DOMPurify.sanitize(selected.content),
+            // ADD_TAGS: ["style"] lets blog-post <style> blocks through — see
+            // BLOG_SANITIZE_CONFIG comment above for why this is needed and
+            // why it's still safe (DOMPurify still sanitizes the CSS content).
+            __html: DOMPurify.sanitize(selected.content, BLOG_SANITIZE_CONFIG),
           }}
         />
       </main>
