@@ -25,10 +25,14 @@ interface ProjectActivity {
   activities: Record<string, string>;
 }
 
-// ── Status options — full project lifecycle (matches Roadmap 18-phase order) ──
+// ── Status options — full project lifecycle (matches Roadmap 19-phase order) ──
 // Testing ends at F.A.T. Installation is its own group — S.A.T happens on site
 // AFTER installation, so it belongs to Installation, not Testing.
-// Done group = Dispatch → Documentation → Handover → Completed.
+// "Ready to Dispatch" is the first Installation step — equipment staged and
+// ready to leave the shop for site, before Install Pending begins.
+// Done group = MT Completed (Machine Trial Completed — value kept as
+// "Dispatch Stage" so existing saved statuses keep working, only the label
+// changed) → Documentation → Handover → Completed.
 // Final status = Completed → project is considered fully completed.
 const STATUS_OPTIONS = [
   // Design & Procurement
@@ -45,12 +49,13 @@ const STATUS_OPTIONS = [
   { value:"Trials Stage",             label:"Trials Stage",             icon:Clock,        color:"bg-pink-500/20 text-pink-700 dark:text-pink-300"        },
   { value:"F.A.T",                    label:"F.A.T",                    icon:Clock,        color:"bg-fuchsia-500/20 text-fuchsia-700 dark:text-fuchsia-300"},
   // Installation
+  { value:"Ready to Dispatch",        label:"Ready to Dispatch",        icon:Clock,        color:"bg-red-500/20 text-red-700 dark:text-red-300"           },
   { value:"Installation Pending",     label:"Installation Pending",     icon:Clock,        color:"bg-rose-500/20 text-rose-700 dark:text-rose-300"        },
   { value:"Installation in Progress", label:"Installation in Progress", icon:Clock,        color:"bg-pink-500/20 text-pink-700 dark:text-pink-300"        },
   { value:"Installation Completed",   label:"Installation Completed",   icon:CheckCircle,  color:"bg-teal-500/20 text-teal-700 dark:text-teal-300"        },
   { value:"S.A.T",                    label:"S.A.T",                    icon:Clock,        color:"bg-violet-500/20 text-violet-700 dark:text-violet-300"  },
   // Done
-  { value:"Dispatch Stage",           label:"Dispatch Stage",           icon:CheckCircle,  color:"bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"},
+  { value:"Dispatch Stage",           label:"MT Completed",             icon:CheckCircle,  color:"bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"},
   { value:"Documentation",            label:"Documentation",            icon:FileText,     color:"bg-sky-500/20 text-sky-700 dark:text-sky-300"           },
   { value:"Equipment Handover",       label:"Equipment Handover",       icon:CheckCircle,  color:"bg-green-500/20 text-green-700 dark:text-green-300"     },
   { value:"Completed",                label:"Completed",                icon:CheckCircle,  color:"bg-green-500/20 text-green-700 dark:text-green-300"     },
@@ -61,7 +66,7 @@ const STATUS_GROUPS = [
   { label:"Design & Procurement",    from:"Design Stage",              to:"Waiting for Materials"      },
   { label:"Assembly",                from:"Mechanical Assembly Stage",  to:"Electrical Assembly Stage"  },
   { label:"Testing & Commissioning", from:"PLC Power Up Stage",         to:"F.A.T"                      },
-  { label:"Installation",            from:"Installation Pending",       to:"S.A.T"                      },
+  { label:"Installation",            from:"Ready to Dispatch",          to:"S.A.T"                      },
   { label:"Done",                    from:"Dispatch Stage",             to:"Completed"                  },
 ];
 

@@ -26,10 +26,12 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 // ── Full phase order — single source of truth ─────────────────────────────────
 // Testing ends at F.A.T. Installation is its own group (S.A.T happens on site
 // AFTER installation, so it belongs to Installation, not Testing).
-// "Dispatch to Site" sits between Install Pending and Installing — equipment
-// leaving the shop for site, distinct from the final "Dispatch" (DSP) phase
-// later in the Done group, which happens after S.A.T.
-// Done group = Dispatch → Documentation → Handover → Completed.
+// "Ready to Dispatch" is the first step of the Installation group — equipment
+// staged and ready to leave the shop for site, before Install Pending begins.
+// Distinct from "MT Completed" in the Done group, which happens after S.A.T.
+// Done group = MT Completed (Machine Trial Completed, key unchanged from
+// "Dispatch Stage" so existing saved statuses keep working) → Documentation
+// → Handover → Completed.
 // Final phase = Completed → project is considered fully completed.
 const PHASES = [
   { key:"Design Stage",              label:"Design",           short:"DES",  group:"Design",       color:"#7c3aed" },
@@ -42,12 +44,12 @@ const PHASES = [
   { key:"IO Check Stage",            label:"IO Check",         short:"IOC",  group:"Testing",      color:"#84cc16" },
   { key:"Trials Stage",              label:"Trials",           short:"TRL",  group:"Testing",      color:"#14b8a6" },
   { key:"F.A.T",                     label:"F.A.T",            short:"FAT",  group:"Testing",      color:"#d946ef" },
+  { key:"Ready to Dispatch",         label:"Ready to Dispatch",short:"RTD",  group:"Installation", color:"#fb7185" },
   { key:"Installation Pending",      label:"Install Pending",  short:"INP",  group:"Installation", color:"#f43f5e" },
-  { key:"Dispatch to Site",          label:"Dispatch to Site", short:"DTS",  group:"Installation", color:"#fb7185" },
   { key:"Installation in Progress",  label:"Installing",       short:"INS",  group:"Installation", color:"#ec4899" },
   { key:"Installation Completed",    label:"Install Complete", short:"ICP",  group:"Installation", color:"#059669" },
   { key:"S.A.T",                     label:"S.A.T",            short:"SAT",  group:"Installation", color:"#8b5cf6" },
-  { key:"Dispatch Stage",            label:"Dispatch",         short:"DSP",  group:"Done",         color:"#10b981" },
+  { key:"Dispatch Stage",            label:"MT Completed",     short:"MTC",  group:"Done",         color:"#10b981" },
   { key:"Documentation",             label:"Documentation",    short:"DOC",  group:"Done",         color:"#0284c7" },
   { key:"Equipment Handover",        label:"Handover",         short:"EHO",  group:"Done",         color:"#16a34a" },
   { key:"Completed",                 label:"Completed",        short:"CMP",  group:"Done",         color:"#22c55e" },

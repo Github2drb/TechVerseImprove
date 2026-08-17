@@ -53,7 +53,11 @@ type EngineerStatusMap = Record<string, EngineerStatusProject>; // key = project
 // ── Status config ─────────────────────────────────────────────────────────────
 // Testing ends at F.A.T. Installation is its own group — S.A.T happens on site
 // AFTER installation, so it belongs to Installation, not Testing.
-// Done group = Dispatch → Documentation → Handover → Completed.
+// "ready_to_dispatch" is the first Installation step — equipment staged and
+// ready to leave the shop for site, before Installation Pending begins.
+// Done group = MT Completed (Machine Trial Completed — key kept as
+// "dispatch_stage" so existing saved assignment statuses keep working, only
+// the display label changed) → Documentation → Handover → Completed.
 // completed = final status → assignment is considered finished.
 const statusColors: Record<string,string> = {
   not_started:"bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200",
@@ -67,6 +71,7 @@ const statusColors: Record<string,string> = {
   waiting_for_materials:"bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
   mechanical_assembly:"bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200",
   electrical_assembly:"bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200",
+  ready_to_dispatch:"bg-rose-300 text-rose-950 dark:bg-rose-800 dark:text-rose-100",
   installation_pending:"bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200",
   installation_in_progress:"bg-pink-100 text-pink-800 dark:bg-pink-900 dark:text-pink-200",
   installation_completed:"bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
@@ -84,20 +89,21 @@ const statusLabels: Record<string,string> = {
   on_hold:"On Hold", blocked:"Blocked", design_stage:"Design Stage",
   electrical_design:"Electrical Design", procurement_stage:"Procurement Stage",
   waiting_for_materials:"Waiting for Materials", mechanical_assembly:"Mechanical Assembly",
-  electrical_assembly:"Electrical Assembly", installation_pending:"Installation Pending",
+  electrical_assembly:"Electrical Assembly", ready_to_dispatch:"Ready to Dispatch",
+  installation_pending:"Installation Pending",
   installation_in_progress:"Installation in Progress", installation_completed:"Installation Completed",
   documentation:"Documentation", equipment_handover:"Equipment Handover",
   plc_power_up:"PLC Power Up",
   io_check:"IO Check", trials_stage:"Trials Stage", fat:"F.A.T", sat:"S.A.T",
-  dispatch_stage:"Dispatch Stage",
+  dispatch_stage:"MT Completed",
 };
 const STATUS_GROUPS = [
   { label:"General", items:[{value:"not_started",label:"Not Started"},{value:"in_progress",label:"In Progress"},{value:"on_hold",label:"On Hold"},{value:"blocked",label:"Blocked"}]},
   { label:"Design & Procurement", items:[{value:"design_stage",label:"Design Stage"},{value:"electrical_design",label:"Electrical Design"},{value:"procurement_stage",label:"Procurement Stage"},{value:"waiting_for_materials",label:"Waiting for Materials"}]},
   { label:"Assembly", items:[{value:"mechanical_assembly",label:"Mechanical Assembly"},{value:"electrical_assembly",label:"Electrical Assembly"}]},
   { label:"Testing & Commissioning", items:[{value:"plc_power_up",label:"PLC Power Up"},{value:"io_check",label:"IO Check"},{value:"trials_stage",label:"Trials Stage"},{value:"fat",label:"F.A.T"}]},
-  { label:"Installation", items:[{value:"installation_pending",label:"Installation Pending"},{value:"installation_in_progress",label:"Installation in Progress"},{value:"installation_completed",label:"Installation Completed"},{value:"sat",label:"S.A.T"}]},
-  { label:"Done", items:[{value:"dispatch_stage",label:"Dispatch Stage"},{value:"documentation",label:"Documentation"},{value:"equipment_handover",label:"Equipment Handover"},{value:"completed",label:"Completed"}]},
+  { label:"Installation", items:[{value:"ready_to_dispatch",label:"Ready to Dispatch"},{value:"installation_pending",label:"Installation Pending"},{value:"installation_in_progress",label:"Installation in Progress"},{value:"installation_completed",label:"Installation Completed"},{value:"sat",label:"S.A.T"}]},
+  { label:"Done", items:[{value:"dispatch_stage",label:"MT Completed"},{value:"documentation",label:"Documentation"},{value:"equipment_handover",label:"Equipment Handover"},{value:"completed",label:"Completed"}]},
 ];
 
 // Statuses that mean "this assignment is finished" — hidden from the tracker.
