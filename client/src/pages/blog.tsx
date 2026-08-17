@@ -999,7 +999,7 @@ export default function BlogPage() {
       <main className="mx-auto max-w-[98vw] xl:max-w-6xl px-4 py-8 md:px-6 space-y-6">
         <div className="flex items-start justify-between flex-wrap gap-4">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight mb-1">Knowledge Base</h1>
+            <h1 className="text-3xl font-bold tracking-tight mb-1">Knowledge Base TEST123</h1>
             <p className="text-muted-foreground text-sm">Automation insights and technical updates from the Controls team</p>
           </div>
           <div className="flex gap-2 items-center flex-wrap">
