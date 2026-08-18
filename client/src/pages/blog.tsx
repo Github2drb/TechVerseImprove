@@ -245,33 +245,54 @@ export default function BlogPage() {
 
     const cleanups: Array<() => void> = [];
 
-    div.querySelectorAll<HTMLInputElement>('input[id$="_dur"]').forEach(durInput => {
-      const base = durInput.id.slice(0, -4); // strip trailing "_dur"
-      const startInput = div.querySelector<HTMLInputElement>(`#${base}_start`);
-      const endInput   = div.querySelector<HTMLInputElement>(`#${base}_end`);
-      if (!startInput || !endInput) return; // only wire up complete trios
+    // Wires up every "<prefix><suffix>" / "<prefix>_start" / "<prefix>_end"
+    // input trio found in the content, converting the suffix field's raw
+    // value to a whole number of days via toDays(), then setting
+    // End = Start + days whenever either field changes.
+    const wireTrio = (suffix: string, toDays: (raw: string) => number | null) => {
+      div.querySelectorAll<HTMLInputElement>(`input[id$="${suffix}"]`).forEach(srcInput => {
+        const base = srcInput.id.slice(0, -suffix.length);
+        const startInput = div.querySelector<HTMLInputElement>(`#${base}_start`);
+        const endInput   = div.querySelector<HTMLInputElement>(`#${base}_end`);
+        if (!startInput || !endInput) return; // only wire up complete trios
 
-      const recalc = () => {
-        const days = parseInt(durInput.value, 10);
-        const startVal = startInput.value; // native <input type=date> value: "YYYY-MM-DD"
-        if (!startVal || !Number.isFinite(days) || days <= 0) return;
-        const start = new Date(startVal + "T00:00:00");
-        if (isNaN(start.getTime())) return;
-        const end = new Date(start);
-        end.setDate(end.getDate() + days); // End = Start + Duration calendar days
-        const iso = end.toISOString().split("T")[0];
-        if (endInput.value !== iso) {
-          endInput.value = iso;
-          endInput.dispatchEvent(new Event("change", { bubbles: true }));
-        }
-      };
+        const recalc = () => {
+          const days = toDays(srcInput.value);
+          const startVal = startInput.value; // native <input type=date> value: "YYYY-MM-DD"
+          if (!startVal || days === null) return;
+          const start = new Date(startVal + "T00:00:00");
+          if (isNaN(start.getTime())) return;
+          const end = new Date(start);
+          end.setDate(end.getDate() + days); // End = Start + days
+          const iso = end.toISOString().split("T")[0];
+          if (endInput.value !== iso) {
+            endInput.value = iso;
+            endInput.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+        };
 
-      durInput.addEventListener("input", recalc);
-      startInput.addEventListener("input", recalc);
-      cleanups.push(() => {
-        durInput.removeEventListener("input", recalc);
-        startInput.removeEventListener("input", recalc);
+        srcInput.addEventListener("input", recalc);
+        startInput.addEventListener("input", recalc);
+        cleanups.push(() => {
+          srcInput.removeEventListener("input", recalc);
+          startInput.removeEventListener("input", recalc);
+        });
       });
+    };
+
+    // Section 5 (Project Phases & Milestones — Phase 1/2/3 task tables):
+    // Duration is already a day count, used directly.
+    wireTrio("_dur", raw => {
+      const n = parseInt(raw, 10);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    });
+
+    // Section 3 (Team Assignment Matrix): Hours, not days. Assumes an
+    // 8-hour workday and rounds up — a person allocated 21 hours still
+    // occupies 3 full calendar days (ceil(21/8) = 3), not 2.625.
+    wireTrio("_hrs", raw => {
+      const n = parseFloat(raw);
+      return Number.isFinite(n) && n > 0 ? Math.ceil(n / 8) : null;
     });
 
     return () => cleanups.forEach(fn => fn());
