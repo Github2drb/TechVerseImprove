@@ -228,6 +228,55 @@ export default function BlogPage() {
   };
   useEffect(() => { load(); }, []);
 
+  // ── Auto-calculate End Date from Start Date + Duration (days) ─────────────
+  // Applies generically to every "<prefix>_dur" / "<prefix>_start" /
+  // "<prefix>_end" input trio found in the rendered post content — currently
+  // the Phase 1/2/3 task tables in the Controls Project Allocation form, but
+  // this will pick up any future table following the same ID convention
+  // without needing another code change.
+  //
+  // This logic intentionally lives here in React, not as a <script> tag in
+  // the post's HTML — DOMPurify strips <script> tags by design (a real
+  // security boundary, not a bug), so embedding it in the content would just
+  // get silently stripped again, the same way the earlier <style> block was.
+  useEffect(() => {
+    const div = contentRef.current;
+    if (!div || !selected) return;
+
+    const cleanups: Array<() => void> = [];
+
+    div.querySelectorAll<HTMLInputElement>('input[id$="_dur"]').forEach(durInput => {
+      const base = durInput.id.slice(0, -4); // strip trailing "_dur"
+      const startInput = div.querySelector<HTMLInputElement>(`#${base}_start`);
+      const endInput   = div.querySelector<HTMLInputElement>(`#${base}_end`);
+      if (!startInput || !endInput) return; // only wire up complete trios
+
+      const recalc = () => {
+        const days = parseInt(durInput.value, 10);
+        const startVal = startInput.value; // native <input type=date> value: "YYYY-MM-DD"
+        if (!startVal || !Number.isFinite(days) || days <= 0) return;
+        const start = new Date(startVal + "T00:00:00");
+        if (isNaN(start.getTime())) return;
+        const end = new Date(start);
+        end.setDate(end.getDate() + days); // End = Start + Duration calendar days
+        const iso = end.toISOString().split("T")[0];
+        if (endInput.value !== iso) {
+          endInput.value = iso;
+          endInput.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      };
+
+      durInput.addEventListener("input", recalc);
+      startInput.addEventListener("input", recalc);
+      cleanups.push(() => {
+        durInput.removeEventListener("input", recalc);
+        startInput.removeEventListener("input", recalc);
+      });
+    });
+
+    return () => cleanups.forEach(fn => fn());
+  }, [selected]);
+
   const filtered = posts.filter(p => {
     const matchCat = category === "All" || p.category === category;
     const q = search.toLowerCase();
@@ -999,7 +1048,7 @@ export default function BlogPage() {
       <main className="mx-auto max-w-[98vw] xl:max-w-6xl px-4 py-8 md:px-6 space-y-6">
         <div className="flex items-start justify-between flex-wrap gap-4">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight mb-1">Knowledge Base TEST123</h1>
+            <h1 className="text-3xl font-bold tracking-tight mb-1">Knowledge Base</h1>
             <p className="text-muted-foreground text-sm">Automation insights and technical updates from the Controls team</p>
           </div>
           <div className="flex gap-2 items-center flex-wrap">
