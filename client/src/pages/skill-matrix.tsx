@@ -244,6 +244,32 @@ function findEngineerOverride(map: EngineerStatusMap, projectName: string, engin
   return Object.values(proj.engineers).find(e => namesMatch(e.displayName, engineerName));
 }
 
+// ─── Phase order + wind-down phases ───────────────────────────────────────
+// Mirrors the STATUS_GROUPS taxonomy on the Project Tracker page. Used to
+// find how far along a project an engineer has reached, so late-stage
+// phases (S.A.T, Dispatch, Documentation, Equipment Handover — where the
+// bulk of the engineering work is already done and remaining effort is
+// light) don't get counted as full concurrent workload the same way an
+// early/mid-stage phase does. Without this, an engineer wrapping up two
+// projects in Handover looks identical to one actively juggling two
+// projects still in Assembly or F.A.T.
+const STATUS_ORDER = [
+  "not_started", "on_hold", "blocked", "in_progress",
+  "design_stage", "electrical_design", "procurement_stage", "waiting_for_materials",
+  "mechanical_assembly", "electrical_assembly",
+  "plc_power_up", "io_check", "trials_stage", "fat",
+  "installation_pending", "installation_in_progress", "installation_completed", "sat",
+  "dispatch_stage", "documentation", "equipment_handover", "completed",
+];
+const WIND_DOWN_STATUSES = new Set(["sat", "dispatch_stage", "documentation", "equipment_handover"]);
+function statusRank(s: string): number {
+  const i = STATUS_ORDER.indexOf(s);
+  return i === -1 ? 0 : i;
+}
+function mostAdvancedStatus(statuses: string[]): string {
+  return statuses.reduce((best, s) => (statusRank(s) > statusRank(best) ? s : best), statuses[0] ?? "not_started");
+}
+
 // ─── Performance level ───
 function getPerformanceLevel(efficiency: number): { label: string; color: string; icon: typeof Star } {
   if (efficiency >= 90) return { label: "Expert",      color: "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300", icon: Award       };
@@ -270,6 +296,8 @@ interface EngineerStats {
   totalProjects: number;
   completedProjects: number;
   activeProjectNames: string[];
+  heavyLoadProjectNames: string[];
+  windDownProjectNames: string[];
   taskEfficiency: number;
   projectEfficiency: number;
   overallEfficiency: number;
@@ -285,14 +313,18 @@ interface Diagnosis {
 
 // ─── Automatic diagnosis: WHY is this engineer below threshold? ───
 function getDiagnosis(e: EngineerStats): Diagnosis {
-  const activeProjects = e.activeProjectNames.length;
+  // Only projects still in early/mid-stage phases count toward "over-allocated" —
+  // projects an engineer has already reached S.A.T/Dispatch/Documentation/Handover
+  // on are wrapping up and shouldn't inflate the concurrent-load signal.
+  const heavyLoadProjects = e.heavyLoadProjectNames.length;
 
-  // Present and producing activity, but assigned across multiple live projects → capacity problem
-  if (activeProjects >= 2 && e.taskEfficiency < 50) {
+  // Present and producing activity, but assigned across multiple genuinely
+  // active (non-wind-down) projects → capacity problem
+  if (heavyLoadProjects >= 2 && e.taskEfficiency < 50) {
     return {
       label: "Over-allocated",
       color: "bg-red-500/20 text-red-700 dark:text-red-300",
-      detail: `Assigned to ${activeProjects} concurrent active projects. Task completion has collapsed because the assigned load exceeds one engineer's completable capacity — not because of absence or inactivity.`,
+      detail: `Assigned to ${heavyLoadProjects} concurrent active projects still in early/mid-stage phases${e.windDownProjectNames.length > 0 ? ` (plus ${e.windDownProjectNames.length} more that are wrapping up in S.A.T/Dispatch/Documentation/Handover and counted as light load)` : ""}. Task completion has collapsed because the assigned load exceeds one engineer's completable capacity — not because of absence or inactivity.`,
       recommendation: "Add capacity: recruit or engage an outsourced engineer to absorb part of the concurrent project scope, or rebalance assignments across the team.",
     };
   }
@@ -335,7 +367,7 @@ function buildJustification(e: EngineerStats, diagnosis: Diagnosis): string {
     `SUPPORT JUSTIFICATION — ${e.name} (as of ${today})\n` +
     `Overall completion rate: ${e.overallEfficiency}% (below the 50% support threshold).\n` +
     `Daily tasks: ${e.completedTasks} of ${e.totalTasks} completed (${e.taskEfficiency}%), ${e.inProgressTasks} in progress, ${e.targetTasksCount} target tasks set today.\n` +
-    `Projects: ${e.completedProjects} of ${e.totalProjects} assignments completed; currently active on ${e.activeProjectNames.length} project(s): ${projectList}.\n` +
+    `Projects: ${e.completedProjects} of ${e.totalProjects} assignments completed; currently active on ${e.activeProjectNames.length} project(s): ${projectList} — of which ${e.heavyLoadProjectNames.length} are still early/mid-stage and ${e.windDownProjectNames.length} are wrapping up (S.A.T/Dispatch/Documentation/Handover).\n` +
     `Activity log entries: ${e.activitiesCount}.\n` +
     `Diagnosis: ${diagnosis.label} — ${diagnosis.detail}\n` +
     `Recommendation: ${diagnosis.recommendation}`
@@ -398,6 +430,26 @@ export default function SkillMatrix() {
         .filter(Boolean)
     ));
 
+    // For each active project, find the furthest phase this engineer has
+    // reached on it (across all their weekly assignment records), then split
+    // into "heavy load" (still early/mid-stage — real concurrent work) vs
+    // "wind-down" (S.A.T/Dispatch/Documentation/Handover — largely done,
+    // light remaining effort). This is what keeps the over-allocation
+    // diagnosis from firing just because an engineer is listed on several
+    // projects that are actually close to finished.
+    const statusesByProject = new Map<string, string[]>();
+    engineerAssignments.forEach(a => {
+      const key = a.projectName.trim();
+      if (!statusesByProject.has(key)) statusesByProject.set(key, []);
+      statusesByProject.get(key)!.push(a.currentStatus);
+    });
+    const heavyLoadProjectNames = activeProjectNames.filter(name =>
+      !WIND_DOWN_STATUSES.has(mostAdvancedStatus(statusesByProject.get(name) ?? []))
+    );
+    const windDownProjectNames = activeProjectNames.filter(name =>
+      WIND_DOWN_STATUSES.has(mostAdvancedStatus(statusesByProject.get(name) ?? []))
+    );
+
     const taskEfficiency    = calculateEfficiency(completedTasks, totalTasks);
     const projectEfficiency = calculateEfficiency(completedAssignments, totalAssignments);
     const overallEfficiency = totalTasks + totalAssignments > 0
@@ -410,7 +462,7 @@ export default function SkillMatrix() {
       initials: engineer.initials,
       totalTasks, completedTasks, inProgressTasks, targetTasksCount, activitiesCount,
       totalProjects: totalAssignments, completedProjects: completedAssignments,
-      activeProjectNames,
+      activeProjectNames, heavyLoadProjectNames, windDownProjectNames,
       taskEfficiency, projectEfficiency, overallEfficiency,
       performance: getPerformanceLevel(overallEfficiency),
     };
@@ -483,6 +535,8 @@ export default function SkillMatrix() {
                 Task Rate on this page = (completed tasks + completed projects) ÷ (assigned tasks + projects).
                 Projects an engineer has individually marked complete on their own tab in Project Tracker count
                 as completed here even if the shared project-level status is still open for the rest of the team.
+                Active projects in S.A.T, Dispatch, Documentation or Equipment Handover are treated as
+                "wrapping up" rather than full concurrent load when diagnosing over-allocation.
                 The weekly weighted score (Attendance 40% + Task Completion 40% + Activity Log 20%) is shown in the Star Performer banner above.
                 Commissioning Delivery (below) is scored separately against Internal and Customer target dates.
               </CardDescription>
@@ -683,12 +737,15 @@ export default function SkillMatrix() {
                                     <FolderOpen className="h-3.5 w-3.5"/>Project Load
                                   </div>
                                   <p className="text-lg font-semibold">
-                                    {engineer.activeProjectNames.length} active
+                                    {engineer.heavyLoadProjectNames.length} active
                                     <span className="text-sm font-normal text-muted-foreground ml-1">
                                       ({engineer.completedProjects}/{engineer.totalProjects} done)
                                     </span>
                                   </p>
                                   <p className="text-xs text-muted-foreground">
+                                    {engineer.windDownProjectNames.length > 0
+                                      ? `+${engineer.windDownProjectNames.length} wrapping up · `
+                                      : ""}
                                     Project completion {engineer.projectEfficiency}%
                                   </p>
                                 </div>
@@ -703,19 +760,37 @@ export default function SkillMatrix() {
                                 </div>
                               </div>
 
-                              {/* Active project names */}
+                              {/* Active project names — split by real load vs wrapping up */}
                               {engineer.activeProjectNames.length > 0 && (
-                                <div>
-                                  <p className="text-xs font-medium text-muted-foreground mb-1.5">
-                                    ACTIVE PROJECTS ({engineer.activeProjectNames.length})
-                                  </p>
-                                  <div className="flex flex-wrap gap-1.5">
-                                    {engineer.activeProjectNames.map(name => (
-                                      <Badge key={name} variant="outline" className="text-xs font-normal">
-                                        {name}
-                                      </Badge>
-                                    ))}
-                                  </div>
+                                <div className="space-y-2">
+                                  {engineer.heavyLoadProjectNames.length > 0 && (
+                                    <div>
+                                      <p className="text-xs font-medium text-muted-foreground mb-1.5">
+                                        ACTIVE PROJECTS ({engineer.heavyLoadProjectNames.length})
+                                      </p>
+                                      <div className="flex flex-wrap gap-1.5">
+                                        {engineer.heavyLoadProjectNames.map(name => (
+                                          <Badge key={name} variant="outline" className="text-xs font-normal">
+                                            {name}
+                                          </Badge>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                  {engineer.windDownProjectNames.length > 0 && (
+                                    <div>
+                                      <p className="text-xs font-medium text-muted-foreground mb-1.5">
+                                        WRAPPING UP — S.A.T / Dispatch / Documentation / Handover ({engineer.windDownProjectNames.length})
+                                      </p>
+                                      <div className="flex flex-wrap gap-1.5">
+                                        {engineer.windDownProjectNames.map(name => (
+                                          <Badge key={name} variant="outline" className="text-xs font-normal text-muted-foreground border-dashed">
+                                            {name}
+                                          </Badge>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
                               )}
 
