@@ -45,6 +45,7 @@ const PHASES = [
   { key:"Trials Stage",              label:"Trials",           short:"TRL",  group:"Testing",      color:"#14b8a6" },
   { key:"F.A.T",                     label:"F.A.T",            short:"FAT",  group:"Testing",      color:"#d946ef" },
   { key:"Ready to Dispatch",         label:"Ready to Dispatch",short:"RTD",  group:"Installation", color:"#fb7185" },
+  { key:"Equipment Dispatched",      label:"Equipment Dispatched",short:"EQD",group:"Installation", color:"#e11d48" },
   { key:"Installation Pending",      label:"Install Pending",  short:"INP",  group:"Installation", color:"#f43f5e" },
   { key:"Installation in Progress",  label:"Installing",       short:"INS",  group:"Installation", color:"#ec4899" },
   { key:"Installation Completed",    label:"Install Complete", short:"ICP",  group:"Installation", color:"#059669" },
