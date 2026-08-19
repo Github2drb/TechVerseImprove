@@ -50,6 +50,7 @@ const STATUS_OPTIONS = [
   { value:"F.A.T",                    label:"F.A.T",                    icon:Clock,        color:"bg-fuchsia-500/20 text-fuchsia-700 dark:text-fuchsia-300"},
   // Installation
   { value:"Ready to Dispatch",        label:"Ready to Dispatch",        icon:Clock,        color:"bg-red-500/20 text-red-700 dark:text-red-300"           },
+  { value:"Equipment Dispatched",     label:"Equipment Dispatched",     icon:Clock,        color:"bg-rose-600/20 text-rose-700 dark:text-rose-300"        },
   { value:"Installation Pending",     label:"Installation Pending",     icon:Clock,        color:"bg-rose-500/20 text-rose-700 dark:text-rose-300"        },
   { value:"Installation in Progress", label:"Installation in Progress", icon:Clock,        color:"bg-pink-500/20 text-pink-700 dark:text-pink-300"        },
   { value:"Installation Completed",   label:"Installation Completed",   icon:CheckCircle,  color:"bg-teal-500/20 text-teal-700 dark:text-teal-300"        },
