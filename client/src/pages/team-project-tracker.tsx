@@ -126,22 +126,32 @@ function calcDaysExceeded(till?:string):number {
 function normName(s:string):string{
   return s.trim().replace(/\s*\([^)]*\)\s*/g,"").trim().toLowerCase();
 }
+// Strips stray/double commas (e.g. "Harsha,," or ", Deekshitha") down to a
+// clean, human-readable "Name, Name" string without losing original casing.
+function cleanEngineerNameDisplay(raw:string):string{
+  return raw.split(",").map(p=>p.trim()).filter(Boolean).join(", ");
+}
 function groupByProject(assignments:WeeklyAssignment[]):ProjectRow[] {
   const map:Record<string,ProjectRow>={};
   const seenNames:Record<string,Set<string>>={}; // projectKey -> set of normalized individual engineer names already shown
 
   assignments.forEach(a=>{
+    // A record with no engineer name at all carries no useful data (no name,
+    // no dates) — it's data corruption, never a valid allocation. Never show it.
+    if(!a.engineerName||!a.engineerName.trim()) return;
+
     const k=a.projectName.toLowerCase().trim();
     if(!map[k]){map[k]={projectName:a.projectName,engineers:[]};seenNames[k]=new Set();}
     if(map[k].engineers.find(e=>e.assignmentId===a.id)) return; // already added this exact record
 
     const individualNames=a.engineerName.split(",").map(n=>normName(n)).filter(Boolean);
-    const allAlreadySeen=individualNames.length>0 && individualNames.every(n=>seenNames[k].has(n));
+    if(individualNames.length===0) return; // e.g. engineerName was just "," or whitespace
+    const allAlreadySeen=individualNames.every(n=>seenNames[k].has(n));
     if(allAlreadySeen) return; // every person in this record is already represented — skip the duplicate row
 
     individualNames.forEach(n=>seenNames[k].add(n));
     map[k].engineers.push({
-      assignmentId:a.id, name:a.engineerName,
+      assignmentId:a.id, name:cleanEngineerNameDisplay(a.engineerName),
       resourceLockedFrom:a.resourceLockedFrom, resourceLockedTill:a.resourceLockedTill,
       resourceLockDays:calcLockDays(a.resourceLockedFrom,a.resourceLockedTill),
       daysExceeded:calcDaysExceeded(a.resourceLockedTill),
@@ -170,8 +180,11 @@ function getEngineerOverride(map:EngineerStatusMap, projectName:string, engineer
 }
 // Status actually shown for an engineer row — override wins, falls back to
 // the shared project-level status so nothing changes for engineers who have
-// never had an individual status set.
+// never had an individual status set. EXCEPTION: once the shared/project-level
+// status is "completed", that always wins — an individual can never show a
+// different status than "Completed" once the whole project is marked done.
 function effectiveStatusFor(eng:EngineerRowData, projectName:string, map:EngineerStatusMap):string{
+  if(eng.currentStatus==="completed") return "completed";
   return getEngineerOverride(map,projectName,eng.name)?.currentStatus || eng.currentStatus;
 }
 
@@ -239,7 +252,13 @@ function EngineerStatusPanel({isAdmin, engineer, override, onSave, onClear, savi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[engineer.assignmentId, engineer.name, override?.updatedAt]);
 
-  const effectiveStatus = override?.currentStatus || engineer.currentStatus;
+  // Once the shared/project-level status is "Completed", the individual
+  // status can never diverge from it — always reads Completed, not editable.
+  const isLockedCompleted = engineer.currentStatus==="completed";
+  const effectiveStatus = isLockedCompleted ? "completed" : (override?.currentStatus || engineer.currentStatus);
+  // An engineer can't hold any status other than "Not Started" without dates
+  // allocated — a status with no timeline behind it is meaningless.
+  const missingDates = draft.currentStatus!=="not_started" && (!draft.resourceLockedFrom||!draft.resourceLockedTill);
 
   return(
     <div className="pt-4">
@@ -247,7 +266,7 @@ function EngineerStatusPanel({isAdmin, engineer, override, onSave, onClear, savi
         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
           {engineer.name.split(" ")[0]}&apos;s Individual Status
         </p>
-        {isAdmin&&!editing&&(
+        {isAdmin&&!editing&&!isLockedCompleted&&(
           <button type="button" onClick={()=>setEditing(true)} className="text-xs text-primary hover:underline flex items-center gap-1">
             <Edit2 className="h-3 w-3"/>{override?"Edit":"Set individually"}
           </button>
@@ -259,7 +278,9 @@ function EngineerStatusPanel({isAdmin, engineer, override, onSave, onClear, savi
           <Badge className={`${statusColors[effectiveStatus]??statusColors.not_started} text-xs`}>
             {statusLabels[effectiveStatus]??effectiveStatus}
           </Badge>
-          {override?(
+          {isLockedCompleted?(
+            <span className="text-[11px] text-muted-foreground">project marked Completed — status locked</span>
+          ):override?(
             <span className="text-[11px] text-muted-foreground">
               individually updated{override.updatedAt?` · ${fmtDate(override.updatedAt)}`:""}
             </span>
@@ -286,6 +307,9 @@ function EngineerStatusPanel({isAdmin, engineer, override, onSave, onClear, savi
             <div className="grid gap-1"><Label className="text-xs">Customer Target</Label>
               <Input type="date" className="h-8 text-xs" value={draft.customerTarget} onChange={e=>setDraft(p=>({...p,customerTarget:e.target.value}))}/></div>
           </div>
+          {missingDates&&(
+            <p className="text-[11px] text-red-500">Set Locked From and Locked Till dates before saving a status other than "Not Started".</p>
+          )}
           <div className="flex items-center justify-between gap-2 pt-1">
             {override?(
               <button type="button" onClick={()=>{onClear();setEditing(false);}} className="text-xs text-red-500 hover:underline">
@@ -294,7 +318,7 @@ function EngineerStatusPanel({isAdmin, engineer, override, onSave, onClear, savi
             ):<span/>}
             <div className="flex gap-2">
               <Button size="sm" variant="outline" className="h-7 text-xs" onClick={()=>setEditing(false)}>Cancel</Button>
-              <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={()=>{onSave(draft);setEditing(false);}}>
+              <Button size="sm" className="h-7 text-xs" disabled={saving||missingDates} onClick={()=>{onSave(draft);setEditing(false);}}>
                 {saving?"Saving…":"Save"}
               </Button>
             </div>
@@ -395,6 +419,9 @@ function FormFields({ formData, setFormData, projectNames, engineerPickerProps }
           <SelectTrigger><SelectValue/></SelectTrigger>
           <SelectContent className="max-h-80 overflow-y-auto"><StatusSelectItems/></SelectContent>
         </Select>
+        {formData.currentStatus!=="not_started"&&(!formData.resourceLockedFrom||!formData.resourceLockedTill)&&(
+          <p className="text-xs text-red-500">Set Resource Locked From and Till dates before saving a status other than "Not Started".</p>
+        )}
       </div>
       <div className="grid gap-2"><Label>Constraints</Label>
         <Textarea value={formData.constraint} onChange={e=>setFormData(p=>({...p,constraint:e.target.value}))} placeholder="Any constraints or notes..."/></div>
@@ -464,11 +491,18 @@ export default function TeamProjectTracker() {
   // status filter (e.g. "Completed") must be able to surface them.
   const projectRows=useMemo(()=>groupByProject(assignments),[assignments]);
   const filtered=useMemo(()=>projectRows.filter(p=>{
-    const allTerminal=p.engineers.every(e=>TERMINAL_STATUSES.includes(e.currentStatus));
-    if(statusFilter==="all"&&allTerminal)return false; // declutter default view only
+    // "Completed" is an OVERALL project state, not a per-engineer one — a
+    // project only counts as Completed when EVERY engineer on it is
+    // Completed. A single completed record among others doesn't qualify.
+    const allCompleted=p.engineers.length>0&&p.engineers.every(e=>TERMINAL_STATUSES.includes(e.currentStatus));
+    if(statusFilter==="all"&&allCompleted)return false; // declutter default view only
     const mQ=p.projectName.toLowerCase().includes(search.toLowerCase())||
       p.engineers.some(e=>e.name.toLowerCase().includes(search.toLowerCase()));
-    const mS=statusFilter==="all"||p.engineers.some(e=>e.currentStatus===statusFilter);
+    const mS=statusFilter==="all"
+      ?true
+      :statusFilter==="completed"
+        ?allCompleted
+        :p.engineers.some(e=>e.currentStatus===statusFilter);
     return mQ&&mS;
   }),[projectRows,search,statusFilter]);
 
@@ -524,12 +558,25 @@ export default function TeamProjectTracker() {
       setEditOpen(true);
     }
   };
+  // An engineer can't be given any status other than "Not Started" without
+  // a Resource Locked From/Till timeline behind it — no empty/date-less
+  // status changes allowed.
+  const statusNeedsDates=()=>{
+    if(formData.currentStatus!=="not_started"&&(!formData.resourceLockedFrom||!formData.resourceLockedTill)){
+      toast({title:"Set Resource Locked From/Till dates before saving a status other than \"Not Started\"",variant:"destructive"});
+      return true;
+    }
+    return false;
+  };
   const handleSaveEdit=()=>{
     if(!editingA)return;
+    if(!formData.projectName||!formData.engineerName){toast({title:"Project and Engineer required",variant:"destructive"});return;}
+    if(statusNeedsDates())return;
     updateMutation.mutate({id:editingA.id,weekStart:editingA.weekStart,projectName:formData.projectName,projectTargetDate:editingA.projectTargetDate,tasks:editingA.tasks,notes:editingA.notes,engineerName:formData.engineerName,resourceLockedFrom:formData.resourceLockedFrom||undefined,resourceLockedTill:formData.resourceLockedTill||undefined,internalTarget:formData.internalTarget||undefined,customerTarget:formData.customerTarget||undefined,currentStatus:formData.currentStatus as any,constraint:formData.constraint||undefined});
   };
   const handleAdd=()=>{
     if(!formData.projectName||!formData.engineerName){toast({title:"Project and Engineer required",variant:"destructive"});return;}
+    if(statusNeedsDates())return;
     addMutation.mutate({engineerName:formData.engineerName,projectName:formData.projectName,weekStart:format(startOfWeek(new Date(),{weekStartsOn:1}),"yyyy-MM-dd"),resourceLockedFrom:formData.resourceLockedFrom||undefined,resourceLockedTill:formData.resourceLockedTill||undefined,internalTarget:formData.internalTarget||undefined,customerTarget:formData.customerTarget||undefined,currentStatus:formData.currentStatus as any,constraint:formData.constraint||undefined,tasks:[]});
   };
 
