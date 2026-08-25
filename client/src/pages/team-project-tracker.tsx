@@ -44,7 +44,7 @@ interface ProjectRow { projectName: string; engineers: EngineerRowData[]; }
 interface EngineerStatusEntry {
   displayName: string; currentStatus: string;
   resourceLockedFrom?: string; resourceLockedTill?: string;
-  internalTarget?: string; customerTarget?: string;
+  internalTarget?: string; customerTarget?: string; constraint?: string;
   updatedAt?: string; updatedBy?: string;
 }
 interface EngineerStatusProject { projectName: string; engineers: Record<string, EngineerStatusEntry>; }
@@ -126,6 +126,12 @@ function calcDaysExceeded(till?:string):number {
 function normName(s:string):string{
   return s.trim().replace(/\s*\([^)]*\)\s*/g,"").trim().toLowerCase();
 }
+// Normalized key for detecting duplicate/near-duplicate project names — case,
+// surrounding whitespace, trailing punctuation, and internal double-spaces
+// must never be enough to create a second "different" project.
+function normProjectKey(s:string):string{
+  return s.trim().toLowerCase().replace(/[.\s]+$/,"").replace(/\s+/g," ");
+}
 function groupByProject(assignments:WeeklyAssignment[]):ProjectRow[] {
   const map:Record<string,ProjectRow>={};
   const seenNames:Record<string,Set<string>>={}; // projectKey -> set of normalized individual engineer names already shown
@@ -135,7 +141,7 @@ function groupByProject(assignments:WeeklyAssignment[]):ProjectRow[] {
     // no dates) — it's data corruption, never a valid allocation. Never show it.
     if(!a.engineerName||!a.engineerName.trim()) return;
 
-    const k=a.projectName.toLowerCase().trim();
+    const k=normProjectKey(a.projectName);
     if(!map[k]){map[k]={projectName:a.projectName,engineers:[]};seenNames[k]=new Set();}
 
     // A single assignment record's engineerName can list several
@@ -187,6 +193,26 @@ function effectiveStatusFor(eng:EngineerRowData, projectName:string, map:Enginee
   if(eng.currentStatus==="completed") return "completed";
   return getEngineerOverride(map,projectName,eng.name)?.currentStatus || eng.currentStatus;
 }
+// Full merged view of an engineer's data — their individual override (if any)
+// wins field-by-field over the shared/base assignment values. Used so that
+// selecting one engineer's tab shows and edits THEIR OWN dates/constraints,
+// not just the shared record everyone on the assignment starts from.
+interface EffectiveEngineerData {
+  currentStatus:string; resourceLockedFrom?:string; resourceLockedTill?:string;
+  internalTarget?:string; customerTarget?:string; constraint?:string; hasOverride:boolean;
+}
+function getEffectiveEngineerData(eng:EngineerRowData, projectName:string, map:EngineerStatusMap):EffectiveEngineerData{
+  const override=getEngineerOverride(map,projectName,eng.name);
+  return {
+    currentStatus: effectiveStatusFor(eng,projectName,map),
+    resourceLockedFrom: override?.resourceLockedFrom || eng.resourceLockedFrom,
+    resourceLockedTill: override?.resourceLockedTill || eng.resourceLockedTill,
+    internalTarget: override?.internalTarget || eng.internalTarget,
+    customerTarget: override?.customerTarget || eng.customerTarget,
+    constraint: override?.constraint || eng.constraint,
+    hasOverride: !!override,
+  };
+}
 
 // ── Detail panel info row ─────────────────────────────────────────────────────
 function InfoRow({icon,label,value,accent}:{icon:React.ReactNode;label:string;value:React.ReactNode;accent?:boolean}){
@@ -225,11 +251,13 @@ interface EngineerStatusPanelProps {
   isAdmin: boolean;
   engineer: EngineerRowData;
   override?: EngineerStatusEntry;
-  onSave: (data:{currentStatus:string;resourceLockedFrom?:string;resourceLockedTill?:string;internalTarget?:string;customerTarget?:string})=>void;
+  onSave: (data:{currentStatus:string;resourceLockedFrom?:string;resourceLockedTill?:string;internalTarget?:string;customerTarget?:string;constraint?:string})=>void;
   onClear: ()=>void;
   saving: boolean;
+  autoEdit?: boolean;
+  onAutoEditConsumed?: ()=>void;
 }
-function EngineerStatusPanel({isAdmin, engineer, override, onSave, onClear, saving}: EngineerStatusPanelProps){
+function EngineerStatusPanel({isAdmin, engineer, override, onSave, onClear, saving, autoEdit, onAutoEditConsumed}: EngineerStatusPanelProps){
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({
     currentStatus: override?.currentStatus || engineer.currentStatus,
@@ -237,6 +265,7 @@ function EngineerStatusPanel({isAdmin, engineer, override, onSave, onClear, savi
     resourceLockedTill: override?.resourceLockedTill || "",
     internalTarget: override?.internalTarget || "",
     customerTarget: override?.customerTarget || "",
+    constraint: override?.constraint || "",
   });
 
   // Re-sync the draft whenever the selected engineer or their saved override changes
@@ -247,6 +276,7 @@ function EngineerStatusPanel({isAdmin, engineer, override, onSave, onClear, savi
       resourceLockedTill: override?.resourceLockedTill || "",
       internalTarget: override?.internalTarget || "",
       customerTarget: override?.customerTarget || "",
+      constraint: override?.constraint || "",
     });
     setEditing(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -259,6 +289,16 @@ function EngineerStatusPanel({isAdmin, engineer, override, onSave, onClear, savi
   // An engineer can't hold any status other than "Not Started" without dates
   // allocated — a status with no timeline behind it is meaningless.
   const missingDates = draft.currentStatus!=="not_started" && (!draft.resourceLockedFrom||!draft.resourceLockedTill);
+
+  // The "edit" pencil in the All Engineers list opens THIS engineer's own
+  // editor directly, instead of the shared multi-engineer Edit Assignment dialog.
+  useEffect(()=>{
+    if(autoEdit&&!isLockedCompleted){
+      setEditing(true);
+      onAutoEditConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[autoEdit]);
 
   return(
     <div className="pt-4">
@@ -306,6 +346,10 @@ function EngineerStatusPanel({isAdmin, engineer, override, onSave, onClear, savi
               <Input type="date" className="h-8 text-xs" value={draft.internalTarget} onChange={e=>setDraft(p=>({...p,internalTarget:e.target.value}))}/></div>
             <div className="grid gap-1"><Label className="text-xs">Customer Target</Label>
               <Input type="date" className="h-8 text-xs" value={draft.customerTarget} onChange={e=>setDraft(p=>({...p,customerTarget:e.target.value}))}/></div>
+          </div>
+          <div className="grid gap-1">
+            <Label className="text-xs">Constraints / Notes for {engineer.name}</Label>
+            <Textarea className="text-xs min-h-16" value={draft.constraint} onChange={e=>setDraft(p=>({...p,constraint:e.target.value}))} placeholder="Any constraints specific to this engineer..."/>
           </div>
           {missingDates&&(
             <p className="text-[11px] text-red-500">Set Locked From and Locked Till dates before saving a status other than "Not Started".</p>
@@ -399,12 +443,19 @@ interface FormFieldsProps {
   engineerPickerProps: EngineerPickerProps;
 }
 function FormFields({ formData, setFormData, projectNames, engineerPickerProps }: FormFieldsProps){
+  const typedKey=normProjectKey(formData.projectName);
+  const nearMatch=formData.projectName.trim()
+    ? projectNames.find(n=>normProjectKey(n)===typedKey&&n!==formData.projectName.trim())
+    : undefined;
   return(
     <div className="grid gap-4 py-4">
       <div className="grid gap-2">
         <Label>Project Name</Label>
         <Input list="proj-list" value={formData.projectName} onChange={e=>setFormData(p=>({...p,projectName:e.target.value}))} placeholder="Type or select project"/>
         <datalist id="proj-list">{projectNames.map(n=><option key={n} value={n}/>)}</datalist>
+        {nearMatch&&(
+          <p className="text-xs text-amber-600">Matches existing project "{nearMatch}" — will be saved under that exact name to avoid a duplicate.</p>
+        )}
       </div>
       <div className="grid gap-2"><Label>Engineer(s)</Label><EngineerPicker {...engineerPickerProps}/></div>
       <div className="grid grid-cols-2 gap-4">
@@ -442,6 +493,7 @@ export default function TeamProjectTracker() {
   const [editingA,       setEditingA]       = useState<WeeklyAssignment|null>(null);
   const [deletingA,      setDeletingA]      = useState<{id:string;projectName:string;engineerName:string;coAssigned:string[]}|null>(null);
   const [selectedEng,    setSelectedEng]    = useState<EngineerRowData|null>(null); // which engineer row in detail
+  const [pendingEditKey, setPendingEditKey] = useState<string|null>(null); // rowKey to auto-open in the individual editor
 
   const [formData, setFormData] = useState({
     engineerName:"", projectName:"",
@@ -506,10 +558,10 @@ export default function TeamProjectTracker() {
     return mQ&&mS;
   }),[projectRows,search,statusFilter]);
 
-  const selectedProject = useMemo(()=>filtered.find(p=>p.projectName.toLowerCase().trim()===selectedKey)||filtered[0]||null,[filtered,selectedKey]);
+  const selectedProject = useMemo(()=>filtered.find(p=>normProjectKey(p.projectName)===selectedKey)||filtered[0]||null,[filtered,selectedKey]);
   useEffect(()=>{
     if(selectedProject){
-      setSelectedKey(selectedProject.projectName.toLowerCase().trim());
+      setSelectedKey(normProjectKey(selectedProject.projectName));
       if(!selectedEng||!selectedProject.engineers.find(e=>e.rowKey===selectedEng.rowKey))
         setSelectedEng(selectedProject.engineers[0]||null);
     }
@@ -542,7 +594,7 @@ export default function TeamProjectTracker() {
   });
   // Save/clear an individual engineer's status+timeline override for the selected project
   const engineerStatusMutation=useMutation({
-    mutationFn:async({projectName,engineerName,data}:{projectName:string;engineerName:string;data:{currentStatus:string;resourceLockedFrom?:string;resourceLockedTill?:string;internalTarget?:string;customerTarget?:string}})=>
+    mutationFn:async({projectName,engineerName,data}:{projectName:string;engineerName:string;data:{currentStatus:string;resourceLockedFrom?:string;resourceLockedTill?:string;internalTarget?:string;customerTarget?:string;constraint?:string}})=>
       apiRequest("POST",`/api/project-engineer-status/${encodeURIComponent(projectName)}/${encodeURIComponent(engineerName)}`,data,true),
     onSuccess:()=>{queryClient.invalidateQueries({queryKey:["/api/project-engineer-status"]});toast({title:"Individual status updated"});},
     onError:(e:any)=>toast({title:e?.message||"Update failed",variant:"destructive"}),
@@ -572,17 +624,33 @@ export default function TeamProjectTracker() {
     }
     return false;
   };
+  // Never let a typo or stray punctuation create a second "different" project.
+  // If what was typed normalizes to match an existing project name, silently
+  // resolve to that exact existing name instead of creating a near-duplicate.
+  const resolveProjectName=(typed:string):string=>{
+    const trimmed=typed.trim();
+    const key=normProjectKey(trimmed);
+    const existing=projectNames.find(n=>normProjectKey(n)===key);
+    if(existing&&existing!==trimmed){
+      toast({title:`Matched existing project "${existing}" — using it to avoid a duplicate`});
+      return existing;
+    }
+    return trimmed;
+  };
   const handleSaveEdit=()=>{
     if(!editingA)return;
     if(!formData.projectName||!formData.engineerName){toast({title:"Project and Engineer required",variant:"destructive"});return;}
     if(statusNeedsDates())return;
-    updateMutation.mutate({id:editingA.id,weekStart:editingA.weekStart,projectName:formData.projectName,projectTargetDate:editingA.projectTargetDate,tasks:editingA.tasks,notes:editingA.notes,engineerName:formData.engineerName,resourceLockedFrom:formData.resourceLockedFrom||undefined,resourceLockedTill:formData.resourceLockedTill||undefined,internalTarget:formData.internalTarget||undefined,customerTarget:formData.customerTarget||undefined,currentStatus:formData.currentStatus as any,constraint:formData.constraint||undefined});
+    const projectName=resolveProjectName(formData.projectName);
+    updateMutation.mutate({id:editingA.id,weekStart:editingA.weekStart,projectName,projectTargetDate:editingA.projectTargetDate,tasks:editingA.tasks,notes:editingA.notes,engineerName:formData.engineerName,resourceLockedFrom:formData.resourceLockedFrom||undefined,resourceLockedTill:formData.resourceLockedTill||undefined,internalTarget:formData.internalTarget||undefined,customerTarget:formData.customerTarget||undefined,currentStatus:formData.currentStatus as any,constraint:formData.constraint||undefined});
   };
   const handleAdd=()=>{
     if(!formData.projectName||!formData.engineerName){toast({title:"Project and Engineer required",variant:"destructive"});return;}
     if(statusNeedsDates())return;
-    addMutation.mutate({engineerName:formData.engineerName,projectName:formData.projectName,weekStart:format(startOfWeek(new Date(),{weekStartsOn:1}),"yyyy-MM-dd"),resourceLockedFrom:formData.resourceLockedFrom||undefined,resourceLockedTill:formData.resourceLockedTill||undefined,internalTarget:formData.internalTarget||undefined,customerTarget:formData.customerTarget||undefined,currentStatus:formData.currentStatus as any,constraint:formData.constraint||undefined,tasks:[]});
+    const projectName=resolveProjectName(formData.projectName);
+    addMutation.mutate({engineerName:formData.engineerName,projectName,weekStart:format(startOfWeek(new Date(),{weekStartsOn:1}),"yyyy-MM-dd"),resourceLockedFrom:formData.resourceLockedFrom||undefined,resourceLockedTill:formData.resourceLockedTill||undefined,internalTarget:formData.internalTarget||undefined,customerTarget:formData.customerTarget||undefined,currentStatus:formData.currentStatus as any,constraint:formData.constraint||undefined,tasks:[]});
   };
+
 
   const engineerPickerProps: EngineerPickerProps = {
     pickerOpen, setPickerOpen, engSearch, setEngSearch,
@@ -652,7 +720,7 @@ export default function TeamProjectTracker() {
                 {isLoading&&<div className="p-6 text-center text-sm text-muted-foreground">Loading…</div>}
                 {!isLoading&&filtered.length===0&&<div className="p-6 text-center text-sm text-muted-foreground">No projects found</div>}
                 {filtered.map(project=>{
-                  const key=project.projectName.toLowerCase().trim();
+                  const key=normProjectKey(project.projectName);
                   const isSelected=key===selectedKey;
                   const statuses=[...new Set(project.engineers.map(e=>e.currentStatus))];
                   const hasOverdue=project.engineers.some(e=>e.daysExceeded>0);
@@ -760,12 +828,19 @@ export default function TeamProjectTracker() {
 
                   {/* Detail content — scrollable */}
                   <div className="flex-1 overflow-y-auto">
-                    {selectedEng&&(
+                    {selectedEng&&(()=>{
+                      const eff=getEffectiveEngineerData(selectedEng, selectedProject.projectName, engineerStatusMap);
+                      const effLockDays=calcLockDays(eff.resourceLockedFrom, eff.resourceLockedTill);
+                      const effDaysExceeded=calcDaysExceeded(eff.resourceLockedTill);
+                      return(
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-0 divide-y lg:divide-y-0 lg:divide-x">
 
                         {/* Left column */}
                         <div className="px-6 py-4 space-y-0">
-                          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Resource & Timeline</p>
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Resource & Timeline</p>
+                            {eff.hasOverride&&<span className="text-[10px] text-primary">individually updated</span>}
+                          </div>
                           <InfoRow
                             icon={<Users className="h-4 w-4"/>}
                             label="Engineer"
@@ -777,23 +852,23 @@ export default function TeamProjectTracker() {
                           <InfoRow
                             icon={<Calendar className="h-4 w-4"/>}
                             label="Resource Locked From"
-                            value={fmtDate(selectedEng.resourceLockedFrom)}
+                            value={fmtDate(eff.resourceLockedFrom)}
                           />
                           <InfoRow
                             icon={<Calendar className="h-4 w-4"/>}
                             label="Resource Locked Till"
-                            value={fmtDate(selectedEng.resourceLockedTill)}
+                            value={fmtDate(eff.resourceLockedTill)}
                           />
                           <InfoRow
                             icon={<Clock className="h-4 w-4"/>}
                             label="Lock Period"
-                            value={selectedEng.resourceLockDays>0?(
+                            value={effLockDays>0?(
                               <div className="flex items-center gap-2 flex-wrap">
-                                <span>{selectedEng.resourceLockDays} days</span>
-                                {selectedEng.daysExceeded>0&&(
+                                <span>{effLockDays} days</span>
+                                {effDaysExceeded>0&&(
                                   <Badge className="bg-red-500 text-white text-xs">
                                     <AlertTriangle className="h-3 w-3 mr-1"/>
-                                    +{selectedEng.daysExceeded}d overdue
+                                    +{effDaysExceeded}d overdue
                                   </Badge>
                                 )}
                               </div>
@@ -802,13 +877,13 @@ export default function TeamProjectTracker() {
                           <InfoRow
                             icon={<Target className="h-4 w-4"/>}
                             label="Internal Target"
-                            value={fmtDate(selectedEng.internalTarget)}
+                            value={fmtDate(eff.internalTarget)}
                           />
                           <InfoRow
                             icon={<Target className="h-4 w-4"/>}
                             label="Customer Target"
-                            value={fmtDate(selectedEng.customerTarget)}
-                            accent={selectedEng.customerTarget?daysFromToday(selectedEng.customerTarget)<0:false}
+                            value={fmtDate(eff.customerTarget)}
+                            accent={eff.customerTarget?daysFromToday(eff.customerTarget)<0:false}
                           />
                         </div>
 
@@ -819,16 +894,16 @@ export default function TeamProjectTracker() {
                             icon={<Briefcase className="h-4 w-4"/>}
                             label="Current Status"
                             value={
-                              <Badge className={`${statusColors[selectedEng.currentStatus]??statusColors.not_started} text-xs mt-0.5`}>
-                                {statusLabels[selectedEng.currentStatus]??selectedEng.currentStatus}
+                              <Badge className={`${statusColors[eff.currentStatus]??statusColors.not_started} text-xs mt-0.5`}>
+                                {statusLabels[eff.currentStatus]??eff.currentStatus}
                               </Badge>
                             }
                           />
                           <InfoRow
                             icon={<FileText className="h-4 w-4"/>}
                             label="Constraints / Notes"
-                            value={selectedEng.constraint
-                              ? <span className="leading-relaxed">{selectedEng.constraint}</span>
+                            value={eff.constraint
+                              ? <span className="leading-relaxed">{eff.constraint}</span>
                               : <span className="text-muted-foreground text-xs italic">No constraints noted</span>}
                           />
 
@@ -841,6 +916,8 @@ export default function TeamProjectTracker() {
                             saving={engineerStatusMutation.isPending}
                             onSave={(data)=>engineerStatusMutation.mutate({projectName:selectedProject.projectName, engineerName:selectedEng.name, data})}
                             onClear={()=>clearEngineerStatusMutation.mutate({projectName:selectedProject.projectName, engineerName:selectedEng.name})}
+                            autoEdit={pendingEditKey===selectedEng.rowKey}
+                            onAutoEditConsumed={()=>setPendingEditKey(null)}
                           />
 
                           {/* All engineers on this project */}
@@ -850,7 +927,7 @@ export default function TeamProjectTracker() {
                               <div className="space-y-2">
                                 {selectedProject.engineers.map(eng=>{
                                   const engOverride=getEngineerOverride(engineerStatusMap, selectedProject.projectName, eng.name);
-                                  const engEffStatus=effectiveStatusFor(eng, selectedProject.projectName, engineerStatusMap);
+                                  const engEff=getEffectiveEngineerData(eng, selectedProject.projectName, engineerStatusMap);
                                   return(
                                   <div key={eng.rowKey}
                                     onClick={()=>setSelectedEng(eng)}
@@ -862,18 +939,20 @@ export default function TeamProjectTracker() {
                                       </span>
                                       <div>
                                         <p className="text-sm font-medium">{eng.name}</p>
-                                        <p className="text-[11px] text-muted-foreground">{fmtDate(eng.resourceLockedFrom)} → {fmtDate(eng.resourceLockedTill)}</p>
+                                        <p className="text-[11px] text-muted-foreground">{fmtDate(engEff.resourceLockedFrom)} → {fmtDate(engEff.resourceLockedTill)}</p>
                                       </div>
                                     </div>
                                     <div className="flex items-center gap-2 flex-shrink-0">
-                                      <Badge className={`${statusColors[engEffStatus]??statusColors.not_started} text-[10px]`}>
-                                        {statusLabels[engEffStatus]??engEffStatus}
+                                      <Badge className={`${statusColors[engEff.currentStatus]??statusColors.not_started} text-[10px]`}>
+                                        {statusLabels[engEff.currentStatus]??engEff.currentStatus}
                                       </Badge>
                                       {engOverride&&(
                                         <span className="text-primary text-[10px]" title="Individually updated">●</span>
                                       )}
                                       {isAdmin&&(
-                                        <button onClick={e=>{e.stopPropagation();handleEdit(eng.assignmentId);}}
+                                        <button
+                                          title={`Edit ${eng.name}'s own dates, status and constraints`}
+                                          onClick={e=>{e.stopPropagation();setSelectedEng(eng);setPendingEditKey(eng.rowKey);}}
                                           className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground">
                                           <Edit2 className="h-3.5 w-3.5"/>
                                         </button>
@@ -887,7 +966,8 @@ export default function TeamProjectTracker() {
                           )}
                         </div>
                       </div>
-                    )}
+                      );
+                    })()}
                   </div>
                 </>
               )}
