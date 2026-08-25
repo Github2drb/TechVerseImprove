@@ -459,11 +459,13 @@ export default function TeamProjectTracker() {
   };
   const filteredEngineers=useMemo(()=>!engSearch.trim()?masterEngineers:masterEngineers.filter(e=>e.name.toLowerCase().includes(engSearch.toLowerCase())),[masterEngineers,engSearch]);
 
-  // Data — hide assignments that are finished (marked Completed)
-  const activeAssignments=useMemo(()=>assignments.filter(a=>!TERMINAL_STATUSES.includes(a.currentStatus)),[assignments]);
-  const projectRows=useMemo(()=>groupByProject(activeAssignments),[activeAssignments]);
+  // Data — build rows from ALL assignments so a "Completed" filter can still find them.
+  // We only hide fully-finished projects by default (statusFilter === "all"); an explicit
+  // status filter (e.g. "Completed") must be able to surface them.
+  const projectRows=useMemo(()=>groupByProject(assignments),[assignments]);
   const filtered=useMemo(()=>projectRows.filter(p=>{
-    if(p.engineers.every(e=>TERMINAL_STATUSES.includes(e.currentStatus)))return false;
+    const allTerminal=p.engineers.every(e=>TERMINAL_STATUSES.includes(e.currentStatus));
+    if(statusFilter==="all"&&allTerminal)return false; // declutter default view only
     const mQ=p.projectName.toLowerCase().includes(search.toLowerCase())||
       p.engineers.some(e=>e.name.toLowerCase().includes(search.toLowerCase()));
     const mS=statusFilter==="all"||p.engineers.some(e=>e.currentStatus===statusFilter);
