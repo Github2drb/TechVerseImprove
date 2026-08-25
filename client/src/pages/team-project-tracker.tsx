@@ -28,7 +28,7 @@ interface WeeklyAssignment {
   tasks: Array<{ id:string; taskName:string; targetDate?:string; completionDate?:string; status:string }>;
 }
 interface EngineerRowData {
-  assignmentId: string; name: string;
+  assignmentId: string; rowKey: string; name: string;
   resourceLockedFrom?: string; resourceLockedTill?: string;
   resourceLockDays: number; daysExceeded: number;
   internalTarget?: string; customerTarget?: string;
@@ -126,11 +126,6 @@ function calcDaysExceeded(till?:string):number {
 function normName(s:string):string{
   return s.trim().replace(/\s*\([^)]*\)\s*/g,"").trim().toLowerCase();
 }
-// Strips stray/double commas (e.g. "Harsha,," or ", Deekshitha") down to a
-// clean, human-readable "Name, Name" string without losing original casing.
-function cleanEngineerNameDisplay(raw:string):string{
-  return raw.split(",").map(p=>p.trim()).filter(Boolean).join(", ");
-}
 function groupByProject(assignments:WeeklyAssignment[]):ProjectRow[] {
   const map:Record<string,ProjectRow>={};
   const seenNames:Record<string,Set<string>>={}; // projectKey -> set of normalized individual engineer names already shown
@@ -142,21 +137,26 @@ function groupByProject(assignments:WeeklyAssignment[]):ProjectRow[] {
 
     const k=a.projectName.toLowerCase().trim();
     if(!map[k]){map[k]={projectName:a.projectName,engineers:[]};seenNames[k]=new Set();}
-    if(map[k].engineers.find(e=>e.assignmentId===a.id)) return; // already added this exact record
 
-    const individualNames=a.engineerName.split(",").map(n=>normName(n)).filter(Boolean);
-    if(individualNames.length===0) return; // e.g. engineerName was just "," or whitespace
-    const allAlreadySeen=individualNames.every(n=>seenNames[k].has(n));
-    if(allAlreadySeen) return; // every person in this record is already represented — skip the duplicate row
-
-    individualNames.forEach(n=>seenNames[k].add(n));
-    map[k].engineers.push({
-      assignmentId:a.id, name:cleanEngineerNameDisplay(a.engineerName),
-      resourceLockedFrom:a.resourceLockedFrom, resourceLockedTill:a.resourceLockedTill,
-      resourceLockDays:calcLockDays(a.resourceLockedFrom,a.resourceLockedTill),
-      daysExceeded:calcDaysExceeded(a.resourceLockedTill),
-      internalTarget:a.internalTarget, customerTarget:a.customerTarget,
-      currentStatus:a.currentStatus, constraint:a.constraint,
+    // A single assignment record's engineerName can list several
+    // comma-separated people (they share dates/base status because they
+    // were assigned together) — but each person is their OWN row here, with
+    // their own tab and their own independently-settable status override.
+    // Skip anyone already represented for this project (handles both exact
+    // record duplicates and the cross-record duplicate pattern from BUG-09).
+    const rawNames=a.engineerName.split(",").map(n=>n.trim()).filter(Boolean);
+    rawNames.forEach(rawName=>{
+      const nk=normName(rawName);
+      if(!nk||seenNames[k].has(nk)) return;
+      seenNames[k].add(nk);
+      map[k].engineers.push({
+        assignmentId:a.id, rowKey:`${a.id}::${nk}`, name:rawName,
+        resourceLockedFrom:a.resourceLockedFrom, resourceLockedTill:a.resourceLockedTill,
+        resourceLockDays:calcLockDays(a.resourceLockedFrom,a.resourceLockedTill),
+        daysExceeded:calcDaysExceeded(a.resourceLockedTill),
+        internalTarget:a.internalTarget, customerTarget:a.customerTarget,
+        currentStatus:a.currentStatus, constraint:a.constraint,
+      });
     });
   });
   return Object.values(map).sort((a,b)=>a.projectName.localeCompare(b.projectName));
@@ -440,7 +440,7 @@ export default function TeamProjectTracker() {
   const [addOpen,        setAddOpen]        = useState(false);
   const [deleteOpen,     setDeleteOpen]     = useState(false);
   const [editingA,       setEditingA]       = useState<WeeklyAssignment|null>(null);
-  const [deletingA,      setDeletingA]      = useState<{id:string;projectName:string;engineerName:string}|null>(null);
+  const [deletingA,      setDeletingA]      = useState<{id:string;projectName:string;engineerName:string;coAssigned:string[]}|null>(null);
   const [selectedEng,    setSelectedEng]    = useState<EngineerRowData|null>(null); // which engineer row in detail
 
   const [formData, setFormData] = useState({
@@ -510,12 +510,16 @@ export default function TeamProjectTracker() {
   useEffect(()=>{
     if(selectedProject){
       setSelectedKey(selectedProject.projectName.toLowerCase().trim());
-      if(!selectedEng||!selectedProject.engineers.find(e=>e.assignmentId===selectedEng.assignmentId))
+      if(!selectedEng||!selectedProject.engineers.find(e=>e.rowKey===selectedEng.rowKey))
         setSelectedEng(selectedProject.engineers[0]||null);
     }
   },[selectedProject]);
 
-  const uniqueEngineers=useMemo(()=>{const s=new Set<string>();assignments.forEach(a=>s.add(a.engineerName));return Array.from(s);},[assignments]);
+  const uniqueEngineers=useMemo(()=>{
+    const s=new Set<string>();
+    assignments.forEach(a=>a.engineerName.split(",").map(n=>n.trim()).filter(Boolean).forEach(n=>s.add(normName(n))));
+    return Array.from(s);
+  },[assignments]);
   const activeProjects=useMemo(()=>projectRows.filter(p=>p.engineers.some(e=>e.currentStatus==="in_progress")).length,[projectRows]);
 
   // Mutations
@@ -666,7 +670,7 @@ export default function TeamProjectTracker() {
                       </div>
                       <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
                         {project.engineers.map(e=>(
-                          <span key={e.assignmentId} className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary/15 text-primary text-[10px] font-bold" title={e.name}>
+                          <span key={e.rowKey} className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary/15 text-primary text-[10px] font-bold" title={e.name}>
                             {getInitials(e.name)}
                           </span>
                         ))}
@@ -720,7 +724,15 @@ export default function TeamProjectTracker() {
                           <Edit2 className="h-3.5 w-3.5"/>Edit
                         </Button>
                         <Button size="sm" variant="outline" className="gap-1.5 h-8 text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-950 border-red-200"
-                          onClick={()=>{if(selectedEng){setDeletingA({id:selectedEng.assignmentId,projectName:selectedProject.projectName,engineerName:selectedEng.name});setDeleteOpen(true);}}}>
+                          onClick={()=>{
+                            if(selectedEng){
+                              const coAssigned=selectedProject.engineers
+                                .filter(e=>e.assignmentId===selectedEng.assignmentId&&e.rowKey!==selectedEng.rowKey)
+                                .map(e=>e.name);
+                              setDeletingA({id:selectedEng.assignmentId,projectName:selectedProject.projectName,engineerName:selectedEng.name,coAssigned});
+                              setDeleteOpen(true);
+                            }
+                          }}>
                           <Trash2 className="h-3.5 w-3.5"/>Delete
                         </Button>
                       </div>
@@ -731,10 +743,10 @@ export default function TeamProjectTracker() {
                   {selectedProject.engineers.length>1&&(
                     <div className="flex gap-1 px-6 pt-3 pb-0 flex-wrap flex-shrink-0 border-b">
                       {selectedProject.engineers.map(eng=>(
-                        <button key={eng.assignmentId}
+                        <button key={eng.rowKey}
                           onClick={()=>setSelectedEng(eng)}
                           className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-t-lg border border-b-0 transition-colors
-                            ${selectedEng?.assignmentId===eng.assignmentId
+                            ${selectedEng?.rowKey===eng.rowKey
                               ?"bg-background text-foreground border-border"
                               :"bg-muted/50 text-muted-foreground border-transparent hover:bg-muted"}`}>
                           <span className="w-5 h-5 rounded-full bg-primary/15 text-primary text-[10px] font-bold flex items-center justify-center">
@@ -840,10 +852,10 @@ export default function TeamProjectTracker() {
                                   const engOverride=getEngineerOverride(engineerStatusMap, selectedProject.projectName, eng.name);
                                   const engEffStatus=effectiveStatusFor(eng, selectedProject.projectName, engineerStatusMap);
                                   return(
-                                  <div key={eng.assignmentId}
+                                  <div key={eng.rowKey}
                                     onClick={()=>setSelectedEng(eng)}
                                     className={`flex items-center justify-between gap-3 p-2.5 rounded-xl border cursor-pointer transition-colors hover:bg-muted/50
-                                      ${selectedEng?.assignmentId===eng.assignmentId?"bg-primary/5 border-primary/30":""}`}>
+                                      ${selectedEng?.rowKey===eng.rowKey?"bg-primary/5 border-primary/30":""}`}>
                                     <div className="flex items-center gap-2.5">
                                       <span className="w-7 h-7 rounded-full bg-primary/15 text-primary text-xs font-bold flex items-center justify-center flex-shrink-0">
                                         {getInitials(eng.name)}
@@ -916,6 +928,12 @@ export default function TeamProjectTracker() {
               <p><span className="font-medium">Project:</span> {deletingA.projectName}</p>
               <p><span className="font-medium">Engineer:</span> {deletingA.engineerName}</p>
             </div>}
+            {deletingA&&deletingA.coAssigned.length>0&&(
+              <div className="mt-3 p-3 rounded-md bg-red-50 dark:bg-red-950 border border-red-200 text-xs text-red-700 dark:text-red-300">
+                <p className="font-medium mb-1">⚠ This is a shared assignment record.</p>
+                <p>Deleting it will also remove: {deletingA.coAssigned.join(", ")} — they were assigned together on the same record. To remove only {deletingA.engineerName}, use Edit instead and take their name out of the Engineer(s) field.</p>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={()=>{setDeleteOpen(false);setDeletingA(null);}}>Cancel</Button>
