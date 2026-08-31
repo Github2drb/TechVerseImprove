@@ -23,6 +23,7 @@ import ProjectRoadmap from "@/pages/project-roadmap";
 import NotificationsPage from "@/pages/notifications";
 import MaterialProcurementTracker from "@/pages/material-procurement-tracker";
 import ProjectDeepDive from "@/pages/project-deep-dive";
+import CustomerPbIndicatorFormPage from "@/pages/customer-pb-indicator-form";
 
 function AppRoutes() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -46,6 +47,7 @@ function AppRoutes() {
       <Route path="/notifications" component={NotificationsPage} />
       <Route path="/project-roadmap" component={ProjectRoadmap} />
       <Route path="/project-deep-dive" component={ProjectDeepDive} />
+      <Route path="/customer-pb-indicator-form" component={CustomerPbIndicatorFormPage} />
       <Route component={NotFound} />
     </Switch>
   );
