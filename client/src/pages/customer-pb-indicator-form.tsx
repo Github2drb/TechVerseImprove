@@ -1,4 +1,6 @@
 import { useEffect, useRef } from "react";
+import { Link } from "wouter";
+import { ArrowLeft } from "lucide-react";
 
 /**
  * Customer PB, Indicator, Panel Wiring & Safety Logic Requirement Form.
@@ -44,6 +46,23 @@ export default function CustomerPbIndicatorFormPage() {
 
   return (
     <div style={{ padding: "24px 16px 60px" }}>
+      <div style={{ maxWidth: 1150, margin: "0 auto 16px" }}>
+        <Link
+          href="/"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 14,
+            fontWeight: 500,
+            color: "#2563eb",
+            textDecoration: "none",
+          }}
+        >
+          <ArrowLeft size={16} />
+          Back to Dashboard
+        </Link>
+      </div>
       <div ref={containerRef} />
     </div>
   );
