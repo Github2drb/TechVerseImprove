@@ -117,7 +117,12 @@ function calcLockDays(from?:string, till?:string):number {
   if(!from||!till)return 0;
   return Math.max(0,Math.ceil((new Date(till).getTime()-new Date(from).getTime())/(864e5)));
 }
-function calcDaysExceeded(till?:string):number {
+function calcDaysExceeded(till?:string, status?:string):number {
+  // Once an engineer's status is a terminal one (Completed), their work on
+  // this assignment is done — the resource-locked-till date is no longer a
+  // live deadline, so no "Xd overdue" should ever be shown for them again,
+  // regardless of how far in the past that date sits.
+  if(status && TERMINAL_STATUSES.includes(status)) return 0;
   if(!till)return 0;
   const today=new Date(); today.setHours(0,0,0,0);
   const t=new Date(till); t.setHours(0,0,0,0);
@@ -132,7 +137,7 @@ function normName(s:string):string{
 function normProjectKey(s:string):string{
   return s.trim().toLowerCase().replace(/[.\s]+$/,"").replace(/\s+/g," ");
 }
-function groupByProject(assignments:WeeklyAssignment[]):ProjectRow[] {
+function groupByProject(assignments:WeeklyAssignment[], statusMap:EngineerStatusMap={}):ProjectRow[] {
   const map:Record<string,ProjectRow>={};
   const seenNames:Record<string,Set<string>>={}; // projectKey -> set of normalized individual engineer names already shown
 
@@ -155,11 +160,18 @@ function groupByProject(assignments:WeeklyAssignment[]):ProjectRow[] {
       const nk=normName(rawName);
       if(!nk||seenNames[k].has(nk)) return;
       seenNames[k].add(nk);
+      // Resolve THIS person's own status before deciding whether they're overdue —
+      // an individual override (e.g. their own status set to "Completed") must
+      // silence the overdue count for them even while the shared assignment
+      // record other engineers still share is on an earlier status.
+      const engOverride=getEngineerOverride(statusMap,a.projectName,rawName);
+      const engEffectiveStatus= a.currentStatus==="completed" ? "completed" : (engOverride?.currentStatus || a.currentStatus);
+      const engEffectiveTill= engOverride?.resourceLockedTill || a.resourceLockedTill;
       map[k].engineers.push({
         assignmentId:a.id, rowKey:`${a.id}::${nk}`, name:rawName,
         resourceLockedFrom:a.resourceLockedFrom, resourceLockedTill:a.resourceLockedTill,
         resourceLockDays:calcLockDays(a.resourceLockedFrom,a.resourceLockedTill),
-        daysExceeded:calcDaysExceeded(a.resourceLockedTill),
+        daysExceeded:calcDaysExceeded(engEffectiveTill,engEffectiveStatus),
         internalTarget:a.internalTarget, customerTarget:a.customerTarget,
         currentStatus:a.currentStatus, constraint:a.constraint,
       });
@@ -541,7 +553,7 @@ export default function TeamProjectTracker() {
   // Data — build rows from ALL assignments so a "Completed" filter can still find them.
   // We only hide fully-finished projects by default (statusFilter === "all"); an explicit
   // status filter (e.g. "Completed") must be able to surface them.
-  const projectRows=useMemo(()=>groupByProject(assignments),[assignments]);
+  const projectRows=useMemo(()=>groupByProject(assignments,engineerStatusMap),[assignments,engineerStatusMap]);
   const filtered=useMemo(()=>projectRows.filter(p=>{
     // "Completed" is an OVERALL project state, not a per-engineer one — a
     // project only counts as Completed when EVERY engineer on it is
@@ -831,7 +843,7 @@ export default function TeamProjectTracker() {
                     {selectedEng&&(()=>{
                       const eff=getEffectiveEngineerData(selectedEng, selectedProject.projectName, engineerStatusMap);
                       const effLockDays=calcLockDays(eff.resourceLockedFrom, eff.resourceLockedTill);
-                      const effDaysExceeded=calcDaysExceeded(eff.resourceLockedTill);
+                      const effDaysExceeded=calcDaysExceeded(eff.resourceLockedTill,eff.currentStatus);
                       return(
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-0 divide-y lg:divide-y-0 lg:divide-x">
 
