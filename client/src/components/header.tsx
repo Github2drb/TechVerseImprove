@@ -1,4 +1,4 @@
-import { Search, BookOpen, Bell, ClipboardCheck, Factory } from "lucide-react";
+import { Search, BookOpen, Bell, ClipboardCheck, Factory, FileSignature } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "./theme-toggle";
 import { NotificationBell } from "./notification-bell";
@@ -14,7 +14,12 @@ interface HeaderProps {
 export function Header({ searchQuery, onSearchChange }: HeaderProps) {
   const [location] = useLocation();
 
-  const navLink = (href: string, label: string, icon?: React.ReactNode) => {
+  const navLink = (
+    href: string,
+    label: string,
+    icon: React.ReactNode,
+    iconColorClass: string,
+  ) => {
     const active = location === href;
     return (
       <Link href={href}
@@ -22,7 +27,7 @@ export function Header({ searchQuery, onSearchChange }: HeaderProps) {
           ${active
             ? "bg-primary text-primary-foreground"
             : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}>
-        {icon}
+        <span className={active ? "" : iconColorClass}>{icon}</span>
         {label}
       </Link>
     );
@@ -46,10 +51,11 @@ export function Header({ searchQuery, onSearchChange }: HeaderProps) {
 
         {/* Nav links */}
         <nav className="hidden md:flex items-center gap-1">
-          {navLink("/project-commissioning", "Commissioning", <ClipboardCheck className="h-4 w-4" />)}
-          {navLink("/project-deep-dive", "Project Deep Dive", <Factory className="h-4 w-4" />)}
-          {navLink("/blog",          "Knowledge Base", <BookOpen className="h-4 w-4" />)}
-          {navLink("/notifications",  "Notifications",  <Bell className="h-4 w-4" />)}
+          {navLink("/customer-pb-indicator-form", "Customer Form", <FileSignature className="h-4 w-4" />, "text-violet-500")}
+          {navLink("/project-commissioning", "Commissioning", <ClipboardCheck className="h-4 w-4" />, "text-blue-500")}
+          {navLink("/project-deep-dive", "Project Deep Dive", <Factory className="h-4 w-4" />, "text-orange-500")}
+          {navLink("/blog",          "Knowledge Base", <BookOpen className="h-4 w-4" />, "text-emerald-500")}
+          {navLink("/notifications",  "Notifications",  <Bell className="h-4 w-4" />, "text-rose-500")}
         </nav>
 
         {/* Search */}
