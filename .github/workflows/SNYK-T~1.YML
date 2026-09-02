@@ -1,0 +1,23 @@
+name: Snyk Auto-Fix Trigger
+# Dispatches the "Snyk Auto-Fix" workflow on every push to main and daily.
+# Needed because claude-code-action only supports dispatch-style events.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "30 2 * * *" # daily 02:30 UTC safety-net scan
+
+permissions:
+  actions: write
+
+jobs:
+  dispatch:
+    # Skip runs caused by the auto-fix bot's own merge commit (loop guard)
+    if: "!contains(github.event.head_commit.message || '', '[snyk-autofix]')"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch Snyk Auto-Fix
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run snyk-autofix.yml --repo ${{ github.repository }} --ref main

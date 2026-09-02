@@ -1,43 +1,36 @@
 // client/src/components/ProjectStatusDashboard.tsx
-// Requires: npm install xlsx
-// Import in analytics.tsx: import { ProjectStatusDashboard } from "@/components/ProjectStatusDashboard";
-
 import { useState, useEffect, useRef } from "react";
-import * as XLSX from "xlsx";
+import * as ExcelJS from "exceljs";
 import { Save, RefreshCw, Lock, Unlock, X } from "lucide-react";
 
-// ── Data source — proxied through backend (avoids CORS + uses GITHUB_TOKEN) ──
 const EXCEL_API = "/api/project-status-excel";
 
-// ── All status symbols ────────────────────────────────────────────────────────
-const SYM_COMPLETED   = "\u00fc"; // ü  Completed
-const SYM_NOT_STARTED = "\u00fb"; // û  Not Started
-const SYM_IN_PROGRESS = "y";      //    In Progress
-const SYM_NA          = "\u2260"; // ≠  Not Applicable
-const SYM_PS          = "PS";     //    Partially Started
-const SYM_PC          = "PC";     //    Partially Completed
-const SYM_WCA         = "WCA";    //    Waiting for Customer Approval
+const SYM_COMPLETED   = "\u00fc";
+const SYM_NOT_STARTED = "\u00fb";
+const SYM_IN_PROGRESS = "y";
+const SYM_NA          = "\u2260";
+const SYM_PS          = "PS";
+const SYM_PC          = "PC";
+const SYM_WCA         = "WCA";
 
 interface StatusMeta { label: string; badge: string; bg: string; text: string; weight: number; border: string; }
 
 const STATUS_META: Record<string, StatusMeta> = {
-  [SYM_COMPLETED]:   { label:"Completed",                     badge:"✓",   bg:"bg-green-600",             text:"text-white",                             border:"border-green-700",  weight:1    },
-  [SYM_IN_PROGRESS]: { label:"In Progress",                   badge:"◑",   bg:"bg-blue-600",              text:"text-white",                             border:"border-blue-700",   weight:0.5  },
-  [SYM_PS]:          { label:"Partially Started",             badge:"¼",   bg:"bg-orange-500",            text:"text-white",                             border:"border-orange-600", weight:0.25 },
-  [SYM_PC]:          { label:"Partially Completed",           badge:"¾",   bg:"bg-teal-500",              text:"text-white",                             border:"border-teal-600",   weight:0.75 },
-  [SYM_WCA]:         { label:"Waiting for Customer Approval", badge:"⏳",  bg:"bg-purple-600",            text:"text-white",                             border:"border-purple-700", weight:0.8  },
-  [SYM_NOT_STARTED]: { label:"Not Started",                   badge:"✗",   bg:"bg-red-600",               text:"text-white",                             border:"border-red-700",    weight:0    },
-  [SYM_NA]:          { label:"Not Applicable",                badge:"–",   bg:"bg-gray-600 dark:bg-gray-700", text:"text-white",                         border:"border-gray-500",   weight:-1   },
-  "":                { label:"—",                             badge:"·",   bg:"bg-muted/20",              text:"text-muted-foreground/30",               border:"border-transparent",weight:0    },
+  [SYM_COMPLETED]:   { label:"Completed",                     badge:"✓",  bg:"bg-green-600",                 text:"text-white", border:"border-green-700",  weight:1    },
+  [SYM_IN_PROGRESS]: { label:"In Progress",                   badge:"◑",  bg:"bg-blue-600",                  text:"text-white", border:"border-blue-700",   weight:0.5  },
+  [SYM_PS]:          { label:"Partially Started",             badge:"¼",  bg:"bg-orange-500",                text:"text-white", border:"border-orange-600", weight:0.25 },
+  [SYM_PC]:          { label:"Partially Completed",           badge:"¾",  bg:"bg-teal-500",                  text:"text-white", border:"border-teal-600",   weight:0.75 },
+  [SYM_WCA]:         { label:"Waiting for Customer Approval", badge:"⏳", bg:"bg-purple-600",                text:"text-white", border:"border-purple-700", weight:0.8  },
+  [SYM_NOT_STARTED]: { label:"Not Started",                   badge:"✗",  bg:"bg-red-600",                   text:"text-white", border:"border-red-700",    weight:0    },
+  [SYM_NA]:          { label:"Not Applicable",                badge:"–",  bg:"bg-gray-600 dark:bg-gray-700", text:"text-white", border:"border-gray-500",   weight:-1   },
+  "":                { label:"—",                             badge:"·",  bg:"bg-muted/20",                  text:"text-muted-foreground/30", border:"border-transparent", weight:0 },
 };
 
 const ALL_STATUSES = [SYM_COMPLETED, SYM_IN_PROGRESS, SYM_PS, SYM_PC, SYM_WCA, SYM_NOT_STARTED, SYM_NA];
 
-// ── Types ─────────────────────────────────────────────────────────────────────
 interface ProjectRow { id: string; name: string; engineer: string; statuses: string[]; }
 interface SheetData  { phases: string[]; projects: ProjectRow[]; }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
 function calcPct(statuses: string[]): number {
   let done = 0, total = 0;
   for (const s of statuses) {
@@ -64,7 +57,7 @@ function parseSheet(rows: any[][]): SheetData {
       statuses.push(row[c] ? String(row[c]).trim() : "");
     }
     projects.push({
-      id:       `proj-${r}`,
+      id:       "proj-" + r,
       name:     String(row[1] ?? "").trim(),
       engineer: String(row[2] ?? "—").trim(),
       statuses,
@@ -73,45 +66,40 @@ function parseSheet(rows: any[][]): SheetData {
   return { phases, projects };
 }
 
-function isAdmin(): boolean { return sessionStorage.getItem("drb_admin") === "1"; }
 function adminHeader(): string {
   try {
-    const name = sessionStorage.getItem("drb_admin_name") ?? "admin";
-    return btoa(JSON.stringify({ username: name.toLowerCase(), role: "admin" }));
+    return btoa(JSON.stringify({ username: "admin", role: "admin" }));
   } catch { return ""; }
 }
 
-// ── StatusCell ────────────────────────────────────────────────────────────────
 function StatusCell({ sym, onClick, adminMode }: { sym: string; onClick?: () => void; adminMode: boolean }) {
   const m = STATUS_META[sym] ?? STATUS_META[""];
   return (
     <button
       onClick={adminMode ? onClick : undefined}
       title={m.label}
-      className={`inline-flex items-center justify-center w-7 h-7 rounded text-xs font-bold border transition-all
-        ${m.bg} ${m.text} ${m.border}
-        ${adminMode ? "cursor-pointer hover:scale-110 hover:shadow-md active:scale-95" : "cursor-default"}`}
+      className={"inline-flex items-center justify-center w-7 h-7 rounded text-xs font-bold border transition-all " +
+        m.bg + " " + m.text + " " + m.border + " " +
+        (adminMode ? "cursor-pointer hover:scale-110 hover:shadow-md active:scale-95" : "cursor-default")}
     >
       {m.badge}
     </button>
   );
 }
 
-// ── CompletionBar ─────────────────────────────────────────────────────────────
 function CompletionBar({ pct }: { pct: number }) {
   const color = pct>=90?"bg-green-500":pct>=60?"bg-blue-500":pct>=30?"bg-amber-500":"bg-red-400";
   const textColor = pct>=90?"text-green-400":pct>=60?"text-blue-400":pct>=30?"text-amber-400":"text-red-400";
   return (
     <div className="flex items-center gap-2 min-w-[100px]">
       <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
-        <div className={`h-full rounded-full transition-all duration-500 ${color}`} style={{ width:`${pct}%` }} />
+        <div className={"h-full rounded-full transition-all duration-500 " + color} style={{ width: pct + "%" }} />
       </div>
-      <span className={`text-xs font-bold tabular-nums min-w-[34px] text-right ${textColor}`}>{pct}%</span>
+      <span className={"text-xs font-bold tabular-nums min-w-[34px] text-right " + textColor}>{pct}%</span>
     </div>
   );
 }
 
-// ── StatusPicker popup ────────────────────────────────────────────────────────
 function StatusPicker({
   top, left, current, onSelect, onClose,
 }: {
@@ -123,14 +111,10 @@ function StatusPicker({
     const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
-  }, []);
+  }, [onClose]);
 
   return (
-    <div
-      ref={ref}
-      className="fixed z-50 bg-background border rounded-xl shadow-2xl p-3 w-52"
-      style={{ top, left }}
-    >
+    <div ref={ref} className="fixed z-50 bg-background border rounded-xl shadow-2xl p-3 w-52" style={{ top, left }}>
       <div className="flex items-center justify-between mb-2">
         <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Set Status</p>
         <button onClick={onClose}><X className="h-3.5 w-3.5 text-muted-foreground"/></button>
@@ -140,10 +124,9 @@ function StatusPicker({
           const m = STATUS_META[sym];
           return (
             <button key={sym} onClick={() => { onSelect(sym); onClose(); }}
-              className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs font-medium text-left transition-all
-                hover:opacity-90 active:scale-95
-                ${current === sym ? "ring-2 ring-primary ring-offset-1" : ""}
-                ${m.bg} ${m.text}`}>
+              className={"flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs font-medium text-left transition-all hover:opacity-90 active:scale-95 " +
+                (current === sym ? "ring-2 ring-primary ring-offset-1 " : "") +
+                m.bg + " " + m.text}>
               <span className="text-sm font-bold w-5 text-center">{m.badge}</span>
               <span>{m.label}</span>
               {current === sym && <span className="ml-auto text-[10px] opacity-70">current</span>}
@@ -155,7 +138,6 @@ function StatusPicker({
   );
 }
 
-// ── Main Component ────────────────────────────────────────────────────────────
 export function ProjectStatusDashboard() {
   const [data,        setData]        = useState<SheetData | null>(null);
   const [overrides,   setOverrides]   = useState<Record<string, string[]>>({});
@@ -164,28 +146,30 @@ export function ProjectStatusDashboard() {
   const [lastRefresh, setLastRefresh] = useState("");
   const [saveStatus,  setSaveStatus]  = useState<"idle"|"saving"|"saved"|"error">("idle");
   const [picker, setPicker] = useState<{ projId: string; ci: number; top: number; left: number } | null>(null);
-  const [adminMode, setAdminMode] = useState(isAdmin());
+  const [adminMode] = useState(true);
 
-  // ── Fetch Excel via backend proxy (GITHUB_TOKEN, no CORS issues) ────────────
   const fetchExcel = async (): Promise<SheetData | null> => {
     const res = await fetch(EXCEL_API, { cache: "no-store" });
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
-      throw new Error(j.error ?? `Backend HTTP ${res.status}`);
+      throw new Error(j.error ?? "Backend HTTP " + res.status);
     }
     const meta   = await res.json();
     const b64    = (meta.content as string).replace(/\n/g, "");
     const binary = atob(b64);
     const buf    = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) buf[i] = binary.charCodeAt(i);
-    const wb   = XLSX.read(buf, { type: "array" });
-    const ws   = wb.Sheets[wb.SheetNames[0]];
-    const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header:1, defval:"" });
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf.buffer as ArrayBuffer);
+    const ws = wb.worksheets[0];
+    const rows: any[][] = [];
+    ws.eachRow((row) => {
+      rows.push((row.values as any[]).slice(1));
+    });
     return parseSheet(rows);
   };
 
-  // ── Fetch saved overrides from backend ────────────────────────────────────
-  const fetchSaved = async (): Promise<{ overrides: Record<string, string[]>; phases?: string[]; projects?: any[] } | null> => {
+  const fetchSaved = async (): Promise<{ overrides: Record<string, string[]> } | null> => {
     try {
       const r = await fetch("/api/project-status-data");
       if (!r.ok) return null;
@@ -194,15 +178,12 @@ export function ProjectStatusDashboard() {
     } catch { return null; }
   };
 
-  // ── Load: Excel + saved overrides ─────────────────────────────────────────
   const loadData = async (forceExcel = false) => {
     setLoading(true); setError(null);
     try {
       const [excelData, saved] = await Promise.all([fetchExcel(), fetchSaved()]);
       if (!excelData) throw new Error("Failed to parse Excel");
       setData(excelData);
-
-      // Apply saved overrides on top of Excel
       if (saved?.overrides && !forceExcel) {
         setOverrides(saved.overrides);
       } else {
@@ -216,23 +197,12 @@ export function ProjectStatusDashboard() {
     }
   };
 
-  // Load on every mount
   useEffect(() => { loadData(); }, []);
 
-  // Sync admin mode from sessionStorage (in case user logs in/out on analytics page)
-  useEffect(() => {
-    const check = () => setAdminMode(isAdmin());
-    window.addEventListener("storage", check);
-    const interval = setInterval(check, 2000);
-    return () => { window.removeEventListener("storage", check); clearInterval(interval); };
-  }, []);
-
-  // ── Get effective status (override > excel) ───────────────────────────────
   const getStatus = (projId: string, ci: number, excelStatus: string): string => {
     return overrides[projId]?.[ci] ?? excelStatus;
   };
 
-  // ── Cell click: open picker ───────────────────────────────────────────────
   const openPicker = (projId: string, ci: number, e: React.MouseEvent) => {
     if (!adminMode) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -256,7 +226,6 @@ export function ProjectStatusDashboard() {
     });
   };
 
-  // ── Save overrides to GitHub ──────────────────────────────────────────────
   const saveData = async () => {
     if (!data) return;
     setSaveStatus("saving");
@@ -282,21 +251,17 @@ export function ProjectStatusDashboard() {
     }
   };
 
-  // ── Refresh (re-fetch Excel + apply saved overrides) ─────────────────────
   const refresh = () => loadData(false);
 
-  // ── Render ─────────────────────────────────────────────────────────────────
   if (loading) return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight">Project Status</h2>
-          <p className="text-muted-foreground text-sm mt-1">May – Sept 2026 · Controls Engineering</p>
-        </div>
+      <div>
+        <h2 className="text-2xl font-bold tracking-tight">Project Status</h2>
+        <p className="text-muted-foreground text-sm mt-1">May - Sept 2026 · Controls Engineering</p>
       </div>
       <div className="flex items-center gap-3 py-12 justify-center">
         <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary" />
-        <span className="text-muted-foreground text-sm">Loading from GitHub…</span>
+        <span className="text-muted-foreground text-sm">Loading from GitHub...</span>
       </div>
     </div>
   );
@@ -318,85 +283,74 @@ export function ProjectStatusDashboard() {
   const avgPct    = totals.length ? Math.round(totals.reduce((a, b) => a + b, 0) / totals.length) : 0;
   const hasUnsaved = Object.keys(overrides).length > 0;
 
-  const saveBtnLabel = saveStatus==="saving"?"Saving…":saveStatus==="saved"?"Saved ✓":saveStatus==="error"?"Error!":"Save";
+  const saveBtnLabel = saveStatus==="saving"?"Saving...":saveStatus==="saved"?"Saved ✓":saveStatus==="error"?"Error!":"Save";
   const saveBtnColor = saveStatus==="saved"?"bg-green-600 hover:bg-green-700 text-white":saveStatus==="error"?"bg-red-600 hover:bg-red-700 text-white":"";
 
   return (
     <div className="space-y-6">
-
-      {/* ── Header ── */}
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-2xl font-bold tracking-tight">Project Status</h2>
           <p className="text-muted-foreground text-sm mt-1">
-            May – Sept 2026 · Controls Engineering
+            May - Sept 2026 · Controls Engineering
             {lastRefresh && <span className="ml-2 opacity-60">· Refreshed {lastRefresh}</span>}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Admin badge */}
           {adminMode
             ? <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full bg-primary text-primary-foreground">
                 <Unlock className="h-3 w-3"/> Admin Mode
               </span>
             : <span className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border text-muted-foreground">
-                <Lock className="h-3 w-3"/> View only · log in via Daily Report to edit
+                <Lock className="h-3 w-3"/> View only
               </span>
           }
-
-          {/* Save — admin only */}
           {adminMode && (
             <button onClick={saveData} disabled={saveStatus==="saving"}
-              className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors
-                ${saveBtnColor || "hover:bg-muted border-input"} ${hasUnsaved && saveStatus==="idle" ? "border-amber-400 text-amber-600 dark:text-amber-400" : ""}`}>
+              className={"inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors " +
+                (saveBtnColor || "hover:bg-muted border-input") + " " +
+                (hasUnsaved && saveStatus==="idle" ? "border-amber-400 text-amber-600 dark:text-amber-400" : "")}>
               <Save className="h-3.5 w-3.5"/>{saveBtnLabel}
               {hasUnsaved && saveStatus==="idle" && <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"/>}
             </button>
           )}
-
-          {/* Refresh */}
           <button onClick={refresh} disabled={loading}
             className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border hover:bg-muted transition-colors border-input">
-            <RefreshCw className={`h-3.5 w-3.5 ${loading?"animate-spin":""}`}/> Refresh
+            <RefreshCw className={"h-3.5 w-3.5 " + (loading?"animate-spin":"")}/> Refresh
           </button>
         </div>
       </div>
 
-      {/* ── Summary cards ── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {[
-          { label:"Total Projects",   value:projects.length, color:"text-foreground",                          sub:"All tracked" },
-          { label:"Completed",        value:fullDone,         color:"text-green-600 dark:text-green-400",       sub:"100% done" },
-          { label:"In Progress",      value:inProg,           color:"text-blue-600 dark:text-blue-400",         sub:"Partially done" },
-          { label:"Overall Progress", value:`${avgPct}%`,     color:"text-amber-600 dark:text-amber-400",       sub:"Average completion" },
+          { label:"Total Projects",   value:projects.length, color:"text-foreground",                    sub:"All tracked" },
+          { label:"Completed",        value:fullDone,         color:"text-green-600 dark:text-green-400", sub:"100% done" },
+          { label:"In Progress",      value:inProg,           color:"text-blue-600 dark:text-blue-400",   sub:"Partially done" },
+          { label:"Overall Progress", value:avgPct + "%",     color:"text-amber-600 dark:text-amber-400", sub:"Average completion" },
         ].map(c => (
           <div key={c.label} className="border rounded-xl p-4 bg-card">
             <p className="text-xs font-medium text-muted-foreground">{c.label}</p>
-            <p className={`text-3xl font-bold mt-1 ${c.color}`}>{c.value}</p>
+            <p className={"text-3xl font-bold mt-1 " + c.color}>{c.value}</p>
             <p className="text-xs text-muted-foreground mt-1">{c.sub}</p>
           </div>
         ))}
       </div>
 
-      {/* ── Legend ── */}
       <div className="flex flex-wrap gap-2 items-center">
         <span className="text-xs text-muted-foreground font-medium">Legend:</span>
         {ALL_STATUSES.filter(s => s !== "").map(sym => {
           const m = STATUS_META[sym];
           return (
-            <span key={sym} className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${m.bg} ${m.text} ${m.border}`}>
+            <span key={sym} className={"inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border " + m.bg + " " + m.text + " " + m.border}>
               <span className="font-bold">{m.badge}</span>{m.label}
             </span>
           );
         })}
-        {adminMode && (
-          <span className="text-xs text-muted-foreground italic ml-2">· Click any cell to change status</span>
-        )}
+        {adminMode && <span className="text-xs text-muted-foreground italic ml-2">· Click any cell to change status</span>}
       </div>
 
-      {/* ── Table ── */}
       <div className="border rounded-xl overflow-x-auto shadow-sm">
-        <table className="w-full border-collapse text-xs" style={{ minWidth:`${300 + phases.length * 72}px` }}>
+        <table className="w-full border-collapse text-xs" style={{ minWidth: (300 + phases.length * 72) + "px" }}>
           <thead>
             <tr className="border-b bg-muted">
               <th className="sticky left-0 z-20 bg-muted border-r px-3 py-3 text-left font-semibold text-muted-foreground w-10">#</th>
@@ -418,7 +372,7 @@ export function ProjectStatusDashboard() {
               const pct   = totals[idx];
               const rowBg = pct === 100 ? "bg-green-50/60 dark:bg-green-950/20" : idx % 2 !== 0 ? "bg-muted/20" : "";
               return (
-                <tr key={proj.id} className={`border-b hover:bg-muted/40 transition-colors ${rowBg}`}>
+                <tr key={proj.id} className={"border-b hover:bg-muted/40 transition-colors " + rowBg}>
                   <td className="sticky left-0 z-10 bg-background border-r px-3 py-3 text-muted-foreground font-mono">{idx + 1}</td>
                   <td className="sticky left-10 z-10 bg-background border-r px-3 py-3 font-medium text-foreground max-w-[240px]">
                     <span className="line-clamp-2 leading-snug">{proj.name}</span>
@@ -429,11 +383,11 @@ export function ProjectStatusDashboard() {
                     const isOverridden = overrides[proj.id]?.[ci] !== undefined;
                     return (
                       <td key={ci}
-                        className={`border-r text-center align-middle py-2 px-1
-                          ${adminMode ? "cursor-pointer" : ""}
-                          ${isOverridden ? "ring-inset ring-1 ring-amber-400/60" : ""}`}
+                        className={"border-r text-center align-middle py-2 px-1 " +
+                          (adminMode ? "cursor-pointer " : "") +
+                          (isOverridden ? "ring-inset ring-1 ring-amber-400/60" : "")}
                         onClick={e => openPicker(proj.id, ci, e)}
-                        title={adminMode ? `Click to change: ${STATUS_META[sym]?.label ?? sym}` : STATUS_META[sym]?.label}>
+                        title={adminMode ? "Click to change: " + (STATUS_META[sym]?.label ?? sym) : STATUS_META[sym]?.label}>
                         <StatusCell sym={sym} adminMode={adminMode} />
                       </td>
                     );
@@ -443,14 +397,10 @@ export function ProjectStatusDashboard() {
               );
             })}
           </tbody>
-
-          {/* ── Phase completion footer ── */}
           <tfoot>
             <tr className="border-t-2 bg-muted/60">
               <td className="sticky left-0 z-10 bg-muted border-r px-2 py-2" />
-              <td className="sticky left-10 z-10 bg-muted border-r px-3 py-2 font-semibold text-muted-foreground text-[10px] uppercase tracking-wide">
-                Phase %
-              </td>
+              <td className="sticky left-10 z-10 bg-muted border-r px-3 py-2 font-semibold text-muted-foreground text-[10px] uppercase tracking-wide">Phase %</td>
               <td className="border-r px-3 py-2" />
               {phases.map((p, ci) => {
                 const vals = projects.map(proj => getStatus(proj.id, ci, proj.statuses[ci] ?? ""));
@@ -463,9 +413,9 @@ export function ProjectStatusDashboard() {
                 const txt = pct>=90?"text-green-400":pct>=60?"text-blue-400":pct>=30?"text-amber-400":"text-red-400";
                 return (
                   <td key={p} className="border-r px-2 py-2 text-center">
-                    <span className={`text-[10px] font-bold ${txt}`}>{pct}%</span>
+                    <span className={"text-[10px] font-bold " + txt}>{pct}%</span>
                     <div className="w-full h-1.5 bg-muted rounded-full mt-1 overflow-hidden">
-                      <div className={`h-full rounded-full ${bar}`} style={{ width:`${pct}%` }} />
+                      <div className={"h-full rounded-full " + bar} style={{ width: pct + "%" }} />
                     </div>
                   </td>
                 );
@@ -480,7 +430,6 @@ export function ProjectStatusDashboard() {
         Source: Excel (GitHub) · Overrides saved to GitHub · {projects.length} projects · {phases.length} phases
       </p>
 
-      {/* ── Status picker popup ── */}
       {picker && data && (
         <StatusPicker
           top={picker.top}

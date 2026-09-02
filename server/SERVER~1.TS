@@ -1,5 +1,6 @@
 // server/routes.ts — DRB TechVerse — CLEAN VERSION
 import { Router, Request, Response } from "express";
+import { randomUUID } from "crypto";
 import type { Server } from "http";
 import {
   getProjectData, saveProjectAssignment, updateProjectAssignment, deleteProjectAssignment,
@@ -9,6 +10,16 @@ import {
   readJsonFile, writeJsonFile,
 } from "./github";
 import webpush from "web-push";
+
+// SECURITY (Snyk: hardcoded password): default credentials now come from env.
+// Set DEFAULT_ADMIN_PASSWORD / DEFAULT_ENGINEER_PASSWORD in Render env vars to
+// keep the "auto-create missing accounts" behavior working. If unset, a random
+// unguessable value is used so no committed literal can ever be a password.
+const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD || randomUUID().replace(/-/g, "").slice(0, 16);
+const DEFAULT_ENGINEER_PASSWORD = process.env.DEFAULT_ENGINEER_PASSWORD || randomUUID().replace(/-/g, "").slice(0, 16);
+// SECURITY (Snyk: insecure randomness): IDs are generated with crypto, not Math.random().
+const secureId = (len: number) => randomUUID().replace(/-/g, "").slice(0, len);
+
 
 // ── VAPID config (module level) ───────────────────────────────────────────────
 if (process.env.VAPID_PUBLIC_KEY) {
@@ -22,7 +33,7 @@ if (process.env.VAPID_PUBLIC_KEY) {
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 interface EngineerCredential {
   id: string; username: string; name: string; password: string;
-  role: "admin"|"engineer"; company?: string;
+  role: "admin"|"engineer"|"hr"|"pic"|"scm"; company?: string;
   isActive: boolean; createdAt: string; lastLogin?: string;
 }
 interface CredFile { engineers: EngineerCredential[]; lastUpdated: string; }
@@ -106,6 +117,28 @@ function isAdmin(req: Request): boolean {
     return d?.role === "admin" || d?.username?.toLowerCase() === "admin";
   } catch { return false; }
 }
+// HR / Project-In-Charge / SCM get full read access app-wide, but the ONLY
+// thing they're allowed to write to is the Material Procurement Tracker.
+const MATERIAL_EDITOR_ROLES = new Set(["admin", "hr", "pic", "scm"]);
+function canEditMaterials(req: Request): boolean {
+  try {
+    const h = req.headers["x-admin-auth"];
+    if (!h) return false;
+    const d = JSON.parse(Buffer.from(h as string, "base64").toString("utf-8"));
+    if (d?.username?.toLowerCase() === "admin") return true;
+    return MATERIAL_EDITOR_ROLES.has((d?.role || "").toLowerCase());
+  } catch { return false; }
+}
+const FULL_ACCESS_VIEWER_ROLES = new Set(["admin", "hr", "pic", "scm"]);
+function isFullAccessViewer(req: Request): boolean {
+  try {
+    const h = req.headers["x-admin-auth"];
+    if (!h) return false;
+    const d = JSON.parse(Buffer.from(h as string, "base64").toString("utf-8"));
+    if (d?.username?.toLowerCase() === "admin") return true;
+    return FULL_ACCESS_VIEWER_ROLES.has((d?.role || "").toLowerCase());
+  } catch { return false; }
+}
 function projKey(name: string): string {
   const m = name.trim().match(/^([A-Z0-9]{1,4}-[A-Z0-9]{1,5}-\d{4,6})/i);
   return m ? m[1].toUpperCase() : name.trim().toUpperCase();
@@ -187,12 +220,12 @@ async function syncToDailyActivities(a: WeeklyAssignment): Promise<void> {
         const idx = f.engineerDailyData.findIndex(e => norm(e.engineerName) === norm(eng) && e.date === date);
         if (idx > -1) {
           if (!f.engineerDailyData[idx].targetTasks.some(t => t.text.includes(a.projectName))) {
-            f.engineerDailyData[idx].targetTasks.push({ id: `wa-${Date.now()}-${Math.random().toString(36).substr(2,4)}`, text });
+            f.engineerDailyData[idx].targetTasks.push({ id: `wa-${Date.now()}-${secureId(4)}`, text });
             changed = true;
           }
         } else {
           f.engineerDailyData.push({ engineerName: eng, date,
-            targetTasks: [{ id: `wa-${Date.now()}-${Math.random().toString(36).substr(2,4)}`, text }],
+            targetTasks: [{ id: `wa-${Date.now()}-${secureId(4)}`, text }],
             completedActivities: [] });
           changed = true;
         }
@@ -254,7 +287,7 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
       const f = await readJsonFile<CredFile>("engineers_auth.json");
       const list: EngineerCredential[] = f?.engineers ?? [];
       if (!list.find(e => e.username === "admin"))
-        list.push({ id:"admin-1", username:"admin", name:"Admin", password:"admin@drb", role:"admin", isActive:true, createdAt:new Date().toISOString() });
+        list.push({ id:"admin-1", username:"admin", name:"Admin", password:DEFAULT_ADMIN_PASSWORD, role:"admin", isActive:true, createdAt:new Date().toISOString() });
       const found = list.find(e => e.username.toLowerCase()===username.toLowerCase() && e.password===password && e.isActive!==false);
       if (!found) return res.status(401).json({ message: "Invalid credentials" });
       found.lastLogin = new Date().toISOString();
@@ -270,9 +303,7 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
   // ── ENGINEER CREDENTIALS ──────────────────────────────────────────────────
   r.get("/engineer-credentials", async (req, res) => {
     try {
-      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const f = await readJsonFile<CredFile>("engineers_auth.json");
-      res.json({ engineers: (f?.engineers??[]).map(({password:_p,...rest})=>rest), lastUpdated: f?.lastUpdated??"" });
+      if (!isFullAccessViewer(req)) return res.status(403).json({ message: "Admin only" });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
   r.post("/engineer-credentials", async (req, res) => {
@@ -280,7 +311,7 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
       if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
       const f = (await readJsonFile<CredFile>("engineers_auth.json"))??{engineers:[],lastUpdated:""};
       const eng: EngineerCredential = { id:req.body.id||`eng-${Date.now()}`, username:req.body.username,
-        name:req.body.name, password:req.body.password||"drb@123", role:req.body.role||"engineer",
+        name:req.body.name, password:req.body.password||DEFAULT_ENGINEER_PASSWORD, role:req.body.role||"engineer",
         company:req.body.company, isActive:req.body.isActive!==false, createdAt:new Date().toISOString() };
       f.engineers.push(eng); f.lastUpdated=new Date().toISOString();
       await writeJsonFile("engineers_auth.json",f,`Add engineer: ${eng.username}`);
@@ -318,9 +349,9 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
       const f=ex??{engineers:[],lastUpdated:""}; const existing=new Set(f.engineers.map(e=>e.username.toLowerCase())); let created=0;
       for (const eng of (ml?.engineers??[])) {
         const u=norm(eng.name).replace(/\s+/g,".");
-        if (!existing.has(u)) { f.engineers.push({id:eng.id,name:eng.name,username:u,password:"drb@123",role:"engineer",company:eng.name.match(/\(([^)]+)\)/)?.[1],isActive:true,createdAt:new Date().toISOString()}); created++; }
+        if (!existing.has(u)) { f.engineers.push({id:eng.id,name:eng.name,username:u,password:DEFAULT_ENGINEER_PASSWORD,role:"engineer",company:eng.name.match(/\(([^)]+)\)/)?.[1],isActive:true,createdAt:new Date().toISOString()}); created++; }
       }
-      if (!existing.has("admin")) { f.engineers.push({id:"admin-1",name:"Admin",username:"admin",password:"admin@drb",role:"admin",isActive:true,createdAt:new Date().toISOString()}); created++; }
+      if (!existing.has("admin")) { f.engineers.push({id:"admin-1",name:"Admin",username:"admin",password:DEFAULT_ADMIN_PASSWORD,role:"admin",isActive:true,createdAt:new Date().toISOString()}); created++; }
       f.lastUpdated=new Date().toISOString(); await writeJsonFile("engineers_auth.json",f,"Initialize credentials");
       res.json({success:true,created});
     } catch (e: any) { res.status(500).json({ error: e.message }); }
@@ -421,7 +452,7 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
     try {
       const {engineer}=req.params; const {task,date}=req.body;
       const f=(await readJsonFile<DailyFile>("daily-activities.json"))??{engineerDailyData:[]};
-      const id=`t-${Date.now()}-${Math.random().toString(36).substr(2,5)}`;
+      const id=`t-${Date.now()}-${secureId(5)}`;
       const i=f.engineerDailyData.findIndex(e=>e.engineerName===engineer&&e.date===date);
       if (i>-1) f.engineerDailyData[i].targetTasks.push({id,text:task});
       else f.engineerDailyData.push({engineerName:engineer,date,targetTasks:[{id,text:task}],completedActivities:[]});
@@ -442,7 +473,7 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
     try {
       const {engineer}=req.params; const {activity,date}=req.body;
       const f=(await readJsonFile<DailyFile>("daily-activities.json"))??{engineerDailyData:[]};
-      const id=`a-${Date.now()}-${Math.random().toString(36).substr(2,5)}`;
+      const id=`a-${Date.now()}-${secureId(5)}`;
       const i=f.engineerDailyData.findIndex(e=>e.engineerName===engineer&&e.date===date);
       if (i>-1) f.engineerDailyData[i].completedActivities.push({id,text:activity});
       else f.engineerDailyData.push({engineerName:engineer,date,targetTasks:[],completedActivities:[{id,text:activity}]});
@@ -468,83 +499,6 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// INSERT BLOCK — paste this into server/routes.ts
-//
-// WHERE: right after the last weekly-assignments route —
-//   r.delete("/weekly-assignments/:id/tasks/:taskId", ...) { ... });
-// — and BEFORE the comment:
-//   // ── PROJECT NAMES ─────────────────────────────────────────────────────────
-//
-// Uses the existing top-level `isAdmin`, `norm`, `readJsonFile`, `writeJsonFile`
-// helpers already defined earlier in routes.ts — no new imports needed.
-// Data is stored in a NEW file: project-engineer-status.json (auto-created on
-// first save, same as every other tracker file in this repo).
-// ═══════════════════════════════════════════════════════════════════════════
-
-  // ── PROJECT ENGINEER STATUS — independent per-engineer status/timeline ───
-  // Overlay on top of weekly-assignments.json. An engineer's individual
-  // progress on a shared project can be marked here without touching the
-  // project-level currentStatus/timeline on the underlying assignment
-  // record(s) — several engineers can be on very different phases of the
-  // same project (e.g. one engineer's wiring is done and F.A.T continues
-  // for others). Consumed by Project Tracker (engineer tab) and Skill
-  // Matrix (workload + Engineers Needing Support).
-  interface PEStatusEntry {
-    displayName: string; currentStatus: string;
-    resourceLockedFrom?: string; resourceLockedTill?: string;
-    internalTarget?: string; customerTarget?: string;
-    updatedAt: string; updatedBy?: string;
-  }
-  interface PEStatusProject { projectName: string; engineers: Record<string, PEStatusEntry>; }
-  interface PEStatusFile { projects: Record<string, PEStatusProject>; lastUpdated: string; }
-  function peProjKey(name: string) { return name.trim().toLowerCase(); }
-
-  r.get("/project-engineer-status", async (_q, res) => {
-    try {
-      const f = await readJsonFile<PEStatusFile>("project-engineer-status.json");
-      res.json(f?.projects ?? {});
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.post("/project-engineer-status/:project/:engineer", async (req, res) => {
-    try {
-      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const f = (await readJsonFile<PEStatusFile>("project-engineer-status.json")) ?? { projects: {}, lastUpdated: "" };
-      const pKey = peProjKey(req.params.project);
-      const eKey = norm(req.params.engineer);
-      if (!f.projects[pKey]) f.projects[pKey] = { projectName: req.params.project, engineers: {} };
-      f.projects[pKey].engineers[eKey] = {
-        displayName: req.params.engineer,
-        currentStatus: req.body.currentStatus || "not_started",
-        resourceLockedFrom: req.body.resourceLockedFrom || undefined,
-        resourceLockedTill: req.body.resourceLockedTill || undefined,
-        internalTarget: req.body.internalTarget || undefined,
-        customerTarget: req.body.customerTarget || undefined,
-        updatedAt: new Date().toISOString(),
-        updatedBy: req.body.updatedBy || undefined,
-      };
-      f.lastUpdated = new Date().toISOString();
-      await writeJsonFile("project-engineer-status.json", f, `Engineer status: ${req.params.engineer} on ${req.params.project}`);
-      res.json({ success: true, entry: f.projects[pKey].engineers[eKey] });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.delete("/project-engineer-status/:project/:engineer", async (req, res) => {
-    try {
-      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const f = await readJsonFile<PEStatusFile>("project-engineer-status.json");
-      if (!f) return res.json({ success: true });
-      const pKey = peProjKey(req.params.project);
-      if (f.projects[pKey]) {
-        delete f.projects[pKey].engineers[norm(req.params.engineer)];
-        if (Object.keys(f.projects[pKey].engineers).length === 0) delete f.projects[pKey];
-      }
-      f.lastUpdated = new Date().toISOString();
-      await writeJsonFile("project-engineer-status.json", f, `Remove engineer status: ${req.params.engineer} on ${req.params.project}`);
-      res.json({ success: true });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
   // ── WEEKLY ASSIGNMENTS ────────────────────────────────────────────────────
   r.get("/weekly-assignments", async (req, res) => {
     try {
@@ -692,88 +646,8 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
       res.json({success:true});
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
-// ═══════════════════════════════════════════════════════════════════════════
-// INSERT BLOCK — paste this into server/routes.ts
-//
-// WHERE: right after the last weekly-assignments route —
-//   r.delete("/weekly-assignments/:id/tasks/:taskId", ...) { ... });
-// — and BEFORE the comment:
-//   // ── PROJECT NAMES ─────────────────────────────────────────────────────────
-//
-// Uses the existing top-level `isAdmin`, `norm`, `readJsonFile`, `writeJsonFile`
-// helpers already defined earlier in routes.ts — no new imports needed.
-// Data is stored in a NEW file: project-engineer-status.json (auto-created on
-// first save, same as every other tracker file in this repo).
-// ═══════════════════════════════════════════════════════════════════════════
 
-  // ── PROJECT ENGINEER STATUS — independent per-engineer status/timeline ───
-  // Overlay on top of weekly-assignments.json. An engineer's individual
-  // progress on a shared project can be marked here without touching the
-  // project-level currentStatus/timeline on the underlying assignment
-  // record(s) — several engineers can be on very different phases of the
-  // same project (e.g. one engineer's wiring is done and F.A.T continues
-  // for others). Consumed by Project Tracker (engineer tab) and Skill
-  // Matrix (workload + Engineers Needing Support).
-  interface PEStatusEntry {
-    displayName: string; currentStatus: string;
-    resourceLockedFrom?: string; resourceLockedTill?: string;
-    internalTarget?: string; customerTarget?: string;
-    updatedAt: string; updatedBy?: string;
-  }
-  interface PEStatusProject { projectName: string; engineers: Record<string, PEStatusEntry>; }
-  interface PEStatusFile { projects: Record<string, PEStatusProject>; lastUpdated: string; }
-  function peProjKey(name: string) { return name.trim().toLowerCase(); }
-
-  r.get("/project-engineer-status", async (_q, res) => {
-    try {
-      const f = await readJsonFile<PEStatusFile>("project-engineer-status.json");
-      res.json(f?.projects ?? {});
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.post("/project-engineer-status/:project/:engineer", async (req, res) => {
-    try {
-      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const f = (await readJsonFile<PEStatusFile>("project-engineer-status.json")) ?? { projects: {}, lastUpdated: "" };
-      const pKey = peProjKey(req.params.project);
-      const eKey = norm(req.params.engineer);
-      if (!f.projects[pKey]) f.projects[pKey] = { projectName: req.params.project, engineers: {} };
-      f.projects[pKey].engineers[eKey] = {
-        displayName: req.params.engineer,
-        currentStatus: req.body.currentStatus || "not_started",
-        resourceLockedFrom: req.body.resourceLockedFrom || undefined,
-        resourceLockedTill: req.body.resourceLockedTill || undefined,
-        internalTarget: req.body.internalTarget || undefined,
-        customerTarget: req.body.customerTarget || undefined,
-        updatedAt: new Date().toISOString(),
-        updatedBy: req.body.updatedBy || undefined,
-      };
-      f.lastUpdated = new Date().toISOString();
-      await writeJsonFile("project-engineer-status.json", f, `Engineer status: ${req.params.engineer} on ${req.params.project}`);
-      res.json({ success: true, entry: f.projects[pKey].engineers[eKey] });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  r.delete("/project-engineer-status/:project/:engineer", async (req, res) => {
-    try {
-      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const f = await readJsonFile<PEStatusFile>("project-engineer-status.json");
-      if (!f) return res.json({ success: true });
-      const pKey = peProjKey(req.params.project);
-      if (f.projects[pKey]) {
-        delete f.projects[pKey].engineers[norm(req.params.engineer)];
-        if (Object.keys(f.projects[pKey].engineers).length === 0) delete f.projects[pKey];
-      }
-      f.lastUpdated = new Date().toISOString();
-      await writeJsonFile("project-engineer-status.json", f, `Remove engineer status: ${req.params.engineer} on ${req.params.project}`);
-      res.json({ success: true });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  
-
-
-// ── PROJECT NAMES ─────────────────────────────────────────────────────────
+  // ── PROJECT NAMES ─────────────────────────────────────────────────────────
   r.get("/project-names", async (_q, res) => {
     try {
       const [wf,pd]=await Promise.all([readJsonFile<WAFile>("weekly-assignments.json"),getProjectData()]);
@@ -1199,7 +1073,7 @@ r.get("/material-tracker/:project", async (req, res) => {
 // Save data for one project
 r.post("/material-tracker/:project", async (req, res) => {
   try {
-    if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+    if (!canEditMaterials(req)) return res.status(403).json({ message: "Not allowed to edit the Material Tracker" });
     const f = (await readJsonFile<MaterialTrackerFile>("material-tracker.json")) ?? { projects: {}, lastUpdated: "" };
     const key = matKey(req.params.project);
     f.projects[key] = {
@@ -1216,7 +1090,7 @@ r.post("/material-tracker/:project", async (req, res) => {
 // Delete a project's material tracking
 r.delete("/material-tracker/:project", async (req, res) => {
   try {
-    if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+    if (!canEditMaterials(req)) return res.status(403).json({ message: "Not allowed to edit the Material Tracker" });
     const f = await readJsonFile<MaterialTrackerFile>("material-tracker.json");
     if (!f) return res.json({ success: true });
     delete f.projects[matKey(req.params.project)];
@@ -1226,586 +1100,43 @@ r.delete("/material-tracker/:project", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-interface StationImage {
-  url: string;
-  caption?: string;
-  uploadedAt: string;
+ // ── ADD TO server/routes.ts — paste before the HEALTH section ────────────────
+// Offline software track (PLC/HMI/Logic Test) — independent status per project,
+// parallel to the main 15-phase roadmap. Persists to project-offline-status.json.
+
+interface OfflineStatusFile {
+  statuses: Record<string, string>; // key = projectName.toLowerCase().trim()
+  lastUpdated: string;
 }
- 
-interface StationDoc {
-  id: string;
-  name: string;
-  status: string;
-  electricalParts: string;
-  process: string;
-  inputs: string;
-  outputs: string;
-  images: StationImage[];
-}
- 
-interface EquipmentDoc {
-  projectName: string;
-  synopsis: string;
-  plcArchitecture: string;
-  safetyLayout: string;
-  hasMultipleStations: boolean;
-  stations: StationDoc[];
-  updatedAt: string;
-  updatedBy?: string;
-}
- 
-function blankEquipmentDoc(projectName: string): EquipmentDoc {
-  return {
-    projectName,
-    synopsis: "",
-    plcArchitecture: "",
-    safetyLayout: "",
-    hasMultipleStations: false,
-    stations: [],
-    updatedAt: new Date().toISOString(),
-  };
-}
- 
-function slugify(s: string): string {
-  return s
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
- 
-// ---- Image upload helper (GitHub Contents API, base64) -------------------
-// Adjust DATA_REPO_OWNER / DATA_REPO_NAME / GITHUB_TOKEN to match the
-// constants already used by readJsonFile/writeJsonFile in this file.
- 
-const DATA_REPO_OWNER = "Github2drb";
-const DATA_REPO_NAME = "Controls_Team_Tracker";
- 
-async function uploadImageToGithub(
-  path: string,          // e.g. "equipment-images/acme-line-1/station-1-1699999999-photo.jpg"
-  base64Content: string, // raw base64, no "data:image/..;base64," prefix
-  commitMessage: string
-): Promise<string> {
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) throw new Error("GITHUB_TOKEN not set");
- 
-  const url = `https://api.github.com/repos/${DATA_REPO_OWNER}/${DATA_REPO_NAME}/contents/${path}`;
-  const res = await fetch(url, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      message: commitMessage,
-      content: base64Content,
-    }),
-  });
- 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`GitHub upload failed (${res.status}): ${text}`);
-  }
- 
-  return `https://raw.githubusercontent.com/${DATA_REPO_OWNER}/${DATA_REPO_NAME}/main/${path}`;
-}
- 
-// ---- Routes ---------------------------------------------------------------
-// Paste inside registerRoutes(r) where `r` is the existing router.
- 
-// GET /api/equipment-docs/:project — fetch one project's doc (public)
-r.get("/equipment-docs/:project", async (req, res) => {
+function offKey(name: string) { return name.trim().toLowerCase(); }
+
+r.get("/project-activities/offline-status", async (_q, res) => {
   try {
-    const projectName = decodeURIComponent(req.params.project);
-    const all = await readJsonFile<EquipmentDoc[]>("equipment-docs.json").catch(() => []);
-    const doc = (all || []).find((d) => d.projectName === projectName);
-    res.json(doc ?? blankEquipmentDoc(projectName));
-  } catch (e: any) {
-    res.status(500).json({ error: e?.message || "Failed to load equipment doc" });
-  }
-});
- 
-// POST /api/equipment-docs/:project — upsert full doc (Admin)
-r.post("/equipment-docs/:project", async (req, res) => {
-  if (!isAdmin(req)) return res.status(403).json({ error: "Admin only" });
-  try {
-    const projectName = decodeURIComponent(req.params.project);
-    const body = req.body as Partial<EquipmentDoc>;
-    const all = (await readJsonFile<EquipmentDoc[]>("equipment-docs.json").catch(() => [])) || [];
- 
-    const idx = all.findIndex((d) => d.projectName === projectName);
-    const existing = idx >= 0 ? all[idx] : blankEquipmentDoc(projectName);
- 
-    const updated: EquipmentDoc = {
-      ...existing,
-      ...body,
-      projectName,
-      stations: body.stations ?? existing.stations,
-      updatedAt: new Date().toISOString(),
-      updatedBy: (req.headers["x-admin-auth"] ? "admin" : undefined),
-    };
- 
-    if (idx >= 0) all[idx] = updated;
-    else all.push(updated);
- 
-    await writeJsonFile("equipment-docs.json", all, `Update equipment doc: ${projectName}`);
-    res.json(updated);
-  } catch (e: any) {
-    res.status(500).json({ error: e?.message || "Failed to save equipment doc" });
-  }
-});
- 
-// POST /api/equipment-docs/:project/image — upload a station image (Admin)
-// body: { stationId: string; filename: string; base64: string }  (base64 = raw, no data-URI prefix)
-r.post("/equipment-docs/:project/image", async (req, res) => {
-  if (!isAdmin(req)) return res.status(403).json({ error: "Admin only" });
-  try {
-    const projectName = decodeURIComponent(req.params.project);
-    const { stationId, filename, base64 } = req.body as {
-      stationId: string;
-      filename: string;
-      base64: string;
-    };
-    if (!stationId || !filename || !base64) {
-      return res.status(400).json({ error: "stationId, filename and base64 are required" });
-    }
- 
-    const safeName = filename.replace(/[^a-zA-Z0-9.\-_]/g, "_");
-    const path = `equipment-images/${slugify(projectName)}/${stationId}-${Date.now()}-${safeName}`;
-    const url = await uploadImageToGithub(path, base64, `Add station image: ${projectName} / ${stationId}`);
- 
-    res.json({ url, uploadedAt: new Date().toISOString() });
-  } catch (e: any) {
-    res.status(500).json({ error: e?.message || "Failed to upload image" });
-  }
+    const f = await readJsonFile<OfflineStatusFile>("project-offline-status.json");
+    // Return keyed by the ORIGINAL project name casing where possible isn't tracked,
+    // so the frontend matches by its own projectName strings — we store lowercase
+    // keys, and the frontend looks up by its own projectName too, so we return a
+    // map using the same lowercase keys; the frontend's lookup uses projectName as-is,
+    // so to keep this simple we store and return using the exact projectName string
+    // the frontend sent at save time (see POST handler below).
+    res.json(f?.statuses ?? {});
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-  // ── COMMISSIONING TRACKER — station-wise project commissioning detail ────
-  interface CommImageRef { name: string; url: string; uploadedBy?: string; uploadedAt?: string; }
-  interface CommStationRow {
-    id: string; label: string; description: string;
-    electricalConstraint: string; mechanicalConstraint: string;
-    trialTime: string; status: string; notes: string;
-    images?: CommImageRef[];
-  }
-  interface CommChecklistItem { id: string; text: string; done: boolean; doneBy?: string; doneAt?: string; }
-  interface CommPhase { id: string; title: string; subtitle: string; items: CommChecklistItem[]; }
-  interface CommissioningProjectData {
-    projectName: string;
-    stations: CommStationRow[];
-    commInterface: CommStationRow[];
-    phases: CommPhase[];
-    lastUpdated?: string;
-    updatedBy?: string;
-  }
-  interface CommissioningFile {
-    projects: Record<string, CommissioningProjectData>; // key = projectName.toLowerCase().trim()
-    lastUpdated: string;
-  }
-  function commKey(name: string) { return name.trim().toLowerCase(); }
+r.post("/project-activities/offline-status", async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+    const { projectName, offlineStatus } = req.body;
+    if (!projectName || !offlineStatus) return res.status(400).json({ message: "projectName and offlineStatus required" });
+    const f = (await readJsonFile<OfflineStatusFile>("project-offline-status.json")) ?? { statuses: {}, lastUpdated: "" };
+    f.statuses[projectName] = offlineStatus; // keyed by exact projectName string used by frontend
+    f.lastUpdated = new Date().toISOString();
+    await writeJsonFile("project-offline-status.json", f, `Offline status: ${projectName} -> ${offlineStatus}`);
+    res.json({ success: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
 
-  // List all tracked project names
-  r.get("/commissioning-tracker", async (_q, res) => {
-    try {
-      const f = await readJsonFile<CommissioningFile>("commissioning-tracker.json");
-      res.json(Object.values(f?.projects ?? {}).map(p => p.projectName));
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  // Get commissioning data for one project (empty shell if not tracked yet)
-  r.get("/commissioning-tracker/:project", async (req, res) => {
-    try {
-      const f = await readJsonFile<CommissioningFile>("commissioning-tracker.json");
-      const data = f?.projects?.[commKey(req.params.project)];
-      if (!data) return res.json({ projectName: req.params.project, stations: [], commInterface: [], phases: [] });
-      res.json(data);
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  // Save commissioning data for one project (open to all logged-in engineers)
-  r.post("/commissioning-tracker/:project", async (req, res) => {
-    try {
-      const f = (await readJsonFile<CommissioningFile>("commissioning-tracker.json")) ?? { projects: {}, lastUpdated: "" };
-      const key = commKey(req.params.project);
-      f.projects[key] = {
-        projectName: req.body.projectName || req.params.project,
-        stations: Array.isArray(req.body.stations) ? req.body.stations : [],
-        commInterface: Array.isArray(req.body.commInterface) ? req.body.commInterface : [],
-        phases: Array.isArray(req.body.phases) ? req.body.phases : [],
-        lastUpdated: new Date().toISOString(),
-        updatedBy: typeof req.body.updatedBy === "string" ? req.body.updatedBy : "",
-      };
-      f.lastUpdated = new Date().toISOString();
-      await writeJsonFile("commissioning-tracker.json", f, `Commissioning update: ${req.params.project}`);
-      res.json({ success: true });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  // Remove a project from commissioning tracking (admin only)
-  r.delete("/commissioning-tracker/:project", async (req, res) => {
-    try {
-      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
-      const f = await readJsonFile<CommissioningFile>("commissioning-tracker.json");
-      if (!f) return res.json({ success: true });
-      delete f.projects[commKey(req.params.project)];
-      f.lastUpdated = new Date().toISOString();
-      await writeJsonFile("commissioning-tracker.json", f, `Commissioning delete: ${req.params.project}`);
-      res.json({ success: true });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  // ── COMMISSIONING PERFORMANCE — forecast + engineer rating ───────────────
-  // Mirrors client/src/lib/commissioning-calc.ts exactly. Work week = Mon–Sat.
-  const CM_WEEK_UNIT = 6;        // "1 week"  = 6 working days
-  const CM_MONTH_UNIT = 26;      // "1 month" = 26 working days
-  const CM_HOURS_PER_DAY = 8;
-  const CM_DEFAULT_DAYS = 1;     // assumed when a pending row has no estimate
-  const CM_LATE_PENALTY = 5;     // points lost per working day late
-  const CM_W = { internal: 0.30, customer: 0.30, stations: 0.25, checklist: 0.15 };
-
-  function cmStartOfDay(d: Date | string): Date {
-    const x = typeof d === "string" ? new Date(d + (d.length === 10 ? "T00:00:00" : "")) : new Date(d);
-    x.setHours(0, 0, 0, 0);
-    return x;
-  }
-  function cmIsWorkingDay(d: Date): boolean { return d.getDay() !== 0; }
-  function cmAddWorkingDays(from: Date, n: number): Date {
-    const d = cmStartOfDay(from);
-    let remaining = Math.max(0, Math.ceil(n));
-    while (remaining > 0) { d.setDate(d.getDate() + 1); if (cmIsWorkingDay(d)) remaining--; }
-    return d;
-  }
-  function cmWorkingDaysBetween(a: Date, b: Date): number {
-    const start = cmStartOfDay(a); const end = cmStartOfDay(b);
-    if (start.getTime() === end.getTime()) return 0;
-    const forward = end > start;
-    const from = forward ? start : end; const to = forward ? end : start;
-    let count = 0; const cur = new Date(from);
-    while (cur < to) { cur.setDate(cur.getDate() + 1); if (cmIsWorkingDay(cur)) count++; }
-    return forward ? count : -count;
-  }
-  function cmISO(d: Date): string {
-    const x = cmStartOfDay(d);
-    return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
-  }
-  function cmParseTrialDays(raw: string | undefined | null, today: Date): number | null {
-    const s = (raw ?? "").trim();
-    if (!s) return null;
-    const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-    if (iso) {
-      const t = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
-      if (!isNaN(t.getTime())) return Math.max(0, cmWorkingDaysBetween(today, t));
-    }
-    const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
-    if (dmy) {
-      let year = Number(dmy[3]); if (year < 100) year += 2000;
-      const t = new Date(year, Number(dmy[2]) - 1, Number(dmy[1]));
-      if (!isNaN(t.getTime())) return Math.max(0, cmWorkingDaysBetween(today, t));
-    }
-    const num = s.match(/(\d+(?:\.\d+)?)/);
-    if (!num) return null;
-    const value = parseFloat(num[1]);
-    if (!isFinite(value) || value < 0) return null;
-    const lower = s.toLowerCase();
-    if (/\b(hour|hours|hr|hrs)\b/.test(lower) || /\d\s*h\b/.test(lower)) return Math.ceil(value / CM_HOURS_PER_DAY);
-    if (/\b(month|months|mon|mo)\b/.test(lower)) return Math.ceil(value * CM_MONTH_UNIT);
-    if (/\b(week|weeks|wk|wks)\b/.test(lower) || /\d\s*w\b/.test(lower)) return Math.ceil(value * CM_WEEK_UNIT);
-    return Math.ceil(value);
-  }
-  function cmNorm(s: string): string { return s.trim().replace(/\s*\([^)]*\)\s*/g, "").trim().toLowerCase(); }
-  function cmNamesMatch(a: string, b: string): boolean {
-    const na = cmNorm(a); const nb = cmNorm(b);
-    if (!na || !nb) return false;
-    if (na === nb) return true;
-    if (nb.startsWith(na) || na.startsWith(nb)) return true;
-    return na.split(/\s+/)[0] === nb.split(/\s+/)[0];
-  }
-  function cmSplitEngineers(field?: string | null): string[] {
-    return (field ?? "").split(",").map(n => n.trim()).filter(Boolean);
-  }
-  function cmScheduleScore(forecast: Date | null, target?: string | null) {
-    const t = (target ?? "").trim();
-    if (!t || !forecast) return { target: null as string | null, varianceDays: null as number | null, score: null as number | null };
-    const td = cmStartOfDay(t);
-    if (isNaN(td.getTime())) return { target: null as string | null, varianceDays: null as number | null, score: null as number | null };
-    const variance = cmWorkingDaysBetween(td, forecast);
-    return { target: t, varianceDays: variance, score: variance <= 0 ? 100 : Math.max(0, 100 - variance * CM_LATE_PENALTY) };
-  }
-  function cmLevel(score: number): string {
-    return score >= 90 ? "Expert" : score >= 75 ? "Proficient" : score >= 50 ? "Developing" : "Learning";
-  }
-
-  r.get("/commissioning-performance", async (_q, res) => {
-    try {
-      const [cf, waFile] = await Promise.all([
-        readJsonFile<CommissioningFile>("commissioning-tracker.json"),
-        readJsonFile<{ assignments: any[] }>("weekly-assignments.json"),
-      ]);
-      const today = cmStartOfDay(new Date());
-      const assignments = waFile?.assignments ?? [];
-      const projectsOut: any[] = [];
-
-      for (const proj of Object.values(cf?.projects ?? {})) {
-        const rows = [...(proj.stations ?? []), ...(proj.commInterface ?? [])];
-        if (rows.length === 0) continue;
-
-        // Assignments for this project (fuzzy name match on project name)
-        const pKey = commKey(proj.projectName);
-        const projAssignments = assignments.filter((a: any) => {
-          const an = (a.projectName ?? "").trim().toLowerCase();
-          return an === pKey || an.includes(pKey) || pKey.includes(an);
-        });
-        const engineers = Array.from(new Set(
-          projAssignments.flatMap((a: any) => cmSplitEngineers(a.engineerName))
-        ));
-        // Latest non-empty target dates across this project's assignments
-        const internalTarget = projAssignments.map((a: any) => (a.internalTarget ?? "").trim()).filter(Boolean).sort().pop() ?? null;
-        const customerTarget = projAssignments.map((a: any) => (a.customerTarget ?? "").trim()).filter(Boolean).sort().pop() ?? null;
-
-        const completedRows = rows.filter(x => x.status === "completed").length;
-        const pending = rows.filter(x => x.status !== "completed");
-        let totalPendingDays = 0; let missingEstimates = 0;
-        for (const x of pending) {
-          const d = cmParseTrialDays(x.trialTime, today);
-          if (d === null) { missingEstimates++; totalPendingDays += CM_DEFAULT_DAYS; } else { totalPendingDays += d; }
-        }
-        const engineerCount = Math.max(1, engineers.length);
-        const effectiveDays = Math.ceil(totalPendingDays / engineerCount);
-        const forecastDate = cmAddWorkingDays(today, effectiveDays);
-
-        const phases = proj.phases ?? [];
-        const checklistTotal = phases.reduce((n, p) => n + (p.items?.length ?? 0), 0);
-        const checklistDone = phases.reduce((n, p) => n + (p.items ?? []).filter(i => i.done).length, 0);
-        const stationProgress = rows.length > 0 ? Math.round((completedRows / rows.length) * 100) : 0;
-        const checklistProgress = checklistTotal > 0 ? Math.round((checklistDone / checklistTotal) * 100) : 0;
-
-        const internal = cmScheduleScore(forecastDate, internalTarget);
-        const customer = cmScheduleScore(forecastDate, customerTarget);
-        const parts: Array<{ key: string; label: string; score: number; weight: number }> = [];
-        if (internal.score !== null) parts.push({ key: "internal", label: "Internal Target", score: internal.score, weight: CM_W.internal });
-        if (customer.score !== null) parts.push({ key: "customer", label: "Customer Target", score: customer.score, weight: CM_W.customer });
-        parts.push({ key: "stations", label: "Station Progress", score: stationProgress, weight: CM_W.stations });
-        parts.push({ key: "checklist", label: "Checklist", score: checklistProgress, weight: CM_W.checklist });
-        const tw = parts.reduce((n, p) => n + p.weight, 0);
-        const overall = tw > 0 ? Math.round(parts.reduce((n, p) => n + p.score * p.weight, 0) / tw) : 0;
-
-        projectsOut.push({
-          projectName: proj.projectName,
-          engineers,
-          totalRows: rows.length,
-          completedRows,
-          pendingRows: pending.length,
-          totalPendingDays,
-          missingEstimates,
-          engineerCount,
-          effectiveDays,
-          forecastDate: cmISO(forecastDate),
-          internalTarget: internal.target,
-          internalVarianceDays: internal.varianceDays,
-          internalScore: internal.score,
-          customerTarget: customer.target,
-          customerVarianceDays: customer.varianceDays,
-          customerScore: customer.score,
-          stationProgress,
-          checklistProgress,
-          checklistDone,
-          checklistTotal,
-          overall,
-          level: cmLevel(overall),
-          components: parts,
-          lastUpdated: proj.lastUpdated ?? null,
-          updatedBy: proj.updatedBy ?? null,
-        });
-      }
-
-      // Per-engineer roll-up: average score across the commissioning projects they are on
-      const engMap = new Map<string, { name: string; projects: any[] }>();
-      for (const p of projectsOut) {
-        for (const name of p.engineers) {
-          const k = cmNorm(name);
-          if (!engMap.has(k)) engMap.set(k, { name, projects: [] });
-          engMap.get(k)!.projects.push({
-            projectName: p.projectName, overall: p.overall, level: p.level,
-            forecastDate: p.forecastDate, internalTarget: p.internalTarget, customerTarget: p.customerTarget,
-            internalVarianceDays: p.internalVarianceDays, customerVarianceDays: p.customerVarianceDays,
-            stationProgress: p.stationProgress, checklistProgress: p.checklistProgress,
-            effectiveDays: p.effectiveDays,
-          });
-        }
-      }
-      const engineersOut = Array.from(engMap.values()).map(e => {
-        const avg = e.projects.length > 0
-          ? Math.round(e.projects.reduce((n, p) => n + p.overall, 0) / e.projects.length) : 0;
-        const atRisk = e.projects.filter(p =>
-          (p.internalVarianceDays !== null && p.internalVarianceDays > 0) ||
-          (p.customerVarianceDays !== null && p.customerVarianceDays > 0)
-        ).length;
-        return {
-          name: e.name, overall: avg, level: cmLevel(avg),
-          projectCount: e.projects.length, atRiskCount: atRisk, projects: e.projects,
-        };
-      }).sort((a, b) => b.overall - a.overall);
-
-      res.json({ generatedAt: new Date().toISOString(), today: cmISO(today), projects: projectsOut, engineers: engineersOut });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
-  // ── COMMISSIONING IMAGES — stored in TechVerseImprove/blog-images ─────────
-  // Images are committed to the GitHub repo via the contents API and served
-  // back through this server (so the repo can stay private and no token is
-  // ever exposed to the browser).
-  const IMG_REPO = "Github2drb/TechVerseImprove";
-  const IMG_DIR = "blog-images";
-  const IMG_MAX_BYTES = 12 * 1024 * 1024; // 12 MB per image after client-side compression
-
-  function ghImgHeaders(): Record<string, string> {
-    const token = process.env.GITHUB_TOKEN || "";
-    const h: Record<string, string> = {
-      Accept: "application/vnd.github.v3+json",
-      "User-Agent": "DRBTechVerse/1.0",
-      "Cache-Control": "no-cache",
-    };
-    if (token) h["Authorization"] = `token ${token}`;
-    return h;
-  }
-  function imgSlug(s: string): string {
-    return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "x";
-  }
-  // Only a flat filename is ever accepted — blocks ../ path traversal
-  function isSafeImgName(n: string): boolean {
-    return /^[A-Za-z0-9._-]{1,120}$/.test(n) && !n.includes("..");
-  }
-  const IMG_MIME: Record<string, string> = {
-    jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png",
-    webp: "image/webp", gif: "image/gif", bmp: "image/bmp",
-  };
-  function imgExt(name: string): string {
-    const m = name.toLowerCase().match(/\.([a-z0-9]+)$/);
-    return m ? m[1] : "jpg";
-  }
-
-  // Upload one image. Body: { projectName, rowId, fileName, dataBase64 }
-  r.post("/commissioning-images", async (req, res) => {
-    try {
-      if (!process.env.GITHUB_TOKEN) {
-        return res.status(500).json({ error: "GITHUB_TOKEN is not configured on the server — cannot upload images." });
-      }
-      const { projectName, rowId, fileName, dataBase64 } = req.body ?? {};
-      const raw = String(dataBase64 ?? "").replace(/^data:[^;]+;base64,/, "");
-      if (!raw) return res.status(400).json({ error: "No image data received" });
-
-      const approxBytes = Math.floor((raw.length * 3) / 4);
-      if (approxBytes > IMG_MAX_BYTES) {
-        return res.status(413).json({ error: `Image is ${(approxBytes / 1048576).toFixed(1)} MB — the limit is 12 MB.` });
-      }
-
-      const ext = imgExt(String(fileName ?? "photo.jpg"));
-      if (!IMG_MIME[ext]) return res.status(400).json({ error: `Unsupported image type ".${ext}"` });
-
-      const name = `comm-${imgSlug(projectName)}-${imgSlug(rowId)}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
-      const url = `https://api.github.com/repos/${IMG_REPO}/contents/${IMG_DIR}/${encodeURIComponent(name)}`;
-      const gh = await fetch(url, {
-        method: "PUT",
-        headers: { ...ghImgHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: `Commissioning image: ${projectName ?? "project"} (${name})`,
-          content: raw,
-        }),
-      });
-      if (!gh.ok) {
-        const txt = await gh.text();
-        throw new Error(`GitHub upload HTTP ${gh.status}: ${txt.slice(0, 300)}`);
-      }
-      const meta: any = await gh.json();
-      res.json({
-        success: true,
-        name,
-        path: `${IMG_DIR}/${name}`,
-        url: `/api/commissioning-images/file/${encodeURIComponent(name)}`,
-        rawUrl: `https://raw.githubusercontent.com/${IMG_REPO}/main/${IMG_DIR}/${name}`,
-        sha: meta?.content?.sha ?? null,
-        sizeBytes: approxBytes,
-      });
-    } catch (e: any) {
-      console.error("[commissioning-images upload]", e.message);
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  // Serve an image back to the browser (works for private repos too)
-  r.get("/commissioning-images/file/:name", async (req, res) => {
-    try {
-      const name = req.params.name;
-      if (!isSafeImgName(name)) return res.status(400).send("Bad image name");
-      const url = `https://api.github.com/repos/${IMG_REPO}/contents/${IMG_DIR}/${encodeURIComponent(name)}`;
-      const gh = await fetch(url, { headers: ghImgHeaders() });
-      if (!gh.ok) return res.status(404).send("Image not found");
-      const meta: any = await gh.json();
-      if (!meta?.content) return res.status(404).send("Image has no content");
-      const buf = Buffer.from(String(meta.content).replace(/\n/g, ""), "base64");
-      res.setHeader("Content-Type", IMG_MIME[imgExt(name)] ?? "application/octet-stream");
-      res.setHeader("Cache-Control", "public, max-age=86400");
-      res.send(buf);
-    } catch (e: any) {
-      console.error("[commissioning-images file]", e.message);
-      res.status(500).send("Image fetch failed");
-    }
-  });
-
-  // List images already in blog-images for a project (recovery / audit)
-  r.get("/commissioning-images", async (req, res) => {
-    try {
-      const project = String(req.query.project ?? "");
-      const url = `https://api.github.com/repos/${IMG_REPO}/contents/${IMG_DIR}`;
-      const gh = await fetch(url, { headers: ghImgHeaders() });
-      if (!gh.ok) return res.json([]);
-      const list: any = await gh.json();
-      if (!Array.isArray(list)) return res.json([]);
-      const prefix = project ? `comm-${imgSlug(project)}-` : "comm-";
-      res.json(
-        list
-          .filter((f: any) => f?.type === "file" && typeof f.name === "string" && f.name.startsWith(prefix))
-          .map((f: any) => ({
-            name: f.name,
-            path: f.path,
-            url: `/api/commissioning-images/file/${encodeURIComponent(f.name)}`,
-            sizeBytes: f.size ?? 0,
-          }))
-      );
-    } catch (e: any) {
-      console.error("[commissioning-images list]", e.message);
-      res.json([]);
-    }
-  });
-
-  // Delete an image from the repo
-  r.delete("/commissioning-images/:name", async (req, res) => {
-    try {
-      const name = req.params.name;
-      if (!isSafeImgName(name)) return res.status(400).json({ error: "Bad image name" });
-      if (!process.env.GITHUB_TOKEN) return res.status(500).json({ error: "GITHUB_TOKEN is not configured on the server." });
-      const url = `https://api.github.com/repos/${IMG_REPO}/contents/${IMG_DIR}/${encodeURIComponent(name)}`;
-      const head = await fetch(url, { headers: ghImgHeaders() });
-      if (!head.ok) return res.json({ success: true }); // already gone
-      const meta: any = await head.json();
-      const del = await fetch(url, {
-        method: "DELETE",
-        headers: { ...ghImgHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({ message: `Remove commissioning image ${name}`, sha: meta.sha }),
-      });
-      if (!del.ok) {
-        const txt = await del.text();
-        throw new Error(`GitHub delete HTTP ${del.status}: ${txt.slice(0, 200)}`);
-      }
-      res.json({ success: true });
-    } catch (e: any) {
-      console.error("[commissioning-images delete]", e.message);
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  // ── HEALTH ────────────────────────────────────────────────────────────────
+    // ── HEALTH ────────────────────────────────────────────────────────────────
   r.get("/health", async (_q, res) => {
     const token=!!process.env.GITHUB_TOKEN; const data=await readJsonFile("data.json").catch(()=>null);
     res.json({ok:true,githubToken:token,dataReadable:data!==null,ts:new Date().toISOString()});

@@ -3,12 +3,12 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
-import { 
-  Users, 
-  Briefcase, 
-  TrendingUp, 
-  AlertTriangle, 
-  CheckCircle2, 
+import {
+  Users,
+  Briefcase,
+  TrendingUp,
+  AlertTriangle,
+  CheckCircle2,
   Clock,
   Calendar,
   Target,
@@ -37,6 +37,16 @@ interface WeeklyAssignment {
   currentStatus: string;
   resourceLockedTill?: string;
 }
+
+// ─── Wind-down phases ───────────────────────────────────────────────────────
+// Mirrors the same set used on the Skill Matrix page. A project sitting in
+// S.A.T, Dispatch, Documentation or Equipment Handover past its old lock
+// date is technically "overdue," but the bulk of the engineering work is
+// already done — flagging it identically to a project still stuck in
+// Procurement or Assembly past deadline creates false urgency. These are
+// shown separately, in a muted "wrapping up" section, instead of being
+// counted in the red Alerts number.
+const WIND_DOWN_STATUSES = new Set(["sat", "dispatch_stage", "documentation", "equipment_handover"]);
 
 export function ManagerOverview() {
   const { data: engineerConfig = [], isLoading: configLoading } = useQuery<EngineerSkill[]>({
@@ -88,8 +98,8 @@ export function ManagerOverview() {
   }
 
   const totalEngineers = engineerConfig.length;
-  
-  const engineersWithTasks = engineerTasks.filter(t => 
+
+  const engineersWithTasks = engineerTasks.filter(t =>
     (t.targetTasks?.length || 0) > 0 || (t.customActivities?.length || 0) > 0
   ).length;
 
@@ -104,19 +114,23 @@ export function ManagerOverview() {
 
   const todayDate = new Date();
   todayDate.setHours(0, 0, 0, 0);
-  const overdueAssignments = assignments.filter(a => {
+  const pastLockDate = assignments.filter(a => {
     if (!a.resourceLockedTill || a.currentStatus === 'completed') return false;
     const tillDate = new Date(a.resourceLockedTill);
     tillDate.setHours(0, 0, 0, 0);
     return tillDate < todayDate;
   });
+  // Split by phase: genuinely overdue (still early/mid-stage) vs wrapping up
+  // (S.A.T/Dispatch/Documentation/Handover — past lock date but nearly done)
+  const overdueAssignments = pastLockDate.filter(a => !WIND_DOWN_STATUSES.has(a.currentStatus));
+  const windingDownAssignments = pastLockDate.filter(a => WIND_DOWN_STATUSES.has(a.currentStatus));
 
-  const utilizationRate = totalEngineers > 0 
-    ? Math.round((engineersWithTasks / totalEngineers) * 100) 
+  const utilizationRate = totalEngineers > 0
+    ? Math.round((engineersWithTasks / totalEngineers) * 100)
     : 0;
 
-  const taskCompletionRate = totalTodayTasks > 0 
-    ? Math.round((completedTodayTasks / totalTodayTasks) * 100) 
+  const taskCompletionRate = totalTodayTasks > 0
+    ? Math.round((completedTodayTasks / totalTodayTasks) * 100)
     : 0;
 
   return (
@@ -225,12 +239,15 @@ export function ManagerOverview() {
                           </span>
                           <span className="text-sm text-muted-foreground">issues</span>
                         </div>
-                        <div className="flex gap-2 text-xs">
+                        <div className="flex gap-2 text-xs flex-wrap">
                           {overdueAssignments.length > 0 && (
                             <span className="text-red-600 dark:text-red-400" data-testid="value-overdue">{overdueAssignments.length} overdue</span>
                           )}
                           {blockedProjects > 0 && (
                             <span className="text-amber-600 dark:text-amber-400" data-testid="value-blocked">{blockedProjects} blocked</span>
+                          )}
+                          {windingDownAssignments.length > 0 && (
+                            <span className="text-muted-foreground" data-testid="value-winding-down">{windingDownAssignments.length} wrapping up</span>
                           )}
                         </div>
                       </>
@@ -240,7 +257,11 @@ export function ManagerOverview() {
                           <CheckCircle2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
                           <span className="text-lg font-semibold text-emerald-600 dark:text-emerald-400" data-testid="value-all-good">All Good</span>
                         </div>
-                        <p className="text-xs text-muted-foreground">No issues to address</p>
+                        <p className="text-xs text-muted-foreground">
+                          {windingDownAssignments.length > 0
+                            ? `${windingDownAssignments.length} project(s) wrapping up past lock date`
+                            : "No issues to address"}
+                        </p>
                       </>
                     )}
                   </div>
@@ -272,9 +293,9 @@ export function ManagerOverview() {
           <CardContent>
             <div className="flex flex-wrap gap-2">
               {overdueAssignments.slice(0, 5).map((a) => (
-                <Badge 
-                  key={a.id} 
-                  variant="outline" 
+                <Badge
+                  key={a.id}
+                  variant="outline"
                   className="bg-red-500/10 border-red-500/30 text-red-700 dark:text-red-300"
                   data-testid={`badge-overdue-${a.id}`}
                 >
@@ -283,6 +304,42 @@ export function ManagerOverview() {
               ))}
               {overdueAssignments.length > 5 && (
                 <Badge variant="outline">+{overdueAssignments.length - 5} more</Badge>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {(windingDownAssignments.length > 0) && (
+        <Card data-testid="card-winding-down-list">
+          <CardHeader className="pb-2">
+            <div className="flex gap-3">
+              <div className="w-1 rounded-full bg-muted-foreground/40 shrink-0" />
+              <div>
+                <CardTitle className="text-sm flex items-center gap-2 text-muted-foreground">
+                  <Clock className="h-4 w-4" />
+                  Wrapping Up — Past Lock Date, S.A.T / Dispatch / Documentation / Handover
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Past their original lock date, but already in a late-stage phase — informational, not an active risk.
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              {windingDownAssignments.slice(0, 5).map((a) => (
+                <Badge
+                  key={a.id}
+                  variant="outline"
+                  className="text-muted-foreground border-dashed"
+                  data-testid={`badge-winding-down-${a.id}`}
+                >
+                  {a.engineerName} - {a.projectName}
+                </Badge>
+              ))}
+              {windingDownAssignments.length > 5 && (
+                <Badge variant="outline">+{windingDownAssignments.length - 5} more</Badge>
               )}
             </div>
           </CardContent>

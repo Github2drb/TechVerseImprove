@@ -1,13 +1,20 @@
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import type { UserRole } from "@shared/schema";
 import { rolePermissions } from "@shared/schema";
+
+export type EngineerRole = 'admin' | 'engineer' | 'hr' | 'pic' | 'scm';
+
+// Roles that get full read access everywhere (like Admin) but can only
+// edit the Material Procurement Tracker — not engineers, roadmap, blog, etc.
+export const VIEWER_ROLES: EngineerRole[] = ['hr', 'pic', 'scm'];
 
 interface EngineerUser {
   id: string;
   username: string;
   name: string;
-  role: 'admin' | 'engineer' | 'stores';
+  role: EngineerRole;
   company?: string;
   email: string;
   status: string;
@@ -18,10 +25,15 @@ interface AuthContextType {
   isLoading: boolean;
   isAuthenticated: boolean;
   isAdmin: boolean;
-  isStores: boolean;
+  // True for Admin, HR, Project-In-Charge, SCM — anyone who should see
+  // everything an Admin sees (read-only for HR/PIC/SCM).
+  isFullAccessViewer: boolean;
+  // True only for roles allowed to edit the Material Procurement Tracker
+  // (Admin always; HR/PIC/SCM as a special case even though they can't
+  // edit anything else in the app).
+  canEditMaterials: boolean;
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
-  logoutAdmin: () => void;
   hasPermission: (permission: keyof typeof rolePermissions.admin) => boolean;
 }
 
@@ -32,14 +44,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (typeof window !== "undefined") {
       const stored = localStorage.getItem("currentEngineer");
       if (stored) {
-        try { return JSON.parse(stored); } catch { return null; }
+        try {
+          return JSON.parse(stored);
+        } catch {
+          return null;
+        }
       }
     }
     return null;
   });
-
   const [isLoading, setIsLoading] = useState(false);
-  const [adminStepDown, setAdminStepDown] = useState(false);
 
   const login = async (username: string, password: string) => {
     setIsLoading(true);
@@ -49,10 +63,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
       });
-      if (!response.ok) throw new Error("Login failed");
+      if (!response.ok) {
+        throw new Error("Login failed");
+      }
       const userData = await response.json() as EngineerUser;
       setUser(userData);
-      setAdminStepDown(false);
       localStorage.setItem("currentEngineer", JSON.stringify(userData));
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
     } finally {
@@ -60,38 +75,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const logoutAdmin = () => setAdminStepDown(true);
-
   const logout = () => {
     setUser(null);
-    setAdminStepDown(false);
     localStorage.removeItem("currentEngineer");
     queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
   };
 
   const hasPermission = (permission: keyof typeof rolePermissions.admin): boolean => {
     if (!user) return false;
+    // Admin has all permissions
     if (user.role === 'admin') return true;
-    // stores and engineer both get member-level permissions
-    const userRole: UserRole = 'member';
+    // Map engineer role to member permissions
+    const userRole: UserRole = user.role === 'engineer' ? 'member' : 'admin';
     const permissions = rolePermissions[userRole];
     return permissions ? permissions[permission] : false;
   };
 
   const isAuthenticated = !!user;
-  const isAdmin = !adminStepDown && (
-    user?.role === 'admin' || user?.username?.toLowerCase() === 'admin'
-  );
-  const isStores = !adminStepDown && (
-    user?.role === 'stores' || user?.role === 'admin' || user?.username?.toLowerCase() === 'admin'
-  );
+  // Always treat username 'admin' as admin, in case stored role is stale
+  const isAdmin = user?.role === 'admin' || user?.username?.toLowerCase() === 'admin';
+  const isViewerRole = !!user && VIEWER_ROLES.includes(user.role);
+  const isFullAccessViewer = isAdmin || isViewerRole;
+  const canEditMaterials = isAdmin || isViewerRole;
 
   return (
-    <AuthContext.Provider value={{
-      user, isLoading, isAuthenticated,
-      isAdmin, isStores,
-      login, logout, logoutAdmin, hasPermission,
-    }}>
+    <AuthContext.Provider value={{ user, isLoading, isAuthenticated, isAdmin, isFullAccessViewer, canEditMaterials, login, logout, hasPermission }}>
       {children}
     </AuthContext.Provider>
   );
@@ -99,6 +107,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (!context) throw new Error("useAuth must be used within an AuthProvider");
+  if (!context) {
+    throw new Error("useAuth must be used within an AuthProvider");
+  }
   return context;
 }

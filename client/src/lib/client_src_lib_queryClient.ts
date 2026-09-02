@@ -7,19 +7,22 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
-// Get admin auth header for protected routes
+// Get auth header for protected routes. Sends the logged-in user's real
+// role so the server can tell Admin apart from HR/PIC/SCM (full read access,
+// edit Material Tracker only) and plain Engineers (no elevated access).
 export function getAdminAuthHeader(): Record<string, string> {
   const userStr = localStorage.getItem("currentEngineer");
   if (!userStr) return {};
+
   try {
     const user = JSON.parse(userStr);
-    const validRoles = ["admin", "stores"];
-    const isPrivileged = validRoles.includes(user.role) || user.username?.toLowerCase() === "admin";
-    if (isPrivileged) {
-      const authData = btoa(JSON.stringify({ username: user.username, role: user.role }));
-      return { "X-Admin-Auth": authData };
-    }
-  } catch {}
+    const isAdminUser = user.role === 'admin' || user.username?.toLowerCase() === 'admin';
+    const role = isAdminUser ? 'admin' : (user.role || 'engineer');
+    const authData = btoa(JSON.stringify({ username: user.username, role }));
+    return { "X-Admin-Auth": authData };
+  } catch {
+    // Ignore parse errors
+  }
   return {};
 }
 

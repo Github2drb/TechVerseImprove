@@ -4,7 +4,10 @@ import MemoryStore from "memorystore";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { randomBytes } from "crypto";
 const app = express();
+// SECURITY: hide framework fingerprint (information exposure)
+app.disable("x-powered-by");
 const httpServer = createServer(app);
 
 // ── Serve service worker BEFORE SPA wildcard ──────────────────────────────────
@@ -52,18 +55,25 @@ declare module "http" {
 
 app.set("trust proxy", 1);
 
+// NOTE: the default express.json() body limit is 100kb, which is far too small
+// for the base64 commissioning-station photos posted to /api/commissioning-images.
+// 25mb comfortably covers a compressed photo (typically 150–400 KB) with headroom.
 app.use(
   express.json({
+    limit: "25mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: false, limit: "25mb" }));
 
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || "drbtechverse-secret-2024",
+    // SECURITY (Snyk: hardcoded secret): secret must come from the
+    // SESSION_SECRET env var. Fallback is a per-boot random value (sessions
+    // already live in MemoryStore, so they never survive a restart anyway).
+    secret: process.env.SESSION_SECRET || randomBytes(32).toString("hex"),
     resave: false,
     saveUninitialized: false,
     store: new MemoryStoreSession({
@@ -103,7 +113,8 @@ app.use((req, res, next) => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
+      // Image uploads/downloads return large payloads — never log their bodies
+      if (capturedJsonResponse && !path.startsWith("/api/commissioning-images")) {
         logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
       }
       log(logLine);

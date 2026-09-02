@@ -67,6 +67,20 @@ const COMMENT_TYPES = [
 ];
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
+
+// Turn apiRequest errors like `503: {"error":"GitHub token invalid..."}` into readable text
+function errMsg(e: any): string {
+  const raw = String(e?.message || e || "Unknown error");
+  const m = raw.match(/^(\d{3}):\s*([\s\S]*)$/);
+  if (!m) return raw;
+  const code = m[1], rest = m[2];
+  try {
+    const j = JSON.parse(rest);
+    return `HTTP ${code} — ${j.error || j.message || rest}`;
+  } catch {
+    return `HTTP ${code} — ${rest}`;
+  }
+}
 const todayStr = () => new Date().toISOString().split("T")[0];
 function todayD() { const d=new Date();d.setHours(0,0,0,0);return d; }
 function weekBounds() {
@@ -403,7 +417,7 @@ function QuickAssignModal({onClose, onSaved}:{onClose:()=>void;onSaved:()=>void}
       },true);
       toast({title:"Assignment added with "+tasks.length+" task"+( tasks.length!==1?"s":"")});
       onSaved(); onClose();
-    } catch(e:any){toast({title:e?.message||"Failed",variant:"destructive"});}
+    } catch(e:any){toast({title:"Save failed",description:errMsg(e),variant:"destructive"});}
     finally{setSaving(false);}
   };
 
@@ -677,7 +691,7 @@ export function EngineerWorkspace() {
       apiRequest("PATCH",`/api/weekly-assignments/${encodeURIComponent(assignmentId)}`,
         {currentStatus:status},true)
         .then(()=>{ queryClient.invalidateQueries({queryKey:["/api/weekly-assignments"]}); toast({title:"Project status updated"}); })
-        .catch(()=>toast({title:"Update failed",variant:"destructive"}))
+        .catch((e:any)=>toast({title:"Update failed",description:errMsg(e),variant:"destructive"}))
         .finally(()=>setUpdatingTask(null));
     } else {
       // Task status: stage as pending change
@@ -698,7 +712,7 @@ export function EngineerWorkspace() {
     const hasDeletes=pendingDeletes.size>0;
     if(!hasChanges&&!hasDeletes)return;
     setIsSavingAll(true);
-    let ok=0,fail=0;
+    let ok=0,fail=0,lastErr="";
     try {
       // Save status changes
       for(const [taskId,status] of Object.entries(pendingChanges)){
@@ -709,7 +723,7 @@ export function EngineerWorkspace() {
           await apiRequest("PATCH",`/api/weekly-assignments/${encodeURIComponent(assignment.id)}/task-status`,
             {taskId,status},true);
           ok++;
-        }catch{fail++;}
+        }catch(e:any){fail++;lastErr=errMsg(e);}
       }
       // Delete tasks
       for(const taskId of Array.from(pendingDeletes)){
@@ -719,13 +733,14 @@ export function EngineerWorkspace() {
           await apiRequest("DELETE",`/api/weekly-assignments/${encodeURIComponent(assignment.id)}/tasks/${encodeURIComponent(taskId)}`,
             undefined,true);
           ok++;
-        }catch{fail++;}
+        }catch(e:any){fail++;lastErr=errMsg(e);}
       }
       queryClient.invalidateQueries({queryKey:["/api/weekly-assignments"]});
       setPendingChanges({});
       setPendingDeletes(new Set());
-      toast({title:`Saved ${ok} change${ok!==1?"s":""}${fail>0?`, ${fail} failed`:""}`});
-    }catch{toast({title:"Save failed",variant:"destructive"});}
+      if(fail>0) toast({title:`Saved ${ok}, ${fail} failed`,description:lastErr,variant:"destructive"});
+      else toast({title:`Saved ${ok} change${ok!==1?"s":""}`});
+    }catch(e:any){toast({title:"Save failed",description:errMsg(e),variant:"destructive"});}
     finally{setIsSavingAll(false);}
   };
 

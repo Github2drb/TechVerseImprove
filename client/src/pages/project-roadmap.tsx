@@ -4,7 +4,7 @@
 //   <Route path="/project-roadmap" component={ProjectRoadmap} />
 // Add link from project-status.tsx header or dashboard nav
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -24,33 +24,82 @@ import { useAuth } from "@/components/auth-provider";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 
 // ── Full phase order — single source of truth ─────────────────────────────────
+// Testing ends at F.A.T. Installation is its own group (S.A.T happens on site
+// AFTER installation, so it belongs to Installation, not Testing).
+// "Ready to Dispatch" is the first step of the Installation group — equipment
+// staged and ready to leave the shop for site, before Install Pending begins.
+// Distinct from "MT Completed" in the Done group, which happens after S.A.T.
+// Done group = MT Completed (Machine Trial Completed, key unchanged from
+// "Dispatch Stage" so existing saved statuses keep working) → Documentation
+// → Handover → Completed.
+// Final phase = Completed → project is considered fully completed.
 const PHASES = [
-  { key:"Design Stage",              label:"Design",          short:"DES",  group:"Design",      color:"#7c3aed" },
-  { key:"Electrical Design",         label:"Elec. Design",    short:"ELD",  group:"Design",      color:"#6366f1" },
-  { key:"Procurement Stage",         label:"Procurement",     short:"PRO",  group:"Procurement", color:"#f59e0b" },
-  { key:"Waiting for Materials",     label:"Waiting Mats.",   short:"WFM",  group:"Procurement", color:"#f97316" },
-  { key:"Mechanical Assembly Stage", label:"Mech. Assembly",  short:"MAS",  group:"Assembly",    color:"#3b82f6" },
-  { key:"Electrical Assembly Stage", label:"Elec. Assembly",  short:"EAS",  group:"Assembly",    color:"#06b6d4" },
-  { key:"Installation Pending",      label:"Install Pending", short:"INP",  group:"Assembly",    color:"#f43f5e" },
-  { key:"Installation in Progress",  label:"Installing",      short:"INS",  group:"Assembly",    color:"#ec4899" },
-  { key:"PLC Power Up Stage",        label:"PLC Power Up",    short:"PLU",  group:"Testing",     color:"#eab308" },
-  { key:"IO Check Stage",            label:"IO Check",        short:"IOC",  group:"Testing",     color:"#84cc16" },
-  { key:"Trials Stage",              label:"Trials",          short:"TRL",  group:"Testing",     color:"#14b8a6" },
-  { key:"F.A.T",                     label:"F.A.T",           short:"FAT",  group:"Testing",     color:"#d946ef" },
-  { key:"S.A.T",                     label:"S.A.T",           short:"SAT",  group:"Testing",     color:"#8b5cf6" },
-  { key:"Completed",                 label:"Completed",       short:"CMP",  group:"Done",        color:"#22c55e" },
-  { key:"Dispatch Stage",            label:"Dispatch",        short:"DSP",  group:"Done",        color:"#10b981" },
+  { key:"Design Stage",              label:"Design",           short:"DES",  group:"Design",       color:"#7c3aed" },
+  { key:"Electrical Design",         label:"Elec. Design",     short:"ELD",  group:"Design",       color:"#6366f1" },
+  { key:"Procurement Stage",         label:"Procurement",      short:"PRO",  group:"Procurement",  color:"#f59e0b" },
+  { key:"Waiting for Materials",     label:"Waiting Mats.",    short:"WFM",  group:"Procurement",  color:"#f97316" },
+  { key:"Mechanical Assembly Stage", label:"Mech. Assembly",   short:"MAS",  group:"Assembly",     color:"#3b82f6" },
+  { key:"Electrical Assembly Stage", label:"Elec. Assembly",   short:"EAS",  group:"Assembly",     color:"#06b6d4" },
+  { key:"PLC Power Up Stage",        label:"PLC Power Up",     short:"PLU",  group:"Testing",      color:"#eab308" },
+  { key:"IO Check Stage",            label:"IO Check",         short:"IOC",  group:"Testing",      color:"#84cc16" },
+  { key:"Trials Stage",              label:"Trials",           short:"TRL",  group:"Testing",      color:"#14b8a6" },
+  { key:"F.A.T",                     label:"F.A.T",            short:"FAT",  group:"Testing",      color:"#d946ef" },
+  { key:"Ready to Dispatch",         label:"Ready to Dispatch",short:"RTD",  group:"Installation", color:"#fb7185" },
+  { key:"Equipment Dispatched",      label:"Equipment Dispatched",short:"EQD",group:"Installation", color:"#e11d48" },
+  { key:"Installation Pending",      label:"Install Pending",  short:"INP",  group:"Installation", color:"#f43f5e" },
+  { key:"Installation in Progress",  label:"Installing",       short:"INS",  group:"Installation", color:"#ec4899" },
+  { key:"Installation Completed",    label:"Install Complete", short:"ICP",  group:"Installation", color:"#059669" },
+  { key:"S.A.T",                     label:"S.A.T",            short:"SAT",  group:"Installation", color:"#8b5cf6" },
+  { key:"Dispatch Stage",            label:"MT Completed",     short:"MTC",  group:"Done",         color:"#10b981" },
+  { key:"Documentation",             label:"Documentation",    short:"DOC",  group:"Done",         color:"#0284c7" },
+  { key:"Equipment Handover",        label:"Handover",         short:"EHO",  group:"Done",         color:"#16a34a" },
+  { key:"Completed",                 label:"Completed",        short:"CMP",  group:"Done",         color:"#22c55e" },
 ];
 
-const PHASE_GROUPS = ["Design","Procurement","Assembly","Testing","Done"];
+// Final phase — selecting this marks the project as completed
+const FINAL_PHASE = "Completed";
+
+const PHASE_GROUPS = ["Design","Procurement","Assembly","Testing","Installation","Done"];
 
 const GROUP_COLORS: Record<string,string> = {
-  Design:      "#7c3aed",
-  Procurement: "#f59e0b",
-  Assembly:    "#3b82f6",
-  Testing:     "#14b8a6",
-  Done:        "#22c55e",
+  Design:       "#7c3aed",
+  Procurement:  "#f59e0b",
+  Assembly:     "#3b82f6",
+  Testing:      "#14b8a6",
+  Installation: "#ec4899",
+  Done:         "#22c55e",
 };
+
+// ── Offline software track — runs PARALLEL to the main hardware roadmap ───────
+// Real workflow: PLC programming and HMI screen design happen SIMULTANEOUSLY
+// (not one after another) — both usually start once Electrical Design is
+// complete. Offline Testing can only begin once both PLC and HMI are done.
+// The offline track then merges back into the main roadmap at the
+// "PLC Power Up Stage" (Equipment Power-Up) step. Once merged, the PLC/HMI
+// indicators are no longer shown as "lit" — the "✓ Merged at Power-Up" badge
+// communicates completion instead, and the toggles lock (no further edits).
+interface OfflineState {
+  plc: boolean;
+  hmi: boolean;
+  testing: "not_started" | "in_progress" | "done";
+}
+const DEFAULT_OFFLINE_STATE: OfflineState = { plc: false, hmi: false, testing: "not_started" };
+
+function parseOfflineState(raw?: string): OfflineState {
+  if (!raw) return DEFAULT_OFFLINE_STATE;
+  try {
+    const o = JSON.parse(raw);
+    return {
+      plc: !!o.plc,
+      hmi: !!o.hmi,
+      testing: o.testing === "in_progress" || o.testing === "done" ? o.testing : "not_started",
+    };
+  } catch { return DEFAULT_OFFLINE_STATE; }
+}
+function serializeOfflineState(s: OfflineState): string { return JSON.stringify(s); }
+
+const ELECTRICAL_DESIGN_IDX = PHASES.findIndex(p => p.key === "Electrical Design");
+const PLC_POWER_UP_IDX = PHASES.findIndex(p => p.key === "PLC Power Up Stage");
 
 function getPhaseIndex(status: string): number {
   const idx = PHASES.findIndex(p => p.key === status);
@@ -67,6 +116,25 @@ interface ProjectActivity {
   currentStatus: string;
   activities: Record<string, string>;
   engineerName?: string;
+}
+
+// ── Simple page header (top-level — never define inside another component) ────
+function SimpleHeader() {
+  return (
+    <header className="sticky top-0 z-50 h-16 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <div className="mx-auto flex h-full max-w-7xl items-center justify-between gap-4 px-4 md:px-6">
+        <Link href="/">
+          <div className="flex items-center gap-3 cursor-pointer">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-lg">C</div>
+            <span className="hidden font-semibold text-lg sm:inline-block">Controls Team</span>
+          </div>
+        </Link>
+        <div className="flex items-center gap-2">
+          <NotificationBell/><ThemeToggle/><UserMenu/>
+        </div>
+      </div>
+    </header>
+  );
 }
 
 // ── Phase node component ──────────────────────────────────────────────────────
@@ -132,18 +200,59 @@ function PhaseNode({
   );
 }
 
+// ── Offline track toggle circle ────────────────────────────────────────────────
+function OfflineToggleCircle({
+  label, color, state, disabled, onClick,
+}: {
+  label: string;
+  color: string;
+  state: "done" | "current" | "pending";
+  disabled?: boolean;
+  onClick?: () => void;
+}) {
+  const isDone    = state === "done";
+  const isCurrent = state === "current";
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      title={label}
+      className={`flex items-center gap-1.5 ${disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}
+    >
+      <span
+        className={`w-6 h-6 rounded-full flex items-center justify-center border-2 transition-all flex-shrink-0
+          ${isDone    ? "text-white border-transparent" : ""}
+          ${isCurrent ? "text-white border-transparent" : ""}
+          ${state === "pending" ? "bg-muted border-muted-foreground/20" : ""}`}
+        style={{ backgroundColor: isDone || isCurrent ? color : undefined }}
+      >
+        {isDone && <CheckCircle2 className="h-3.5 w-3.5"/>}
+        {isCurrent && <Clock4 className="h-3 w-3 animate-pulse"/>}
+      </span>
+      <span className={`text-[10px] font-medium ${state==="pending"?"text-muted-foreground/50":""}`}
+        style={{ color: isDone || isCurrent ? color : undefined }}>
+        {label}
+      </span>
+    </button>
+  );
+}
+
 // ── Project roadmap card ──────────────────────────────────────────────────────
 function ProjectCard({
-  project, isAdmin, onStatusChange,
+  project, isAdmin, onStatusChange, offlineStatus, onOfflineChange,
 }: {
   project: ProjectActivity;
   isAdmin: boolean;
   onStatusChange: (name: string, status: string) => void;
+  offlineStatus: string;
+  onOfflineChange: (name: string, status: string) => void;
 }) {
   const currentIdx = getPhaseIndex(project.currentStatus);
   const progress   = getProgress(project.currentStatus);
   const phase      = PHASES[currentIdx];
-  const isCompleted= project.currentStatus === "Completed" || project.currentStatus === "Dispatch Stage";
+  // Completed is the completion trigger — project considered fully done
+  const isCompleted= project.currentStatus === FINAL_PHASE;
 
   return (
     <Card className={`overflow-hidden transition-all hover:shadow-md
@@ -207,6 +316,63 @@ function ProjectCard({
           </div>
         </div>
 
+        {/* Offline software track — runs PARALLEL to main roadmap, starts after Electrical Design */}
+        {(() => {
+          const off = parseOfflineState(offlineStatus);
+          const canStart = currentIdx >= ELECTRICAL_DESIGN_IDX && ELECTRICAL_DESIGN_IDX !== -1;
+          const bothDone = off.plc && off.hmi;
+          const hasMerged = currentIdx >= PLC_POWER_UP_IDX && PLC_POWER_UP_IDX !== -1;
+
+          // Once merged at PLC Power Up, the PLC/HMI indicators stop showing as
+          // "lit" and lock against further edits — the "✓ Merged at Power-Up"
+          // badge is the source of truth for completion from this point on.
+          const plcDisplayState = hasMerged ? "pending" : (off.plc ? "done" : "pending");
+          const hmiDisplayState = hasMerged ? "pending" : (off.hmi ? "done" : "pending");
+
+          const togglePlc = () => { if (!canStart || hasMerged) return; onOfflineChange(project.projectName, serializeOfflineState({ ...off, plc: !off.plc })); };
+          const toggleHmi = () => { if (!canStart || hasMerged) return; onOfflineChange(project.projectName, serializeOfflineState({ ...off, hmi: !off.hmi })); };
+          const cycleTesting = () => {
+            if (!canStart || !bothDone) return;
+            const next = off.testing === "not_started" ? "in_progress" : off.testing === "in_progress" ? "done" : "not_started";
+            onOfflineChange(project.projectName, serializeOfflineState({ ...off, testing: next }));
+          };
+
+          return (
+            <div className={`rounded-lg border px-2.5 py-2 ${canStart ? "border-orange-500/20 bg-orange-500/5" : "border-muted-foreground/10 bg-muted/20"}`}>
+              <div className="flex items-center justify-between mb-2">
+                <span className={`text-[10px] font-semibold uppercase tracking-widest ${canStart ? "text-orange-500/80" : "text-muted-foreground/50"}`}>
+                  Offline Software Track
+                </span>
+                {hasMerged && (
+                  <Badge className="bg-green-500 text-white text-[9px] h-5">✓ Merged at Power-Up</Badge>
+                )}
+              </div>
+
+              {!canStart ? (
+                <p className="text-[10px] text-muted-foreground/70 italic">Starts once Electrical Design is reached</p>
+              ) : (
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* PLC + HMI run simultaneously — grouped together, same level */}
+                  <div className="flex flex-col gap-1.5 border-r border-orange-500/20 pr-2.5">
+                    <OfflineToggleCircle label="PLC Logic"  color="#f97316" state={plcDisplayState} disabled={!isAdmin || hasMerged} onClick={togglePlc}/>
+                    <OfflineToggleCircle label="HMI Screens" color="#fb923c" state={hmiDisplayState} disabled={!isAdmin || hasMerged} onClick={toggleHmi}/>
+                  </div>
+                  <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/40 flex-shrink-0"/>
+                  {/* Testing — only enabled once both PLC and HMI are done */}
+                  <OfflineToggleCircle
+                    label="Offline Testing"
+                    color="#fbbf24"
+                    state={off.testing === "done" ? "done" : off.testing === "in_progress" ? "current" : "pending"}
+                    disabled={!isAdmin || !bothDone}
+                    onClick={cycleTesting}
+                  />
+                  <span className="text-[9px] text-muted-foreground/60 italic ml-1">→ merges at Equipment Power-Up</span>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {/* Phase timeline */}
         <div className="overflow-x-auto pb-2">
           <div className="flex items-start pt-1 min-w-max">
@@ -266,7 +432,7 @@ function SummaryBar({ projects }: { projects: ProjectActivity[] }) {
     : 0;
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
       <div className="col-span-2 sm:col-span-1 border rounded-xl p-3 bg-card">
         <p className="text-xs text-muted-foreground">Overall Avg.</p>
         <p className="text-2xl font-bold mt-0.5" style={{ color: "#3b82f6" }}>{avgProgress}%</p>
@@ -298,6 +464,10 @@ export default function ProjectRoadmap() {
   const [savedStatuses, setSavedStatuses] = useState<Record<string,string>>(() => {
     try { return JSON.parse(localStorage.getItem("drb_project_statuses") ?? "{}"); } catch { return {}; }
   });
+  // Offline software track — its own independent status per project
+  const [offlineStatuses, setOfflineStatuses] = useState<Record<string,string>>(() => {
+    try { return JSON.parse(localStorage.getItem("drb_offline_statuses") ?? "{}"); } catch { return {}; }
+  });
 
   const { data: rawProjects = [], isLoading, refetch } = useQuery<ProjectActivity[]>({
     queryKey: ["/api/project-activities"],
@@ -310,11 +480,24 @@ export default function ProjectRoadmap() {
     staleTime: 30000,
   });
 
+  const { data: offlineStatusData } = useQuery<Record<string,string>>({
+    queryKey: ["/api/project-activities/offline-status"],
+    staleTime: 30000,
+  });
+  useEffect(() => {
+    if (offlineStatusData) {
+      setOfflineStatuses(prev => ({ ...offlineStatusData, ...prev }));
+    }
+  }, [offlineStatusData]);
+
   // Merge engineer names + apply savedStatuses overrides
   const projects = useMemo(() => {
+    // Hide projects that have reached Completed (project fully done).
+    // Handover / Documentation / Dispatch are mid-sequence Done phases —
+    // do NOT hide them; they still need to be advanced to Completed.
     const active = rawProjects.filter(p => {
-      const s = (savedStatuses[p.projectName] ?? p.currentStatus ?? "").toLowerCase();
-      return !s.includes("dispatch");
+      const s = (savedStatuses[p.projectName] ?? p.currentStatus ?? "").trim().toLowerCase();
+      return s !== "completed";
     });
     return active.map(p => {
       const asgn = assignments.find(a =>
@@ -345,6 +528,26 @@ export default function ProjectRoadmap() {
     mutationFn: async (data: { projectName:string; status:string }) =>
       apiRequest("POST", "/api/project-activities/status", data),
   });
+
+  const offlineStatusMutation = useMutation({
+    mutationFn: async (data: { projectName:string; offlineStatus:string }) =>
+      apiRequest("POST", "/api/project-activities/offline-status", data, true),
+  });
+
+  const handleOfflineChange = async (name: string, status: string) => {
+    // Optimistic local + localStorage update so it survives refresh even if the save fails
+    setOfflineStatuses(prev => {
+      const next = { ...prev, [name]: status };
+      try { localStorage.setItem("drb_offline_statuses", JSON.stringify(next)); } catch {}
+      return next;
+    });
+    try {
+      await offlineStatusMutation.mutateAsync({ projectName: name, offlineStatus: status });
+      queryClient.invalidateQueries({ queryKey: ["/api/project-activities/offline-status"] });
+    } catch {
+      toast({ title: "Saved locally — sync failed, will retry on next save", variant: "destructive" });
+    }
+  };
 
   const handleStatusChange = (name: string, status: string) => {
     setPending(prev => ({ ...prev, [name]: status }));
@@ -378,22 +581,6 @@ export default function ProjectRoadmap() {
     }
   };
 
-  const SimpleHeader = () => (
-    <header className="sticky top-0 z-50 h-16 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="mx-auto flex h-full max-w-7xl items-center justify-between gap-4 px-4 md:px-6">
-        <Link href="/">
-          <div className="flex items-center gap-3 cursor-pointer">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-lg">C</div>
-            <span className="hidden font-semibold text-lg sm:inline-block">Controls Team</span>
-          </div>
-        </Link>
-        <div className="flex items-center gap-2">
-          <NotificationBell/><ThemeToggle/><UserMenu/>
-        </div>
-      </div>
-    </header>
-  );
-
   if (isLoading) return (
     <div className="min-h-screen bg-background"><SimpleHeader/>
       <div className="container mx-auto p-6 space-y-4 animate-pulse">
@@ -421,7 +608,7 @@ export default function ProjectRoadmap() {
                 <Map className="h-6 w-6 text-primary"/>Project Roadmap
               </h1>
               <p className="text-sm text-muted-foreground">
-                {filtered.length} of {projects.length} projects · 15-phase lifecycle tracker
+                {filtered.length} of {projects.length} projects · {PHASES.length}-phase lifecycle tracker
               </p>
             </div>
           </div>
@@ -508,6 +695,8 @@ export default function ProjectRoadmap() {
                 project={project}
                 isAdmin={isAdmin}
                 onStatusChange={handleStatusChange}
+                offlineStatus={offlineStatuses[project.projectName] ?? ""}
+                onOfflineChange={handleOfflineChange}
               />
             ))}
           </div>

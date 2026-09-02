@@ -36,7 +36,29 @@ interface EngineerRowData {
 }
 interface ProjectRow { projectName: string; engineers: EngineerRowData[]; }
 
+// ── Per-engineer status/timeline overlay ────────────────────────────────────
+// Independent of the shared project-level currentStatus above — lets one
+// engineer's own phase be marked (e.g. "completed") without touching what
+// the rest of the team sees for the project. Fetched from
+// /api/project-engineer-status, written via /api/project-engineer-status/:project/:engineer.
+interface EngineerStatusEntry {
+  displayName: string; currentStatus: string;
+  resourceLockedFrom?: string; resourceLockedTill?: string;
+  internalTarget?: string; customerTarget?: string;
+  updatedAt?: string; updatedBy?: string;
+}
+interface EngineerStatusProject { projectName: string; engineers: Record<string, EngineerStatusEntry>; }
+type EngineerStatusMap = Record<string, EngineerStatusProject>; // key = projectName.trim().toLowerCase()
+
 // ── Status config ─────────────────────────────────────────────────────────────
+// Testing ends at F.A.T. Installation is its own group — S.A.T happens on site
+// AFTER installation, so it belongs to Installation, not Testing.
+// "ready_to_dispatch" is the first Installation step — equipment staged and
+// ready to leave the shop for site, before Installation Pending begins.
+// Done group = MT Completed (Machine Trial Completed — key kept as
+// "dispatch_stage" so existing saved assignment statuses keep working, only
+// the display label changed) → Documentation → Handover → Completed.
+// completed = final status → assignment is considered finished.
 const statusColors: Record<string,string> = {
   not_started:"bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200",
   in_progress:"bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
@@ -49,8 +71,13 @@ const statusColors: Record<string,string> = {
   waiting_for_materials:"bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
   mechanical_assembly:"bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200",
   electrical_assembly:"bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200",
+  ready_to_dispatch:"bg-rose-300 text-rose-950 dark:bg-rose-800 dark:text-rose-100",
+  equipment_dispatched:"bg-rose-600/20 text-rose-700 dark:bg-rose-900 dark:text-rose-300",
   installation_pending:"bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200",
   installation_in_progress:"bg-pink-100 text-pink-800 dark:bg-pink-900 dark:text-pink-200",
+  installation_completed:"bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
+  documentation:"bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200",
+  equipment_handover:"bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
   plc_power_up:"bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200",
   io_check:"bg-lime-100 text-lime-800 dark:bg-lime-900 dark:text-lime-200",
   trials_stage:"bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
@@ -63,18 +90,28 @@ const statusLabels: Record<string,string> = {
   on_hold:"On Hold", blocked:"Blocked", design_stage:"Design Stage",
   electrical_design:"Electrical Design", procurement_stage:"Procurement Stage",
   waiting_for_materials:"Waiting for Materials", mechanical_assembly:"Mechanical Assembly",
-  electrical_assembly:"Electrical Assembly", installation_pending:"Installation Pending",
-  installation_in_progress:"Installation in Progress", plc_power_up:"PLC Power Up",
+  electrical_assembly:"Electrical Assembly", ready_to_dispatch:"Ready to Dispatch",
+  equipment_dispatched:"Equipment Dispatched",
+  installation_pending:"Installation Pending",
+  installation_in_progress:"Installation in Progress", installation_completed:"Installation Completed",
+  documentation:"Documentation", equipment_handover:"Equipment Handover",
+  plc_power_up:"PLC Power Up",
   io_check:"IO Check", trials_stage:"Trials Stage", fat:"F.A.T", sat:"S.A.T",
-  dispatch_stage:"Dispatch Stage",
+  dispatch_stage:"MT Completed",
 };
 const STATUS_GROUPS = [
-  { label:"General", items:[{value:"not_started",label:"Not Started"},{value:"on_hold",label:"On Hold"},{value:"blocked",label:"Blocked"},{value:"completed",label:"Completed"}]},
+  { label:"General", items:[{value:"not_started",label:"Not Started"},{value:"in_progress",label:"In Progress"},{value:"on_hold",label:"On Hold"},{value:"blocked",label:"Blocked"}]},
   { label:"Design & Procurement", items:[{value:"design_stage",label:"Design Stage"},{value:"electrical_design",label:"Electrical Design"},{value:"procurement_stage",label:"Procurement Stage"},{value:"waiting_for_materials",label:"Waiting for Materials"}]},
-  { label:"Assembly & Installation", items:[{value:"mechanical_assembly",label:"Mechanical Assembly"},{value:"electrical_assembly",label:"Electrical Assembly"},{value:"installation_pending",label:"Installation Pending"},{value:"installation_in_progress",label:"Installation in Progress"}]},
-  { label:"Testing & Commissioning", items:[{value:"plc_power_up",label:"PLC Power Up"},{value:"io_check",label:"IO Check"},{value:"trials_stage",label:"Trials Stage"},{value:"fat",label:"F.A.T"},{value:"sat",label:"S.A.T"}]},
-  { label:"Completion", items:[{value:"in_progress",label:"In Progress"},{value:"dispatch_stage",label:"Dispatch Stage"}]},
+  { label:"Assembly", items:[{value:"mechanical_assembly",label:"Mechanical Assembly"},{value:"electrical_assembly",label:"Electrical Assembly"}]},
+  { label:"Testing & Commissioning", items:[{value:"plc_power_up",label:"PLC Power Up"},{value:"io_check",label:"IO Check"},{value:"trials_stage",label:"Trials Stage"},{value:"fat",label:"F.A.T"}]},
+  { label:"Installation", items:[{value:"ready_to_dispatch",label:"Ready to Dispatch"},{value:"equipment_dispatched",label:"Equipment Dispatched"},{value:"installation_pending",label:"Installation Pending"},{value:"installation_in_progress",label:"Installation in Progress"},{value:"installation_completed",label:"Installation Completed"},{value:"sat",label:"S.A.T"}]},
+  { label:"Done", items:[{value:"dispatch_stage",label:"MT Completed"},{value:"documentation",label:"Documentation"},{value:"equipment_handover",label:"Equipment Handover"},{value:"completed",label:"Completed"}]},
 ];
+
+// Statuses that mean "this assignment is finished" — hidden from the tracker.
+// equipment_handover is now a mid-sequence Done phase (before Completed),
+// so it stays visible until the project is marked Completed.
+const TERMINAL_STATUSES = ["completed"];
 
 function calcLockDays(from?:string, till?:string):number {
   if(!from||!till)return 0;
@@ -86,21 +123,31 @@ function calcDaysExceeded(till?:string):number {
   const t=new Date(till); t.setHours(0,0,0,0);
   return Math.max(0,Math.ceil((today.getTime()-t.getTime())/864e5));
 }
+function normName(s:string):string{
+  return s.trim().replace(/\s*\([^)]*\)\s*/g,"").trim().toLowerCase();
+}
 function groupByProject(assignments:WeeklyAssignment[]):ProjectRow[] {
   const map:Record<string,ProjectRow>={};
+  const seenNames:Record<string,Set<string>>={}; // projectKey -> set of normalized individual engineer names already shown
+
   assignments.forEach(a=>{
     const k=a.projectName.toLowerCase().trim();
-    if(!map[k])map[k]={projectName:a.projectName,engineers:[]};
-    if(!map[k].engineers.find(e=>e.assignmentId===a.id)){
-      map[k].engineers.push({
-        assignmentId:a.id, name:a.engineerName,
-        resourceLockedFrom:a.resourceLockedFrom, resourceLockedTill:a.resourceLockedTill,
-        resourceLockDays:calcLockDays(a.resourceLockedFrom,a.resourceLockedTill),
-        daysExceeded:calcDaysExceeded(a.resourceLockedTill),
-        internalTarget:a.internalTarget, customerTarget:a.customerTarget,
-        currentStatus:a.currentStatus, constraint:a.constraint,
-      });
-    }
+    if(!map[k]){map[k]={projectName:a.projectName,engineers:[]};seenNames[k]=new Set();}
+    if(map[k].engineers.find(e=>e.assignmentId===a.id)) return; // already added this exact record
+
+    const individualNames=a.engineerName.split(",").map(n=>normName(n)).filter(Boolean);
+    const allAlreadySeen=individualNames.length>0 && individualNames.every(n=>seenNames[k].has(n));
+    if(allAlreadySeen) return; // every person in this record is already represented — skip the duplicate row
+
+    individualNames.forEach(n=>seenNames[k].add(n));
+    map[k].engineers.push({
+      assignmentId:a.id, name:a.engineerName,
+      resourceLockedFrom:a.resourceLockedFrom, resourceLockedTill:a.resourceLockedTill,
+      resourceLockDays:calcLockDays(a.resourceLockedFrom,a.resourceLockedTill),
+      daysExceeded:calcDaysExceeded(a.resourceLockedTill),
+      internalTarget:a.internalTarget, customerTarget:a.customerTarget,
+      currentStatus:a.currentStatus, constraint:a.constraint,
+    });
   });
   return Object.values(map).sort((a,b)=>a.projectName.localeCompare(b.projectName));
 }
@@ -114,6 +161,18 @@ function daysFromToday(d?:string):number{
   const t=new Date(d); t.setHours(0,0,0,0);
   const now=new Date(); now.setHours(0,0,0,0);
   return Math.ceil((t.getTime()-now.getTime())/864e5);
+}
+// Look up an engineer's individual override for a given project, if one exists.
+function getEngineerOverride(map:EngineerStatusMap, projectName:string, engineerName:string):EngineerStatusEntry|undefined{
+  const proj=map[projectName.trim().toLowerCase()];
+  if(!proj)return undefined;
+  return proj.engineers[normName(engineerName)];
+}
+// Status actually shown for an engineer row — override wins, falls back to
+// the shared project-level status so nothing changes for engineers who have
+// never had an individual status set.
+function effectiveStatusFor(eng:EngineerRowData, projectName:string, map:EngineerStatusMap):string{
+  return getEngineerOverride(map,projectName,eng.name)?.currentStatus || eng.currentStatus;
 }
 
 // ── Detail panel info row ─────────────────────────────────────────────────────
@@ -129,117 +188,13 @@ function InfoRow({icon,label,value,accent}:{icon:React.ReactNode;label:string;va
   );
 }
 
-export default function TeamProjectTracker() {
-  const {toast}   = useToast();
-  const {isAdmin} = useAuth();
-
-  const [search,         setSearch]         = useState("");
-  const [statusFilter,   setStatusFilter]   = useState("all");
-  const [selectedKey,    setSelectedKey]    = useState<string|null>(null);
-  const [editOpen,       setEditOpen]       = useState(false);
-  const [addOpen,        setAddOpen]        = useState(false);
-  const [deleteOpen,     setDeleteOpen]     = useState(false);
-  const [editingA,       setEditingA]       = useState<WeeklyAssignment|null>(null);
-  const [deletingA,      setDeletingA]      = useState<{id:string;projectName:string;engineerName:string}|null>(null);
-  const [selectedEng,    setSelectedEng]    = useState<EngineerRowData|null>(null); // which engineer row in detail
-
-  const [formData, setFormData] = useState({
-    engineerName:"", projectName:"",
-    resourceLockedFrom:"", resourceLockedTill:"",
-    internalTarget:"", customerTarget:"",
-    currentStatus:"not_started", constraint:"",
-  });
-
-  const {data:assignments=[],isLoading}=useQuery<WeeklyAssignment[]>({
-    queryKey:["/api/weekly-assignments"],
-    queryFn:async()=>{const r=await fetch("/api/weekly-assignments");if(!r.ok)throw new Error("failed");return r.json();},
-    staleTime:0, refetchOnMount:true,
-  });
-  const {data:projectNames=[]}=useQuery<string[]>({
-    queryKey:["/api/project-names"],
-    queryFn:async()=>{const r=await fetch("/api/project-names");if(!r.ok)throw new Error("failed");return r.json();},
-  });
-  const {data:masterEngineers=[]}=useQuery<{id:string;name:string;initials:string}[]>({
-    queryKey:["/api/engineers-master-list"],
-    queryFn:async()=>{const r=await fetch("/api/engineers-master-list");if(!r.ok)throw new Error("failed");return r.json();},
-  });
-
-  // Engineer picker
-  const [pickerOpen,  setPickerOpen]  = useState(false);
-  const [engSearch,   setEngSearch]   = useState("");
-  const pickerRef = useRef<HTMLDivElement>(null);
-  useEffect(()=>{
-    const h=(e:MouseEvent)=>{if(pickerRef.current&&!pickerRef.current.contains(e.target as Node))setPickerOpen(false);};
-    document.addEventListener("mousedown",h);return()=>document.removeEventListener("mousedown",h);
-  },[]);
-  const selectedEngNames = useMemo(()=>formData.engineerName.split(",").map(n=>n.trim()).filter(Boolean),[formData.engineerName]);
-  const toggleEng = (name:string)=>{
-    const exists=selectedEngNames.includes(name);
-    const updated=exists?selectedEngNames.filter(n=>n!==name):[...selectedEngNames,name];
-    setFormData(p=>({...p,engineerName:updated.join(", ")}));
-  };
-  const filteredEngineers=useMemo(()=>!engSearch.trim()?masterEngineers:masterEngineers.filter(e=>e.name.toLowerCase().includes(engSearch.toLowerCase())),[masterEngineers,engSearch]);
-
-  // Data
-  const activeAssignments=useMemo(()=>assignments.filter(a=>a.currentStatus!=="completed"),[assignments]);
-  const projectRows=useMemo(()=>groupByProject(activeAssignments),[activeAssignments]);
-  const filtered=useMemo(()=>projectRows.filter(p=>{
-    if(p.engineers.every(e=>e.currentStatus==="completed"))return false;
-    const mQ=p.projectName.toLowerCase().includes(search.toLowerCase())||
-      p.engineers.some(e=>e.name.toLowerCase().includes(search.toLowerCase()));
-    const mS=statusFilter==="all"||p.engineers.some(e=>e.currentStatus===statusFilter);
-    return mQ&&mS;
-  }),[projectRows,search,statusFilter]);
-
-  const selectedProject = useMemo(()=>filtered.find(p=>p.projectName.toLowerCase().trim()===selectedKey)||filtered[0]||null,[filtered,selectedKey]);
-  useEffect(()=>{
-    if(selectedProject){
-      setSelectedKey(selectedProject.projectName.toLowerCase().trim());
-      if(!selectedEng||!selectedProject.engineers.find(e=>e.assignmentId===selectedEng.assignmentId))
-        setSelectedEng(selectedProject.engineers[0]||null);
-    }
-  },[selectedProject]);
-
-  const uniqueEngineers=useMemo(()=>{const s=new Set<string>();assignments.forEach(a=>s.add(a.engineerName));return Array.from(s);},[assignments]);
-  const activeProjects=useMemo(()=>projectRows.filter(p=>p.engineers.some(e=>e.currentStatus==="in_progress")).length,[projectRows]);
-
-  // Mutations
-  const resetForm=()=>{setFormData({engineerName:"",projectName:"",resourceLockedFrom:"",resourceLockedTill:"",internalTarget:"",customerTarget:"",currentStatus:"not_started",constraint:""});setPickerOpen(false);setEngSearch("");};
-
-  const updateMutation=useMutation({
-    mutationFn:async({id,...data}:Partial<WeeklyAssignment>&{id:string})=>apiRequest("PATCH",`/api/weekly-assignments/${encodeURIComponent(id)}`,data,true),
-    onSuccess:()=>{queryClient.invalidateQueries({queryKey:["/api/weekly-assignments"]});toast({title:"Updated successfully"});setEditOpen(false);setEditingA(null);},
-    onError:(e:any)=>toast({title:e?.message||"Update failed",variant:"destructive"}),
-  });
-  const addMutation=useMutation({
-    mutationFn:async(data:Partial<WeeklyAssignment>)=>apiRequest("POST","/api/weekly-assignments",data,true),
-    onSuccess:()=>{queryClient.invalidateQueries({queryKey:["/api/weekly-assignments"]});toast({title:"Assignment added"});setAddOpen(false);resetForm();},
-    onError:(e:any)=>toast({title:e?.message||"Add failed",variant:"destructive"}),
-  });
-  const deleteMutation=useMutation({
-    mutationFn:async(id:string)=>apiRequest("DELETE",`/api/weekly-assignments/${encodeURIComponent(id)}`,undefined,true),
-    onSuccess:()=>{queryClient.invalidateQueries({queryKey:["/api/weekly-assignments"]});toast({title:"Deleted"});setDeleteOpen(false);setDeletingA(null);setSelectedEng(null);},
-    onError:(e:any)=>toast({title:e?.message||"Delete failed",variant:"destructive"}),
-  });
-
-  const handleEdit=(assignmentId:string)=>{
-    const a=assignments.find(x=>x.id===assignmentId);
-    if(a){
-      setEditingA(a);
-      setFormData({engineerName:a.engineerName||"",projectName:a.projectName||"",resourceLockedFrom:a.resourceLockedFrom||"",resourceLockedTill:a.resourceLockedTill||"",internalTarget:a.internalTarget||"",customerTarget:a.customerTarget||"",currentStatus:a.currentStatus||"not_started",constraint:a.constraint||""});
-      setEditOpen(true);
-    }
-  };
-  const handleSaveEdit=()=>{
-    if(!editingA)return;
-    updateMutation.mutate({id:editingA.id,weekStart:editingA.weekStart,projectName:formData.projectName,projectTargetDate:editingA.projectTargetDate,tasks:editingA.tasks,notes:editingA.notes,engineerName:formData.engineerName,resourceLockedFrom:formData.resourceLockedFrom||undefined,resourceLockedTill:formData.resourceLockedTill||undefined,internalTarget:formData.internalTarget||undefined,customerTarget:formData.customerTarget||undefined,currentStatus:formData.currentStatus as any,constraint:formData.constraint||undefined});
-  };
-  const handleAdd=()=>{
-    if(!formData.projectName||!formData.engineerName){toast({title:"Project and Engineer required",variant:"destructive"});return;}
-    addMutation.mutate({engineerName:formData.engineerName,projectName:formData.projectName,weekStart:format(startOfWeek(new Date(),{weekStartsOn:1}),"yyyy-MM-dd"),resourceLockedFrom:formData.resourceLockedFrom||undefined,resourceLockedTill:formData.resourceLockedTill||undefined,internalTarget:formData.internalTarget||undefined,customerTarget:formData.customerTarget||undefined,currentStatus:formData.currentStatus as any,constraint:formData.constraint||undefined,tasks:[]});
-  };
-
-  const StatusSelectItems=()=>(
+// ── Status select items — TOP LEVEL component ─────────────────────────────────
+// IMPORTANT: this must live outside the main component. If defined inside,
+// React sees a brand-new function reference on every keystroke/re-render,
+// treats it as a different component type, and remounts the whole subtree —
+// which is what causes inputs to lose focus after a single character.
+function StatusSelectItems(){
+  return(
     <>{STATUS_GROUPS.map(g=>(
       <div key={g.label}>
         <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/50">{g.label}</div>
@@ -247,8 +202,125 @@ export default function TeamProjectTracker() {
       </div>
     ))}</>
   );
+}
 
-  const EngineerPicker=()=>(
+// ── Engineer individual status panel — TOP LEVEL component (same reason as above) ──
+// Shows the effective status for the currently selected engineer tab and,
+// for admins, lets them set/clear an override that is independent of the
+// shared project-level "Current Status" field.
+interface EngineerStatusPanelProps {
+  isAdmin: boolean;
+  engineer: EngineerRowData;
+  override?: EngineerStatusEntry;
+  onSave: (data:{currentStatus:string;resourceLockedFrom?:string;resourceLockedTill?:string;internalTarget?:string;customerTarget?:string})=>void;
+  onClear: ()=>void;
+  saving: boolean;
+}
+function EngineerStatusPanel({isAdmin, engineer, override, onSave, onClear, saving}: EngineerStatusPanelProps){
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState({
+    currentStatus: override?.currentStatus || engineer.currentStatus,
+    resourceLockedFrom: override?.resourceLockedFrom || "",
+    resourceLockedTill: override?.resourceLockedTill || "",
+    internalTarget: override?.internalTarget || "",
+    customerTarget: override?.customerTarget || "",
+  });
+
+  // Re-sync the draft whenever the selected engineer or their saved override changes
+  useEffect(()=>{
+    setDraft({
+      currentStatus: override?.currentStatus || engineer.currentStatus,
+      resourceLockedFrom: override?.resourceLockedFrom || "",
+      resourceLockedTill: override?.resourceLockedTill || "",
+      internalTarget: override?.internalTarget || "",
+      customerTarget: override?.customerTarget || "",
+    });
+    setEditing(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[engineer.assignmentId, engineer.name, override?.updatedAt]);
+
+  const effectiveStatus = override?.currentStatus || engineer.currentStatus;
+
+  return(
+    <div className="pt-4">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          {engineer.name.split(" ")[0]}&apos;s Individual Status
+        </p>
+        {isAdmin&&!editing&&(
+          <button type="button" onClick={()=>setEditing(true)} className="text-xs text-primary hover:underline flex items-center gap-1">
+            <Edit2 className="h-3 w-3"/>{override?"Edit":"Set individually"}
+          </button>
+        )}
+      </div>
+
+      {!editing?(
+        <div className="flex items-center gap-2 flex-wrap">
+          <Badge className={`${statusColors[effectiveStatus]??statusColors.not_started} text-xs`}>
+            {statusLabels[effectiveStatus]??effectiveStatus}
+          </Badge>
+          {override?(
+            <span className="text-[11px] text-muted-foreground">
+              individually updated{override.updatedAt?` · ${fmtDate(override.updatedAt)}`:""}
+            </span>
+          ):(
+            <span className="text-[11px] text-muted-foreground">following project status</span>
+          )}
+        </div>
+      ):(
+        <div className="space-y-3 rounded-lg border p-3 bg-muted/30">
+          <div className="grid gap-1.5">
+            <Label className="text-xs">Status for {engineer.name}</Label>
+            <Select value={draft.currentStatus} onValueChange={v=>setDraft(p=>({...p,currentStatus:v}))}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue/></SelectTrigger>
+              <SelectContent className="max-h-72 overflow-y-auto"><StatusSelectItems/></SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="grid gap-1"><Label className="text-xs">Locked From</Label>
+              <Input type="date" className="h-8 text-xs" value={draft.resourceLockedFrom} onChange={e=>setDraft(p=>({...p,resourceLockedFrom:e.target.value}))}/></div>
+            <div className="grid gap-1"><Label className="text-xs">Locked Till</Label>
+              <Input type="date" className="h-8 text-xs" value={draft.resourceLockedTill} onChange={e=>setDraft(p=>({...p,resourceLockedTill:e.target.value}))}/></div>
+            <div className="grid gap-1"><Label className="text-xs">Internal Target</Label>
+              <Input type="date" className="h-8 text-xs" value={draft.internalTarget} onChange={e=>setDraft(p=>({...p,internalTarget:e.target.value}))}/></div>
+            <div className="grid gap-1"><Label className="text-xs">Customer Target</Label>
+              <Input type="date" className="h-8 text-xs" value={draft.customerTarget} onChange={e=>setDraft(p=>({...p,customerTarget:e.target.value}))}/></div>
+          </div>
+          <div className="flex items-center justify-between gap-2 pt-1">
+            {override?(
+              <button type="button" onClick={()=>{onClear();setEditing(false);}} className="text-xs text-red-500 hover:underline">
+                Clear override
+              </button>
+            ):<span/>}
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={()=>setEditing(false)}>Cancel</Button>
+              <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={()=>{onSave(draft);setEditing(false);}}>
+                {saving?"Saving…":"Save"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Engineer picker — TOP LEVEL component (same reason as above) ──────────────
+interface EngineerPickerProps {
+  pickerOpen: boolean;
+  setPickerOpen: (v: boolean | ((o:boolean)=>boolean)) => void;
+  engSearch: string;
+  setEngSearch: (v: string) => void;
+  pickerRef: React.RefObject<HTMLDivElement>;
+  selectedEngNames: string[];
+  toggleEng: (name: string) => void;
+  filteredEngineers: Array<{id:string;name:string;initials:string}>;
+}
+function EngineerPicker({
+  pickerOpen, setPickerOpen, engSearch, setEngSearch,
+  pickerRef, selectedEngNames, toggleEng, filteredEngineers,
+}: EngineerPickerProps){
+  return(
     <div className="relative" ref={pickerRef}>
       <button type="button" onClick={()=>{setPickerOpen(o=>!o);setEngSearch("");}}
         className="w-full flex items-center justify-between border rounded-md px-3 py-2 text-sm bg-background hover:bg-muted">
@@ -288,15 +360,29 @@ export default function TeamProjectTracker() {
       )}
     </div>
   );
+}
 
-  const FormFields=()=>(
+// ── Form fields — TOP LEVEL component (same reason as above) ──────────────────
+interface FormFieldsProps {
+  formData: {
+    engineerName:string; projectName:string;
+    resourceLockedFrom:string; resourceLockedTill:string;
+    internalTarget:string; customerTarget:string;
+    currentStatus:string; constraint:string;
+  };
+  setFormData: React.Dispatch<React.SetStateAction<FormFieldsProps["formData"]>>;
+  projectNames: string[];
+  engineerPickerProps: EngineerPickerProps;
+}
+function FormFields({ formData, setFormData, projectNames, engineerPickerProps }: FormFieldsProps){
+  return(
     <div className="grid gap-4 py-4">
       <div className="grid gap-2">
         <Label>Project Name</Label>
         <Input list="proj-list" value={formData.projectName} onChange={e=>setFormData(p=>({...p,projectName:e.target.value}))} placeholder="Type or select project"/>
         <datalist id="proj-list">{projectNames.map(n=><option key={n} value={n}/>)}</datalist>
       </div>
-      <div className="grid gap-2"><Label>Engineer(s)</Label><EngineerPicker/></div>
+      <div className="grid gap-2"><Label>Engineer(s)</Label><EngineerPicker {...engineerPickerProps}/></div>
       <div className="grid grid-cols-2 gap-4">
         <div className="grid gap-2"><Label>Resource Locked From</Label><Input type="date" value={formData.resourceLockedFrom} onChange={e=>setFormData(p=>({...p,resourceLockedFrom:e.target.value}))}/></div>
         <div className="grid gap-2"><Label>Resource Locked Till</Label><Input type="date" value={formData.resourceLockedTill} onChange={e=>setFormData(p=>({...p,resourceLockedTill:e.target.value}))}/></div>
@@ -314,6 +400,141 @@ export default function TeamProjectTracker() {
         <Textarea value={formData.constraint} onChange={e=>setFormData(p=>({...p,constraint:e.target.value}))} placeholder="Any constraints or notes..."/></div>
     </div>
   );
+}
+
+export default function TeamProjectTracker() {
+  const {toast}   = useToast();
+  const {isAdmin} = useAuth();
+
+  const [search,         setSearch]         = useState("");
+  const [statusFilter,   setStatusFilter]   = useState("all");
+  const [selectedKey,    setSelectedKey]    = useState<string|null>(null);
+  const [editOpen,       setEditOpen]       = useState(false);
+  const [addOpen,        setAddOpen]        = useState(false);
+  const [deleteOpen,     setDeleteOpen]     = useState(false);
+  const [editingA,       setEditingA]       = useState<WeeklyAssignment|null>(null);
+  const [deletingA,      setDeletingA]      = useState<{id:string;projectName:string;engineerName:string}|null>(null);
+  const [selectedEng,    setSelectedEng]    = useState<EngineerRowData|null>(null); // which engineer row in detail
+
+  const [formData, setFormData] = useState({
+    engineerName:"", projectName:"",
+    resourceLockedFrom:"", resourceLockedTill:"",
+    internalTarget:"", customerTarget:"",
+    currentStatus:"not_started", constraint:"",
+  });
+
+  const {data:assignments=[],isLoading}=useQuery<WeeklyAssignment[]>({
+    queryKey:["/api/weekly-assignments"],
+    queryFn:async()=>{const r=await fetch("/api/weekly-assignments");if(!r.ok)throw new Error("failed");return r.json();},
+    staleTime:0, refetchOnMount:true,
+  });
+  const {data:projectNames=[]}=useQuery<string[]>({
+    queryKey:["/api/project-names"],
+    queryFn:async()=>{const r=await fetch("/api/project-names");if(!r.ok)throw new Error("failed");return r.json();},
+  });
+  const {data:masterEngineers=[]}=useQuery<{id:string;name:string;initials:string}[]>({
+    queryKey:["/api/engineers-master-list"],
+    queryFn:async()=>{const r=await fetch("/api/engineers-master-list");if(!r.ok)throw new Error("failed");return r.json();},
+  });
+  // Independent per-engineer status/timeline overrides (see interfaces above)
+  const {data:engineerStatusMap={}}=useQuery<EngineerStatusMap>({
+    queryKey:["/api/project-engineer-status"],
+    queryFn:async()=>{const r=await fetch("/api/project-engineer-status");if(!r.ok)throw new Error("failed");return r.json();},
+    staleTime:0, refetchOnMount:true,
+  });
+
+  // Engineer picker
+  const [pickerOpen,  setPickerOpen]  = useState(false);
+  const [engSearch,   setEngSearch]   = useState("");
+  const pickerRef = useRef<HTMLDivElement>(null);
+  useEffect(()=>{
+    const h=(e:MouseEvent)=>{if(pickerRef.current&&!pickerRef.current.contains(e.target as Node))setPickerOpen(false);};
+    document.addEventListener("mousedown",h);return()=>document.removeEventListener("mousedown",h);
+  },[]);
+  const selectedEngNames = useMemo(()=>formData.engineerName.split(",").map(n=>n.trim()).filter(Boolean),[formData.engineerName]);
+  const toggleEng = (name:string)=>{
+    const exists=selectedEngNames.includes(name);
+    const updated=exists?selectedEngNames.filter(n=>n!==name):[...selectedEngNames,name];
+    setFormData(p=>({...p,engineerName:updated.join(", ")}));
+  };
+  const filteredEngineers=useMemo(()=>!engSearch.trim()?masterEngineers:masterEngineers.filter(e=>e.name.toLowerCase().includes(engSearch.toLowerCase())),[masterEngineers,engSearch]);
+
+  // Data — hide assignments that are finished (marked Completed)
+  const activeAssignments=useMemo(()=>assignments.filter(a=>!TERMINAL_STATUSES.includes(a.currentStatus)),[assignments]);
+  const projectRows=useMemo(()=>groupByProject(activeAssignments),[activeAssignments]);
+  const filtered=useMemo(()=>projectRows.filter(p=>{
+    if(p.engineers.every(e=>TERMINAL_STATUSES.includes(e.currentStatus)))return false;
+    const mQ=p.projectName.toLowerCase().includes(search.toLowerCase())||
+      p.engineers.some(e=>e.name.toLowerCase().includes(search.toLowerCase()));
+    const mS=statusFilter==="all"||p.engineers.some(e=>e.currentStatus===statusFilter);
+    return mQ&&mS;
+  }),[projectRows,search,statusFilter]);
+
+  const selectedProject = useMemo(()=>filtered.find(p=>p.projectName.toLowerCase().trim()===selectedKey)||filtered[0]||null,[filtered,selectedKey]);
+  useEffect(()=>{
+    if(selectedProject){
+      setSelectedKey(selectedProject.projectName.toLowerCase().trim());
+      if(!selectedEng||!selectedProject.engineers.find(e=>e.assignmentId===selectedEng.assignmentId))
+        setSelectedEng(selectedProject.engineers[0]||null);
+    }
+  },[selectedProject]);
+
+  const uniqueEngineers=useMemo(()=>{const s=new Set<string>();assignments.forEach(a=>s.add(a.engineerName));return Array.from(s);},[assignments]);
+  const activeProjects=useMemo(()=>projectRows.filter(p=>p.engineers.some(e=>e.currentStatus==="in_progress")).length,[projectRows]);
+
+  // Mutations
+  const resetForm=()=>{setFormData({engineerName:"",projectName:"",resourceLockedFrom:"",resourceLockedTill:"",internalTarget:"",customerTarget:"",currentStatus:"not_started",constraint:""});setPickerOpen(false);setEngSearch("");};
+
+  const updateMutation=useMutation({
+    mutationFn:async({id,...data}:Partial<WeeklyAssignment>&{id:string})=>apiRequest("PATCH",`/api/weekly-assignments/${encodeURIComponent(id)}`,data,true),
+    onSuccess:()=>{queryClient.invalidateQueries({queryKey:["/api/weekly-assignments"]});toast({title:"Updated successfully"});setEditOpen(false);setEditingA(null);},
+    onError:(e:any)=>toast({title:e?.message||"Update failed",variant:"destructive"}),
+  });
+  const addMutation=useMutation({
+    mutationFn:async(data:Partial<WeeklyAssignment>)=>apiRequest("POST","/api/weekly-assignments",data,true),
+    onSuccess:()=>{queryClient.invalidateQueries({queryKey:["/api/weekly-assignments"]});toast({title:"Assignment added"});setAddOpen(false);resetForm();},
+    onError:(e:any)=>toast({title:e?.message||"Add failed",variant:"destructive"}),
+  });
+  const deleteMutation=useMutation({
+    mutationFn:async(id:string)=>apiRequest("DELETE",`/api/weekly-assignments/${encodeURIComponent(id)}`,undefined,true),
+    onSuccess:()=>{queryClient.invalidateQueries({queryKey:["/api/weekly-assignments"]});toast({title:"Deleted"});setDeleteOpen(false);setDeletingA(null);setSelectedEng(null);},
+    onError:(e:any)=>toast({title:e?.message||"Delete failed",variant:"destructive"}),
+  });
+  // Save/clear an individual engineer's status+timeline override for the selected project
+  const engineerStatusMutation=useMutation({
+    mutationFn:async({projectName,engineerName,data}:{projectName:string;engineerName:string;data:{currentStatus:string;resourceLockedFrom?:string;resourceLockedTill?:string;internalTarget?:string;customerTarget?:string}})=>
+      apiRequest("POST",`/api/project-engineer-status/${encodeURIComponent(projectName)}/${encodeURIComponent(engineerName)}`,data,true),
+    onSuccess:()=>{queryClient.invalidateQueries({queryKey:["/api/project-engineer-status"]});toast({title:"Individual status updated"});},
+    onError:(e:any)=>toast({title:e?.message||"Update failed",variant:"destructive"}),
+  });
+  const clearEngineerStatusMutation=useMutation({
+    mutationFn:async({projectName,engineerName}:{projectName:string;engineerName:string})=>
+      apiRequest("DELETE",`/api/project-engineer-status/${encodeURIComponent(projectName)}/${encodeURIComponent(engineerName)}`,undefined,true),
+    onSuccess:()=>{queryClient.invalidateQueries({queryKey:["/api/project-engineer-status"]});toast({title:"Cleared — following project status"});},
+    onError:(e:any)=>toast({title:e?.message||"Clear failed",variant:"destructive"}),
+  });
+
+  const handleEdit=(assignmentId:string)=>{
+    const a=assignments.find(x=>x.id===assignmentId);
+    if(a){
+      setEditingA(a);
+      setFormData({engineerName:a.engineerName||"",projectName:a.projectName||"",resourceLockedFrom:a.resourceLockedFrom||"",resourceLockedTill:a.resourceLockedTill||"",internalTarget:a.internalTarget||"",customerTarget:a.customerTarget||"",currentStatus:a.currentStatus||"not_started",constraint:a.constraint||""});
+      setEditOpen(true);
+    }
+  };
+  const handleSaveEdit=()=>{
+    if(!editingA)return;
+    updateMutation.mutate({id:editingA.id,weekStart:editingA.weekStart,projectName:formData.projectName,projectTargetDate:editingA.projectTargetDate,tasks:editingA.tasks,notes:editingA.notes,engineerName:formData.engineerName,resourceLockedFrom:formData.resourceLockedFrom||undefined,resourceLockedTill:formData.resourceLockedTill||undefined,internalTarget:formData.internalTarget||undefined,customerTarget:formData.customerTarget||undefined,currentStatus:formData.currentStatus as any,constraint:formData.constraint||undefined});
+  };
+  const handleAdd=()=>{
+    if(!formData.projectName||!formData.engineerName){toast({title:"Project and Engineer required",variant:"destructive"});return;}
+    addMutation.mutate({engineerName:formData.engineerName,projectName:formData.projectName,weekStart:format(startOfWeek(new Date(),{weekStartsOn:1}),"yyyy-MM-dd"),resourceLockedFrom:formData.resourceLockedFrom||undefined,resourceLockedTill:formData.resourceLockedTill||undefined,internalTarget:formData.internalTarget||undefined,customerTarget:formData.customerTarget||undefined,currentStatus:formData.currentStatus as any,constraint:formData.constraint||undefined,tasks:[]});
+  };
+
+  const engineerPickerProps: EngineerPickerProps = {
+    pickerOpen, setPickerOpen, engSearch, setEngSearch,
+    pickerRef, selectedEngNames, toggleEng, filteredEngineers,
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -550,12 +771,26 @@ export default function TeamProjectTracker() {
                               : <span className="text-muted-foreground text-xs italic">No constraints noted</span>}
                           />
 
+                          {/* Independent per-engineer status — does not change the shared
+                              project-level "Current Status" above */}
+                          <EngineerStatusPanel
+                            isAdmin={isAdmin}
+                            engineer={selectedEng}
+                            override={getEngineerOverride(engineerStatusMap, selectedProject.projectName, selectedEng.name)}
+                            saving={engineerStatusMutation.isPending}
+                            onSave={(data)=>engineerStatusMutation.mutate({projectName:selectedProject.projectName, engineerName:selectedEng.name, data})}
+                            onClear={()=>clearEngineerStatusMutation.mutate({projectName:selectedProject.projectName, engineerName:selectedEng.name})}
+                          />
+
                           {/* All engineers on this project */}
                           {selectedProject.engineers.length>1&&(
                             <div className="pt-4">
                               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">All Engineers on Project</p>
                               <div className="space-y-2">
-                                {selectedProject.engineers.map(eng=>(
+                                {selectedProject.engineers.map(eng=>{
+                                  const engOverride=getEngineerOverride(engineerStatusMap, selectedProject.projectName, eng.name);
+                                  const engEffStatus=effectiveStatusFor(eng, selectedProject.projectName, engineerStatusMap);
+                                  return(
                                   <div key={eng.assignmentId}
                                     onClick={()=>setSelectedEng(eng)}
                                     className={`flex items-center justify-between gap-3 p-2.5 rounded-xl border cursor-pointer transition-colors hover:bg-muted/50
@@ -570,9 +805,12 @@ export default function TeamProjectTracker() {
                                       </div>
                                     </div>
                                     <div className="flex items-center gap-2 flex-shrink-0">
-                                      <Badge className={`${statusColors[eng.currentStatus]??statusColors.not_started} text-[10px]`}>
-                                        {statusLabels[eng.currentStatus]??eng.currentStatus}
+                                      <Badge className={`${statusColors[engEffStatus]??statusColors.not_started} text-[10px]`}>
+                                        {statusLabels[engEffStatus]??engEffStatus}
                                       </Badge>
+                                      {engOverride&&(
+                                        <span className="text-primary text-[10px]" title="Individually updated">●</span>
+                                      )}
                                       {isAdmin&&(
                                         <button onClick={e=>{e.stopPropagation();handleEdit(eng.assignmentId);}}
                                           className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground">
@@ -581,7 +819,8 @@ export default function TeamProjectTracker() {
                                       )}
                                     </div>
                                   </div>
-                                ))}
+                                  );
+                                })}
                               </div>
                             </div>
                           )}
@@ -599,7 +838,7 @@ export default function TeamProjectTracker() {
       {/* Edit Dialog */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="max-w-lg"><DialogHeader><DialogTitle>Edit Assignment</DialogTitle></DialogHeader>
-          <FormFields/>
+          <FormFields formData={formData} setFormData={setFormData} projectNames={projectNames} engineerPickerProps={engineerPickerProps}/>
           <DialogFooter>
             <Button variant="outline" onClick={()=>setEditOpen(false)}>Cancel</Button>
             <Button onClick={handleSaveEdit} disabled={updateMutation.isPending}>{updateMutation.isPending?"Saving…":"Save Changes"}</Button>
@@ -610,7 +849,7 @@ export default function TeamProjectTracker() {
       {/* Add Dialog */}
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="max-w-lg"><DialogHeader><DialogTitle>Add New Assignment</DialogTitle></DialogHeader>
-          <FormFields/>
+          <FormFields formData={formData} setFormData={setFormData} projectNames={projectNames} engineerPickerProps={engineerPickerProps}/>
           <DialogFooter>
             <Button variant="outline" onClick={()=>setAddOpen(false)}>Cancel</Button>
             <Button onClick={handleAdd} disabled={addMutation.isPending}>{addMutation.isPending?"Adding…":"Add Assignment"}</Button>

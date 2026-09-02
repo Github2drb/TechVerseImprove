@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -10,8 +11,189 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { StarPerformerBanner } from "@/components/StarPerformerBanner";
 import {
   ArrowLeft, Award, Star, TrendingUp, Users,
-  CheckCircle2, Clock, AlertTriangle, Zap, Target,
+  CheckCircle2, Clock, AlertTriangle, Target,
+  ChevronDown, ChevronUp, Copy, Check, FolderOpen, ClipboardList, Activity,
+  CalendarClock, Wrench,
 } from "lucide-react";
+
+// ─── Commissioning delivery performance (from /api/commissioning-performance) ───
+interface CommProjectRating {
+  projectName: string;
+  overall: number;
+  level: string;
+  forecastDate: string;
+  internalTarget: string | null;
+  customerTarget: string | null;
+  internalVarianceDays: number | null;
+  customerVarianceDays: number | null;
+  stationProgress: number;
+  checklistProgress: number;
+  effectiveDays: number;
+}
+interface CommEngineerRating {
+  name: string;
+  overall: number;
+  level: string;
+  projectCount: number;
+  atRiskCount: number;
+  projects: CommProjectRating[];
+}
+interface CommPerformance {
+  generatedAt: string;
+  today: string;
+  projects: any[];
+  engineers: CommEngineerRating[];
+}
+
+const COMM_LEVEL_CLS: Record<string, string> = {
+  Expert:     "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300",
+  Proficient: "bg-blue-500/20 text-blue-700 dark:text-blue-300",
+  Developing: "bg-amber-500/20 text-amber-700 dark:text-amber-300",
+  Learning:   "bg-gray-500/20 text-gray-700 dark:text-gray-300",
+};
+
+function fmtDate(d: string | null | undefined): string {
+  if (!d) return "—";
+  const x = new Date(d.length === 10 ? d + "T00:00:00" : d);
+  if (isNaN(x.getTime())) return "—";
+  return x.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function varianceText(v: number | null): { text: string; cls: string } {
+  if (v === null) return { text: "no target set", cls: "text-muted-foreground" };
+  if (v > 0) return { text: `${v} day${v === 1 ? "" : "s"} late`, cls: "text-red-600 dark:text-red-400" };
+  if (v === 0) return { text: "on target", cls: "text-green-600 dark:text-green-400" };
+  return { text: `${Math.abs(v)} day${Math.abs(v) === 1 ? "" : "s"} early`, cls: "text-green-600 dark:text-green-400" };
+}
+
+// ─── Commissioning section (top-level component) ───
+function CommissioningPerformanceSection() {
+  const [openName, setOpenName] = useState<string | null>(null);
+  const { data, isLoading } = useQuery<CommPerformance>({
+    queryKey: ["/api/commissioning-performance"],
+  });
+
+  if (isLoading) return <Skeleton className="h-40 w-full" />;
+
+  const engineers = data?.engineers ?? [];
+
+  return (
+    <Card data-testid="card-commissioning-performance">
+      <CardHeader>
+        <div className="flex gap-3">
+          <div className="w-1 rounded-full bg-indigo-500 shrink-0" />
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Wrench className="h-5 w-5" />Commissioning Delivery Performance
+            </CardTitle>
+            <CardDescription>
+              Scored from the Project Commissioning tracker: forecast completion date vs the Internal and
+              Customer target dates set in Project Tracker → Edit Assignment, plus station and checklist
+              progress. Internal 30% · Customer 30% · Stations 25% · Checklist 15%.
+              This is separate from the weekly attendance/task score above.
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {engineers.length === 0 ? (
+          <div className="py-8 text-center text-sm text-muted-foreground">
+            <CalendarClock className="mx-auto mb-2 h-8 w-8 opacity-40" />
+            <p>No commissioning data yet.</p>
+            <p className="mt-1">
+              Track a project on the{" "}
+              <Link href="/project-commissioning" className="text-primary underline">
+                Project Commissioning
+              </Link>{" "}
+              page and make sure engineers are assigned to it in the Project Tracker.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {engineers.map(e => {
+              const isOpen = openName === e.name;
+              return (
+                <div key={e.name} className="overflow-hidden rounded-lg bg-muted/40">
+                  <button
+                    type="button"
+                    onClick={() => setOpenName(isOpen ? null : e.name)}
+                    className="flex w-full items-center justify-between p-3 text-left transition-colors hover:bg-muted/70"
+                    data-testid={`button-comm-expand-${e.name}`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-500/20 text-xs font-medium">
+                        {e.name.split(/\s+/).map(p => p[0]).join("").slice(0, 2).toUpperCase()}
+                      </div>
+                      <span className="font-medium">{e.name}</span>
+                      <Badge variant="outline" className="text-xs font-normal">
+                        {e.projectCount} project{e.projectCount === 1 ? "" : "s"}
+                      </Badge>
+                      {e.atRiskCount > 0 && (
+                        <Badge className="bg-red-500/20 text-xs text-red-700 dark:text-red-300">
+                          <AlertTriangle className="mr-1 h-3 w-3" />{e.atRiskCount} at risk
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge className={COMM_LEVEL_CLS[e.level] ?? COMM_LEVEL_CLS.Learning}>
+                        {e.overall}% · {e.level}
+                      </Badge>
+                      {isOpen
+                        ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                        : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                    </div>
+                  </button>
+
+                  {isOpen && (
+                    <div className="space-y-3 border-t px-4 pb-4 pt-4">
+                      {e.projects.map(p => {
+                        const iv = varianceText(p.internalVarianceDays);
+                        const cv = varianceText(p.customerVarianceDays);
+                        return (
+                          <div key={p.projectName} className="rounded-md bg-background/60 p-3">
+                            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                              <p className="text-sm font-semibold">{p.projectName}</p>
+                              <Badge className={COMM_LEVEL_CLS[p.level] ?? COMM_LEVEL_CLS.Learning}>
+                                {p.overall}%
+                              </Badge>
+                            </div>
+                            <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+                              <div>
+                                <p className="text-muted-foreground">Forecast</p>
+                                <p className="font-medium">{fmtDate(p.forecastDate)}</p>
+                                <p className="text-muted-foreground">{p.effectiveDays} working days</p>
+                              </div>
+                              <div>
+                                <p className="text-muted-foreground">Internal Target</p>
+                                <p className="font-medium">{fmtDate(p.internalTarget)}</p>
+                                <p className={iv.cls}>{iv.text}</p>
+                              </div>
+                              <div>
+                                <p className="text-muted-foreground">Customer Target</p>
+                                <p className="font-medium">{fmtDate(p.customerTarget)}</p>
+                                <p className={cv.cls}>{cv.text}</p>
+                              </div>
+                              <div>
+                                <p className="text-muted-foreground">Progress</p>
+                                <p className="font-medium">{p.stationProgress}% stations</p>
+                                <p className="text-muted-foreground">{p.checklistProgress}% checklist</p>
+                              </div>
+                            </div>
+                            <Progress value={p.overall} className="mt-2 h-1.5" />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 interface EngineerSkill { id: string; name: string; initials: string; }
 interface EngineerTask {
@@ -24,6 +206,71 @@ interface WeeklyAssignment {
   resourceLockedFrom?: string; resourceLockedTill?: string;
 }
 
+// ─── Per-engineer status overrides (Project Tracker → engineer tab) ───
+// Lets one engineer's own progress on a shared project be marked
+// independently of the project-level currentStatus above. Fetched from
+// /api/project-engineer-status. Purely additive — projects/engineers with
+// no override behave exactly as before.
+interface EngineerStatusEntry { displayName: string; currentStatus: string; }
+interface EngineerStatusProject { projectName: string; engineers: Record<string, EngineerStatusEntry>; }
+type EngineerStatusMap = Record<string, EngineerStatusProject>;
+
+// ─── Name matching (handles "Santosh N, Harsha" combined records and "(Company)" suffixes) ───
+function norm(s: string): string {
+  return s.trim().replace(/\s*\([^)]*\)\s*/g, "").trim().toLowerCase();
+}
+function namesMatch(a: string, b: string): boolean {
+  const na = norm(a);
+  const nb = norm(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if (nb.startsWith(na) || na.startsWith(nb)) return true;
+  return na.split(/\s+/)[0] === nb.split(/\s+/)[0];
+}
+function assignmentIncludesEngineer(assignmentEngineerField: string, engineerName: string): boolean {
+  return assignmentEngineerField
+    .split(",")
+    .map(n => n.trim())
+    .filter(Boolean)
+    .some(n => namesMatch(n, engineerName));
+}
+// Look up this engineer's individual override for a given project, if any —
+// tries an exact normalized-name key first, falls back to fuzzy matching.
+function findEngineerOverride(map: EngineerStatusMap, projectName: string, engineerName: string): EngineerStatusEntry | undefined {
+  const proj = map[projectName.trim().toLowerCase()];
+  if (!proj) return undefined;
+  const direct = proj.engineers[norm(engineerName)];
+  if (direct) return direct;
+  return Object.values(proj.engineers).find(e => namesMatch(e.displayName, engineerName));
+}
+
+// ─── Phase order + wind-down phases ───────────────────────────────────────
+// Mirrors the STATUS_GROUPS taxonomy on the Project Tracker page. Used to
+// find how far along a project an engineer has reached, so late-stage
+// phases (S.A.T, Dispatch, Documentation, Equipment Handover — where the
+// bulk of the engineering work is already done and remaining effort is
+// light) don't get counted as full concurrent workload the same way an
+// early/mid-stage phase does. Without this, an engineer wrapping up two
+// projects in Handover looks identical to one actively juggling two
+// projects still in Assembly or F.A.T.
+const STATUS_ORDER = [
+  "not_started", "on_hold", "blocked", "in_progress",
+  "design_stage", "electrical_design", "procurement_stage", "waiting_for_materials",
+  "mechanical_assembly", "electrical_assembly",
+  "plc_power_up", "io_check", "trials_stage", "fat",
+  "installation_pending", "installation_in_progress", "installation_completed", "sat",
+  "dispatch_stage", "documentation", "equipment_handover", "completed",
+];
+const WIND_DOWN_STATUSES = new Set(["sat", "dispatch_stage", "documentation", "equipment_handover"]);
+function statusRank(s: string): number {
+  const i = STATUS_ORDER.indexOf(s);
+  return i === -1 ? 0 : i;
+}
+function mostAdvancedStatus(statuses: string[]): string {
+  return statuses.reduce((best, s) => (statusRank(s) > statusRank(best) ? s : best), statuses[0] ?? "not_started");
+}
+
+// ─── Performance level ───
 function getPerformanceLevel(efficiency: number): { label: string; color: string; icon: typeof Star } {
   if (efficiency >= 90) return { label: "Expert",      color: "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300", icon: Award       };
   if (efficiency >= 75) return { label: "Proficient",  color: "bg-blue-500/20 text-blue-700 dark:text-blue-300",         icon: Star        };
@@ -36,7 +283,101 @@ function calculateEfficiency(completed: number, total: number): number {
   return Math.round((completed / total) * 100);
 }
 
+// ─── Stats shape used by diagnosis + justification ───
+interface EngineerStats {
+  id: string;
+  name: string;
+  initials: string;
+  totalTasks: number;
+  completedTasks: number;
+  inProgressTasks: number;
+  targetTasksCount: number;
+  activitiesCount: number;
+  totalProjects: number;
+  completedProjects: number;
+  activeProjectNames: string[];
+  heavyLoadProjectNames: string[];
+  windDownProjectNames: string[];
+  taskEfficiency: number;
+  projectEfficiency: number;
+  overallEfficiency: number;
+  performance: { label: string; color: string; icon: typeof Star };
+}
+
+interface Diagnosis {
+  label: string;
+  color: string;
+  detail: string;
+  recommendation: string;
+}
+
+// ─── Automatic diagnosis: WHY is this engineer below threshold? ───
+function getDiagnosis(e: EngineerStats): Diagnosis {
+  // Only projects still in early/mid-stage phases count toward "over-allocated" —
+  // projects an engineer has already reached S.A.T/Dispatch/Documentation/Handover
+  // on are wrapping up and shouldn't inflate the concurrent-load signal.
+  const heavyLoadProjects = e.heavyLoadProjectNames.length;
+
+  // Present and producing activity, but assigned across multiple genuinely
+  // active (non-wind-down) projects → capacity problem
+  if (heavyLoadProjects >= 2 && e.taskEfficiency < 50) {
+    return {
+      label: "Over-allocated",
+      color: "bg-red-500/20 text-red-700 dark:text-red-300",
+      detail: `Assigned to ${heavyLoadProjects} concurrent active projects still in early/mid-stage phases${e.windDownProjectNames.length > 0 ? ` (plus ${e.windDownProjectNames.length} more that are wrapping up in S.A.T/Dispatch/Documentation/Handover and counted as light load)` : ""}. Task completion has collapsed because the assigned load exceeds one engineer's completable capacity — not because of absence or inactivity.`,
+      recommendation: "Add capacity: recruit or engage an outsourced engineer to absorb part of the concurrent project scope, or rebalance assignments across the team.",
+    };
+  }
+
+  // Zero completions AND zero logged activity → cannot verify any output
+  if (e.completedTasks === 0 && e.activitiesCount === 0) {
+    return {
+      label: "No logged output",
+      color: "bg-gray-500/20 text-gray-700 dark:text-gray-300",
+      detail: "No completed tasks and no activity log entries recorded. Either work is not happening, or it is happening but not being logged — this must be verified before drawing conclusions.",
+      recommendation: "Verify daily logging discipline first. If work is genuinely stalled, arrange a skills review or pair with a senior engineer.",
+    };
+  }
+
+  // Logging activity daily but tasks are not reaching "completed" → blockers
+  if (e.activitiesCount > 0 && e.taskEfficiency < 50) {
+    return {
+      label: "Tasks not closing",
+      color: "bg-amber-500/20 text-amber-700 dark:text-amber-300",
+      detail: `${e.activitiesCount} activity log entries show daily work is happening, but assigned tasks are not reaching completion — likely blockers (materials, site access, dependencies) or task scope too large.`,
+      recommendation: "Review the engineer's notice-board blockers. If the blockage is scope-related, consider short-term outsourced support for the blocked portion.",
+    };
+  }
+
+  return {
+    label: "Below target",
+    color: "bg-amber-500/20 text-amber-700 dark:text-amber-300",
+    detail: "Overall completion rate is below the 50% support threshold without a single dominant cause.",
+    recommendation: "Monitor for another week and coach on task completion. Escalate to a capacity request only if the pattern persists.",
+  };
+}
+
+// ─── HR-ready justification text (copied to clipboard) ───
+function buildJustification(e: EngineerStats, diagnosis: Diagnosis): string {
+  const projectList = e.activeProjectNames.length > 0
+    ? e.activeProjectNames.join("; ")
+    : "no active projects";
+  const today = new Date().toISOString().split("T")[0];
+  return (
+    `SUPPORT JUSTIFICATION — ${e.name} (as of ${today})\n` +
+    `Overall completion rate: ${e.overallEfficiency}% (below the 50% support threshold).\n` +
+    `Daily tasks: ${e.completedTasks} of ${e.totalTasks} completed (${e.taskEfficiency}%), ${e.inProgressTasks} in progress, ${e.targetTasksCount} target tasks set today.\n` +
+    `Projects: ${e.completedProjects} of ${e.totalProjects} assignments completed; currently active on ${e.activeProjectNames.length} project(s): ${projectList} — of which ${e.heavyLoadProjectNames.length} are still early/mid-stage and ${e.windDownProjectNames.length} are wrapping up (S.A.T/Dispatch/Documentation/Handover).\n` +
+    `Activity log entries: ${e.activitiesCount}.\n` +
+    `Diagnosis: ${diagnosis.label} — ${diagnosis.detail}\n` +
+    `Recommendation: ${diagnosis.recommendation}`
+  );
+}
+
 export default function SkillMatrix() {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
   const { data: engineerConfig = [], isLoading: configLoading } = useQuery<EngineerSkill[]>({
     queryKey: ["/api/engineer-daily-tasks-config"],
   });
@@ -46,21 +387,68 @@ export default function SkillMatrix() {
   const { data: assignments = [], isLoading: assignmentsLoading } = useQuery<WeeklyAssignment[]>({
     queryKey: ["/api/weekly-assignments"],
   });
+  const { data: engineerStatusMap = {} } = useQuery<EngineerStatusMap>({
+    queryKey: ["/api/project-engineer-status"],
+  });
 
   const isLoading = configLoading || tasksLoading || assignmentsLoading;
 
-  const engineerStats = engineerConfig.map(engineer => {
-    const tasks = engineerTasks.find(t => t.engineerName === engineer.name);
+  const engineerStats: EngineerStats[] = engineerConfig.map(engineer => {
+    const tasks = engineerTasks.find(t => namesMatch(t.engineerName, engineer.name));
+    // Comma-split + fuzzy match so combined records like "Santosh N, Harsha" count for each engineer
     const engineerAssignments = assignments.filter(a =>
-      a.engineerName.toLowerCase() === engineer.name.toLowerCase()
+      assignmentIncludesEngineer(a.engineerName, engineer.name)
     );
     const totalTasks       = tasks?.planned || 0;
     const completedTasks   = tasks?.completed || 0;
     const inProgressTasks  = tasks?.inProgress || 0;
     const targetTasksCount = tasks?.targetTasks?.length || 0;
     const activitiesCount  = tasks?.customActivities?.length || 0;
-    const completedAssignments = engineerAssignments.filter(a => a.currentStatus === "completed").length;
+
+    // Projects this engineer has individually marked "completed" on their own
+    // tab in Project Tracker — independent of the shared project-level
+    // currentStatus on the assignment record(s) themselves.
+    const individuallyCompletedProjects = new Set(
+      engineerAssignments
+        .map(a => a.projectName.trim())
+        .filter(name => findEngineerOverride(engineerStatusMap, name, engineer.name)?.currentStatus === "completed")
+        .map(name => norm(name))
+    );
+
+    const completedAssignments = engineerAssignments.filter(a =>
+      a.currentStatus === "completed" || individuallyCompletedProjects.has(norm(a.projectName))
+    ).length;
     const totalAssignments     = engineerAssignments.length;
+
+    // Active (non-completed) project names — deduplicated — the core of the HR capacity argument.
+    // A project the engineer has individually marked complete no longer counts as active load
+    // for them, even if the shared project-level status is still open for the rest of the team.
+    const activeProjectNames = Array.from(new Set(
+      engineerAssignments
+        .filter(a => a.currentStatus !== "completed" && !individuallyCompletedProjects.has(norm(a.projectName)))
+        .map(a => a.projectName.trim())
+        .filter(Boolean)
+    ));
+
+    // For each active project, find the furthest phase this engineer has
+    // reached on it (across all their weekly assignment records), then split
+    // into "heavy load" (still early/mid-stage — real concurrent work) vs
+    // "wind-down" (S.A.T/Dispatch/Documentation/Handover — largely done,
+    // light remaining effort). This is what keeps the over-allocation
+    // diagnosis from firing just because an engineer is listed on several
+    // projects that are actually close to finished.
+    const statusesByProject = new Map<string, string[]>();
+    engineerAssignments.forEach(a => {
+      const key = a.projectName.trim();
+      if (!statusesByProject.has(key)) statusesByProject.set(key, []);
+      statusesByProject.get(key)!.push(a.currentStatus);
+    });
+    const heavyLoadProjectNames = activeProjectNames.filter(name =>
+      !WIND_DOWN_STATUSES.has(mostAdvancedStatus(statusesByProject.get(name) ?? []))
+    );
+    const windDownProjectNames = activeProjectNames.filter(name =>
+      WIND_DOWN_STATUSES.has(mostAdvancedStatus(statusesByProject.get(name) ?? []))
+    );
 
     const taskEfficiency    = calculateEfficiency(completedTasks, totalTasks);
     const projectEfficiency = calculateEfficiency(completedAssignments, totalAssignments);
@@ -69,9 +457,12 @@ export default function SkillMatrix() {
       : 0;
 
     return {
-      ...engineer,
+      id: engineer.id,
+      name: engineer.name,
+      initials: engineer.initials,
       totalTasks, completedTasks, inProgressTasks, targetTasksCount, activitiesCount,
       totalProjects: totalAssignments, completedProjects: completedAssignments,
+      activeProjectNames, heavyLoadProjectNames, windDownProjectNames,
       taskEfficiency, projectEfficiency, overallEfficiency,
       performance: getPerformanceLevel(overallEfficiency),
     };
@@ -80,6 +471,27 @@ export default function SkillMatrix() {
   const needsAttention = engineerStats.filter(e =>
     e.overallEfficiency < 50 && (e.totalTasks > 0 || e.totalProjects > 0)
   );
+
+  const handleCopyJustification = async (engineer: EngineerStats, diagnosis: Diagnosis) => {
+    const text = buildJustification(engineer, diagnosis);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedId(engineer.id);
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch {
+      // Clipboard API can fail on http or older mobile browsers — fallback
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      setCopiedId(engineer.id);
+      setTimeout(() => setCopiedId(null), 2000);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-background" data-testid="page-skill-matrix">
@@ -104,7 +516,8 @@ export default function SkillMatrix() {
         <div className="space-y-2">
           <h1 className="text-3xl font-bold tracking-tight">Team Skill Matrix</h1>
           <p className="text-muted-foreground">
-            Real-time performance based on attendance, task completion and project activity logs.
+            Real-time performance based on attendance, task completion, project activity logs
+            and commissioning delivery against target dates.
           </p>
         </div>
 
@@ -119,7 +532,13 @@ export default function SkillMatrix() {
                 <Target className="h-5 w-5"/>Understanding Performance Levels
               </CardTitle>
               <CardDescription>
-                Score = Attendance (40%) + Task Completion (40%) + Activity Log (20%)
+                Task Rate on this page = (completed tasks + completed projects) ÷ (assigned tasks + projects).
+                Projects an engineer has individually marked complete on their own tab in Project Tracker count
+                as completed here even if the shared project-level status is still open for the rest of the team.
+                Active projects in S.A.T, Dispatch, Documentation or Equipment Handover are treated as
+                "wrapping up" rather than full concurrent load when diagnosing over-allocation.
+                The weekly weighted score (Attendance 40% + Task Completion 40% + Activity Log 20%) is shown in the Star Performer banner above.
+                Commissioning Delivery (below) is scored separately against Internal and Customer target dates.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -152,6 +571,9 @@ export default function SkillMatrix() {
             </CardContent>
           </Card>
         )}
+
+        {/* ── COMMISSIONING DELIVERY PERFORMANCE ── */}
+        <CommissioningPerformanceSection />
 
         {/* ── Engineer task matrix table ── */}
         {isLoading ? (
@@ -242,7 +664,7 @@ export default function SkillMatrix() {
               </CardContent>
             </Card>
 
-            {/* Needs support section */}
+            {/* ── Needs support section — with expandable justification ── */}
             {needsAttention.length > 0 && (
               <Card>
                 <CardHeader>
@@ -253,27 +675,151 @@ export default function SkillMatrix() {
                         <AlertTriangle className="h-5 w-5"/>Engineers Needing Support
                       </CardTitle>
                       <CardDescription>
-                        These team members may need additional resources or training
+                        Tap an engineer to see the full justification — diagnosis, workload evidence and recommended action
                       </CardDescription>
                     </div>
                   </div>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
-                    {needsAttention.map(engineer => (
-                      <div key={engineer.id}
-                        className="flex items-center justify-between p-3 rounded-lg bg-amber-500/10 dark:bg-amber-500/20">
-                        <div className="flex items-center gap-3">
-                          <div className="h-8 w-8 rounded-full bg-amber-500/20 flex items-center justify-center text-sm font-medium">
-                            {engineer.initials}
-                          </div>
-                          <span className="font-medium">{engineer.name}</span>
+                    {needsAttention.map(engineer => {
+                      const diagnosis = getDiagnosis(engineer);
+                      const isExpanded = expandedId === engineer.id;
+                      const isCopied = copiedId === engineer.id;
+                      return (
+                        <div key={engineer.id}
+                          className="rounded-lg bg-amber-500/10 dark:bg-amber-500/20 overflow-hidden">
+                          {/* Header row — click to expand */}
+                          <button
+                            type="button"
+                            onClick={() => setExpandedId(isExpanded ? null : engineer.id)}
+                            className="w-full flex items-center justify-between p-3 text-left hover:bg-amber-500/10 transition-colors"
+                            data-testid={`button-expand-${engineer.id}`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="h-8 w-8 rounded-full bg-amber-500/20 flex items-center justify-center text-sm font-medium">
+                                {engineer.initials}
+                              </div>
+                              <span className="font-medium">{engineer.name}</span>
+                              <Badge className={diagnosis.color}>{diagnosis.label}</Badge>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Badge className="bg-amber-500/20 text-amber-700 dark:text-amber-300">
+                                {engineer.overallEfficiency}% task rate
+                              </Badge>
+                              {isExpanded
+                                ? <ChevronUp className="h-4 w-4 text-muted-foreground"/>
+                                : <ChevronDown className="h-4 w-4 text-muted-foreground"/>}
+                            </div>
+                          </button>
+
+                          {/* Expanded justification panel */}
+                          {isExpanded && (
+                            <div className="px-4 pb-4 space-y-4 border-t border-amber-500/20 pt-4">
+                              {/* Component breakdown */}
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                <div className="rounded-md bg-background/60 p-3">
+                                  <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                                    <ClipboardList className="h-3.5 w-3.5"/>Daily Tasks
+                                  </div>
+                                  <p className="text-lg font-semibold">
+                                    {engineer.completedTasks} / {engineer.totalTasks}
+                                    <span className="text-sm font-normal text-muted-foreground ml-1">
+                                      ({engineer.taskEfficiency}%)
+                                    </span>
+                                  </p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {engineer.inProgressTasks} in progress · {engineer.targetTasksCount} targets today
+                                  </p>
+                                </div>
+                                <div className="rounded-md bg-background/60 p-3">
+                                  <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                                    <FolderOpen className="h-3.5 w-3.5"/>Project Load
+                                  </div>
+                                  <p className="text-lg font-semibold">
+                                    {engineer.heavyLoadProjectNames.length} active
+                                    <span className="text-sm font-normal text-muted-foreground ml-1">
+                                      ({engineer.completedProjects}/{engineer.totalProjects} done)
+                                    </span>
+                                  </p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {engineer.windDownProjectNames.length > 0
+                                      ? `+${engineer.windDownProjectNames.length} wrapping up · `
+                                      : ""}
+                                    Project completion {engineer.projectEfficiency}%
+                                  </p>
+                                </div>
+                                <div className="rounded-md bg-background/60 p-3">
+                                  <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                                    <Activity className="h-3.5 w-3.5"/>Activity Log
+                                  </div>
+                                  <p className="text-lg font-semibold">{engineer.activitiesCount} entries</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {engineer.activitiesCount === 0 ? "Nothing logged — verify" : "Work evidence on record"}
+                                  </p>
+                                </div>
+                              </div>
+
+                              {/* Active project names — split by real load vs wrapping up */}
+                              {engineer.activeProjectNames.length > 0 && (
+                                <div className="space-y-2">
+                                  {engineer.heavyLoadProjectNames.length > 0 && (
+                                    <div>
+                                      <p className="text-xs font-medium text-muted-foreground mb-1.5">
+                                        ACTIVE PROJECTS ({engineer.heavyLoadProjectNames.length})
+                                      </p>
+                                      <div className="flex flex-wrap gap-1.5">
+                                        {engineer.heavyLoadProjectNames.map(name => (
+                                          <Badge key={name} variant="outline" className="text-xs font-normal">
+                                            {name}
+                                          </Badge>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                  {engineer.windDownProjectNames.length > 0 && (
+                                    <div>
+                                      <p className="text-xs font-medium text-muted-foreground mb-1.5">
+                                        WRAPPING UP — S.A.T / Dispatch / Documentation / Handover ({engineer.windDownProjectNames.length})
+                                      </p>
+                                      <div className="flex flex-wrap gap-1.5">
+                                        {engineer.windDownProjectNames.map(name => (
+                                          <Badge key={name} variant="outline" className="text-xs font-normal text-muted-foreground border-dashed">
+                                            {name}
+                                          </Badge>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Diagnosis + recommendation */}
+                              <div className="rounded-md bg-background/60 p-3 space-y-2">
+                                <p className="text-sm">
+                                  <span className="font-semibold">Diagnosis: </span>{diagnosis.detail}
+                                </p>
+                                <p className="text-sm">
+                                  <span className="font-semibold">Recommendation: </span>{diagnosis.recommendation}
+                                </p>
+                              </div>
+
+                              {/* Copy button */}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleCopyJustification(engineer, diagnosis)}
+                                data-testid={`button-copy-justification-${engineer.id}`}
+                              >
+                                {isCopied
+                                  ? <><Check className="h-4 w-4 mr-2 text-emerald-500"/>Copied to clipboard</>
+                                  : <><Copy className="h-4 w-4 mr-2"/>Copy Justification for HR</>}
+                              </Button>
+                            </div>
+                          )}
                         </div>
-                        <Badge className="bg-amber-500/20 text-amber-700 dark:text-amber-300">
-                          {engineer.overallEfficiency}% task rate
-                        </Badge>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </CardContent>
               </Card>

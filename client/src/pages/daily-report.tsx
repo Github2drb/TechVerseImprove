@@ -2,12 +2,17 @@ import { useState, useEffect, useRef } from "react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Header } from "@/components/header";
+import { useAuth } from "@/components/auth-provider";
 import { ArrowLeft, Lock, Unlock, Plus, X, Save, Download } from "lucide-react";
 
-// ── GitHub Data Sources ────────────────────────────────────────────────────────
-const ENGINEERS_URL  = "https://raw.githubusercontent.com/Github2drb/Controls_Team_Tracker/main/engineers_master_list.json";
+// ── Data Sources ───────────────────────────────────────────────────────────────
+// Engineers list loads through the backend API (uses the server's GitHub token).
+// NEVER fetch raw.githubusercontent.com directly from the browser — it is
+// rate-limited per IP (429 Too Many Requests) and the browser can cache the 429.
+const ENGINEERS_API  = "/api/engineers-master-list";
+// master_site.json has no backend route yet — best-effort raw fetch with
+// cache disabled; silently falls back to FALLBACK_SITES on any failure.
 const MASTER_SITE_URL= "https://raw.githubusercontent.com/Github2drb/Controls_Team_Tracker/main/master_site.json";
-const AUTH_URL       = "https://raw.githubusercontent.com/Github2drb/Controls_Team_Tracker/main/engineers_auth.json";
 
 const DEFAULT_SITE = "3D CAD U1";
 
@@ -19,6 +24,8 @@ const LEAVE_CODES = [
   { code:"EL",    label:"EL – Earned Leave",   color:"bg-purple-100 text-purple-700 border-purple-300 dark:bg-purple-950 dark:text-purple-300 dark:border-purple-800" },
   { code:"COff",  label:"COff – Comp Off",     color:"bg-green-100 text-green-700 border-green-300 dark:bg-green-950 dark:text-green-300 dark:border-green-800" },
   { code:"FH",    label:"FH – First Half",     color:"bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950 dark:text-sky-300 dark:border-sky-800" },
+  { code:"P/L",   label:"P/L – Present FN / Leave AN", color:"bg-rose-100 text-rose-700 border-rose-300 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-800" },
+  { code:"L/P",   label:"L/P – Leave FN / Present AN", color:"bg-fuchsia-100 text-fuchsia-700 border-fuchsia-300 dark:bg-fuchsia-950 dark:text-fuchsia-300 dark:border-fuchsia-800" },
   { code:"WP+",   label:"WP+ – Work Plus",     color:"bg-teal-100 text-teal-700 border-teal-300 dark:bg-teal-950 dark:text-teal-300 dark:border-teal-800" },
   { code:"WFH",   label:"WFH – Work From Home",  color:"bg-lime-100 text-lime-700 border-lime-300 dark:bg-lime-950 dark:text-lime-300 dark:border-lime-800" },
 ];
@@ -37,7 +44,6 @@ function makeAuthHeader(username: string, role: string): string {
 }
 
 interface Engineer  { id:string; name:string; initials:string; }
-interface AdminUser { username:string; password:string; name?:string; role?:string; isActive?:boolean; }
 
 // ── Component ──────────────────────────────────────────────────────────────────
 export default function DailyReport() {
@@ -57,13 +63,13 @@ export default function DailyReport() {
   const [attendance, setAttendance] = useState<Record<string,Record<number,string>>>({});
 
   // Admin
-  const [adminMode,    setAdminMode]    = useState(false);
-  const [adminName,    setAdminName]    = useState("");
-  const [adminRole,    setAdminRole]    = useState("admin");
-  const [adminUser,    setAdminUser]    = useState("admin");
+  const { user, isAdmin, login, logoutAdmin } = useAuth();
+  const adminMode = isAdmin;
+  const adminName = user?.name || user?.username || "";
+  const adminUser = user?.username || "admin";
+  const adminRole = user?.role || "admin";
+
   const [showPassDlg,  setShowPassDlg]  = useState(false);
-  const [adminUsers,   setAdminUsers]   = useState<AdminUser[]>([]);
-  const [authLoading,  setAuthLoading]  = useState(false);
   const [inputUser,    setInputUser]    = useState("");
   const [inputPass,    setInputPass]    = useState("");
   const [passError,    setPassError]    = useState(false);
@@ -72,11 +78,14 @@ export default function DailyReport() {
   const [saveStatus, setSaveStatus] = useState<"idle"|"saving"|"saved"|"error">("idle");
 
   // Popup for cell assignment
-  const [popup, setPopup] = useState<{engId:string;day:number;top:number;left:number}|null>(null);
+  const [popup, setPopup] = useState<{engId:string;day:number;top:number;left:number;maxH:number}|null>(null);
   const popupRef = useRef<HTMLDivElement>(null);
 
   // Table scroll ref — used to auto-scroll to today on load
   const tableRef = useRef<HTMLDivElement>(null);
+  // Ref to today's actual column header cell — used to measure its real
+  // rendered position instead of guessing pixel widths (which drifts).
+  const todayCellRef = useRef<HTMLTableCellElement | null>(null);
 
   // Admin: new site input
   const [newSite, setNewSite] = useState("");
@@ -85,22 +94,22 @@ export default function DailyReport() {
   useEffect(()=>{
     (async()=>{
       try {
-        const [engRes, siteRes] = await Promise.allSettled([
-          fetch(ENGINEERS_URL),
-          fetch(MASTER_SITE_URL),
-        ]);
+        // Engineers via backend API (server-side GitHub token — no rate limits)
+        const engRes = await fetch(ENGINEERS_API, { cache:"no-store" });
+        if (!engRes.ok) throw new Error("Could not load engineers list (server error "+engRes.status+"). Try reloading; if it persists check /api/debug/status.");
+        const engJson = await engRes.json();
+        const engs: Engineer[] = Array.isArray(engJson) ? engJson : (engJson.engineers||[]);
+        if (!engs.length) throw new Error("Engineers list is empty — check engineers_master_list.json in the data repo.");
 
-        let engs: Engineer[] = [];
-        if (engRes.status==="fulfilled"&&engRes.value.ok) {
-          const json = await engRes.value.json();
-          engs = json.engineers||[];
-        } else throw new Error("Could not load engineers list from GitHub.");
-
+        // Sites — best-effort raw fetch, never blocks the page, never cached
         let sites = FALLBACK_SITES;
-        if (siteRes.status==="fulfilled"&&siteRes.value.ok) {
-          const json = await siteRes.value.json();
-          if (json.sites?.length) sites = json.sites;
-        }
+        try {
+          const siteRes = await fetch(MASTER_SITE_URL+"?t="+Date.now(), { cache:"no-store" });
+          if (siteRes.ok) {
+            const json = await siteRes.json();
+            if (json.sites?.length) sites = json.sites;
+          }
+        } catch { /* keep fallback sites */ }
 
         setEngineers(engs);
         setSiteList(sites);
@@ -116,7 +125,7 @@ export default function DailyReport() {
 
         // Load saved attendance from GitHub via backend API
         try {
-          const saved = await fetch(`/api/daily-report-data?year=${year}&month=${month}`);
+          const saved = await fetch(`/api/daily-report-data?year=${year}&month=${month}`, { cache:"no-store" });
           if (saved.ok) {
             const json = await saved.json();
             const savedAttendance: Record<string,Record<string,string>> = json.attendance||{};
@@ -137,10 +146,23 @@ export default function DailyReport() {
     })();
   },[]);
 
-  // Scroll table so today is the first visible column
+  // Scroll table so today's column lands just past the sticky "Engineer"
+  // column. Measures today's cell's ACTUAL rendered position (not an assumed
+  // pixel width) so it lands correctly regardless of container width, zoom,
+  // or border-collapse rounding — the previous hardcoded-math version drifted
+  // and could even get clamped to the wrong end of the table on wide screens.
   const scrollToToday = () => {
-    if (!tableRef.current) return;
-    tableRef.current.scrollLeft = (todayDay - 1) * 62;
+    const container = tableRef.current;
+    const cell = todayCellRef.current;
+    if (!container || !cell) return;
+    const STICKY_COL_W = 160; // matches the sticky Engineer column's min-w
+    const MARGIN = 12;
+    const containerRect = container.getBoundingClientRect();
+    const cellRect = cell.getBoundingClientRect();
+    // How far the cell's left edge is from where it *should* be (just right
+    // of the sticky column), relative to the container's current scroll.
+    const delta = (cellRect.left - containerRect.left) - STICKY_COL_W - MARGIN;
+    container.scrollTo({ left: container.scrollLeft + delta, behavior: "smooth" });
   };
 
   // Auto-scroll on load
@@ -157,21 +179,10 @@ export default function DailyReport() {
     return ()=>document.removeEventListener("mousedown",handler);
   },[]);
 
-  // ── Fetch admin credentials when dialog opens ────────────────────────────────
-  const openLoginDialog = async()=>{
+  // ── Open login dialog (auth handled by useAuth().login — no GitHub fetch) ────
+  const openLoginDialog = ()=>{
     setShowPassDlg(true);
     setInputUser(""); setInputPass(""); setPassError(false);
-    setAuthLoading(true);
-    try {
-      const res = await fetch(AUTH_URL+"?t="+Date.now());
-      if (!res.ok) throw new Error();
-      const data = await res.json();
-      const list: AdminUser[] = data.engineers||data;
-      const admins = list.filter(u=>u.role==="admin"&&u.isActive!==false);
-      setAdminUsers(admins.length ? admins : [{username:"admin",password:"admin@drb",name:"Admin",role:"admin"}]);
-    } catch {
-      setAdminUsers([{username:"admin",password:"admin@drb",name:"Admin",role:"admin"}]);
-    } finally { setAuthLoading(false); }
   };
 
   // ── Save to GitHub via backend API ───────────────────────────────────────────
@@ -219,19 +230,13 @@ export default function DailyReport() {
     URL.revokeObjectURL(url);
   };
 
-  // ── Login / logout ───────────────────────────────────────────────────────────
-  const tryLogin=()=>{
-    const un=inputUser.trim().toLowerCase();
-    const pw=inputPass;
-    const match=adminUsers.find(u=>u.username.toLowerCase()===un&&u.password===pw);
-    if (match) {
-      setAdminMode(true);
-      setAdminName(match.name||match.username);
-      setAdminUser(match.username);
-      setAdminRole(match.role||"admin");
+  // ── Login ────────────────────────────────────────────────────────────────────
+  const tryLogin = async () => {
+   try {
+      await login(inputUser.trim(), inputPass);
       setShowPassDlg(false);
       setInputUser(""); setInputPass(""); setPassError(false);
-    } else {
+    } catch {
       setPassError(true); setInputPass("");
     }
   };
@@ -240,10 +245,25 @@ export default function DailyReport() {
   const openPopup=(engId:string,day:number,e:React.MouseEvent<HTMLTableCellElement>)=>{
     if (!adminMode) return;
     const rect=e.currentTarget.getBoundingClientRect();
-    const POPUP_H=340, POPUP_W=224;
-    let top=rect.top-POPUP_H-6; if(top<8) top=rect.bottom+6;
-    let left=rect.left; if(left+POPUP_W>window.innerWidth-8) left=window.innerWidth-POPUP_W-8; if(left<8) left=8;
-    setPopup({engId,day,top,left});
+    const PREFERRED_H=410, POPUP_W=224, PAD=8, GAP=6;
+    const spaceAbove=rect.top-GAP-PAD;
+    const spaceBelow=window.innerHeight-rect.bottom-GAP-PAD;
+
+    // Pick whichever side has more room, then clamp height to what's actually
+    // available so the list is never cut off — it'll scroll internally instead.
+    let top:number, maxH:number;
+    if (spaceAbove>=PREFERRED_H || spaceAbove>=spaceBelow) {
+      maxH=Math.min(PREFERRED_H, Math.max(spaceAbove,120));
+      top=Math.max(PAD, rect.top-GAP-maxH);
+    } else {
+      maxH=Math.min(PREFERRED_H, Math.max(spaceBelow,120));
+      top=rect.bottom+GAP;
+    }
+    // Final safety clamp in case of very short viewports
+    if (top+maxH>window.innerHeight-PAD) top=Math.max(PAD, window.innerHeight-maxH-PAD);
+
+    let left=rect.left; if(left+POPUP_W>window.innerWidth-PAD) left=window.innerWidth-POPUP_W-PAD; if(left<PAD) left=PAD;
+    setPopup({engId,day,top,left,maxH});
   };
 
   const assignSite=(engId:string,day:number,value:string)=>{
@@ -299,7 +319,7 @@ export default function DailyReport() {
             </Button>
             {adminMode ? (
               <Button variant="destructive" size="sm" className="gap-2"
-                onClick={()=>{setAdminMode(false);setAdminName("");}}>
+                onClick={logoutAdmin}>
                 <Unlock className="h-4 w-4"/>Exit Admin ({adminName})
               </Button>
             ) : (
@@ -316,31 +336,23 @@ export default function DailyReport() {
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
             <div className="bg-background border rounded-xl shadow-2xl p-6 w-80 space-y-4">
               <h2 className="text-lg font-semibold flex items-center gap-2"><Lock className="h-4 w-4"/>Admin Login</h2>
-              {authLoading ? (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"/>Loading credentials…
-                </div>
-              ) : (
-                <>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium text-muted-foreground">Username</label>
-                    <input type="text" placeholder="e.g. admin" value={inputUser} autoComplete="username"
-                      onChange={e=>{setInputUser(e.target.value);setPassError(false);}}
-                      onKeyDown={e=>e.key==="Enter"&&tryLogin()}
-                      className="w-full border rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-primary border-input" autoFocus/>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium text-muted-foreground">Password</label>
-                    <input type="password" placeholder="Enter password" value={inputPass} autoComplete="current-password"
-                      onChange={e=>{setInputPass(e.target.value);setPassError(false);}}
-                      onKeyDown={e=>e.key==="Enter"&&tryLogin()}
-                      className={`w-full border rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-primary ${passError?"border-red-500":"border-input"}`}/>
-                  </div>
-                  {passError&&<p className="text-xs text-red-500">Incorrect username or password. Try again.</p>}
-                </>
-              )}
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-muted-foreground">Username</label>
+                <input type="text" placeholder="e.g. admin" value={inputUser} autoComplete="username"
+                  onChange={e=>{setInputUser(e.target.value);setPassError(false);}}
+                  onKeyDown={e=>e.key==="Enter"&&tryLogin()}
+                  className="w-full border rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-primary border-input" autoFocus/>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-muted-foreground">Password</label>
+                <input type="password" placeholder="Enter password" value={inputPass} autoComplete="current-password"
+                  onChange={e=>{setInputPass(e.target.value);setPassError(false);}}
+                  onKeyDown={e=>e.key==="Enter"&&tryLogin()}
+                  className={`w-full border rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-primary ${passError?"border-red-500":"border-input"}`}/>
+              </div>
+              {passError&&<p className="text-xs text-red-500">Incorrect username or password. Try again.</p>}
               <div className="flex gap-2 pt-1">
-                <Button size="sm" onClick={tryLogin} disabled={authLoading} className="flex-1">Login</Button>
+                <Button size="sm" onClick={tryLogin} className="flex-1">Login</Button>
                 <Button size="sm" variant="outline" onClick={()=>{setShowPassDlg(false);setInputUser("");setInputPass("");setPassError(false);}} className="flex-1">Cancel</Button>
               </div>
             </div>
@@ -398,7 +410,7 @@ export default function DailyReport() {
                 <tr className="border-b">
                   <th className="sticky left-0 z-20 bg-muted border-r px-3 py-1.5"/>
                   {days.map(d=>(
-                    <th key={d} className={`border-r px-1 pb-2 pt-0.5 text-center text-xs font-bold min-w-[58px]
+                    <th key={d} ref={d===todayDay?todayCellRef:undefined} className={`border-r px-1 pb-2 pt-0.5 text-center text-xs font-bold min-w-[58px]
                       ${d===todayDay?"bg-red-600 text-white":isWeekend(year,month,d)?"bg-muted/60 text-muted-foreground/30":"bg-muted text-muted-foreground"}`}>
                       {d}
                     </th>
@@ -450,8 +462,8 @@ export default function DailyReport() {
 
       {/* Cell assignment popup */}
       {popup&&(
-        <div ref={popupRef} className="fixed z-50 bg-background border rounded-xl shadow-2xl w-56 py-2 overflow-hidden"
-          style={{top:popup.top,left:popup.left}}>
+        <div ref={popupRef} className="fixed z-50 bg-background border rounded-xl shadow-2xl w-56 py-2 overflow-y-auto"
+          style={{top:popup.top,left:popup.left,maxHeight:popup.maxH}}>
           <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground px-3 pb-1">Assign · Day {popup.day}</p>
           <p className="text-[10px] text-muted-foreground/60 px-3 pt-1">Sites</p>
           {siteList.map(site=>{
