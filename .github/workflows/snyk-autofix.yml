@@ -117,6 +117,15 @@ jobs:
           # a clear "invalid model" message. The dated ID is confirmed active
           # (Anthropic's deprecation table lists no retirement before 2026-09-29).
           claude_args: "--model claude-sonnet-4-5-20250929 --allowedTools Edit,Write,Read,Glob,Grep,Bash"
+          # TEMPORARY DEBUG FLAG. The model fix above was applied correctly (the
+          # log now shows "Claude Code initialized" with the right model) but the
+          # job still dies 230ms later with is_error:true, total_cost_usd:0, and
+          # zero tool calls -- before any real work happens. claude-code-action
+          # hides the actual SDK crash reason by default ("full output hidden for
+          # security"). This flag un-hides it so the next run's log shows the real
+          # underlying error instead of the generic wrapper message. Remove this
+          # line once the root cause is found and fixed.
+          show_full_output: true
 
       - name: Remove SARIF before committing
         run: rm -f snyk.sarif
