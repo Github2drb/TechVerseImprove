@@ -79,6 +79,13 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # snyk-trigger.yml dispatches this workflow via `gh workflow run` using
+          # the default GITHUB_TOKEN, so GitHub records the run's actor as the
+          # "github-actions" bot, not a human. claude-code-action refuses to run
+          # for any bot-triggered event unless that bot is explicitly allowed
+          # here (anti-loop / anti-abuse guard) -- without this, the job fails
+          # instantly with "Workflow initiated by non-human actor".
+          allowed_bots: "github-actions[bot]"
           prompt: |
             The file snyk.sarif in the repo root contains Snyk Code findings
             for this repository. Fix EVERY finding listed in it, one by one.
