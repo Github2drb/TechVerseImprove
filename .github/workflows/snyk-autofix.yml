@@ -109,7 +109,14 @@ jobs:
             After fixing, run a syntax sanity check on every file you changed.
           # Pin an explicitly available model — the action default (Opus 1M-context
           # beta) is not enabled on all API accounts and fails instantly if missing.
-          claude_args: "--model claude-sonnet-4-5 --allowedTools Edit,Write,Read,Glob,Grep,Bash"
+          # Use the full dated model ID, not the bare "claude-sonnet-4-5" alias:
+          # the bundled Agent SDK validates --model against its own accepted-value
+          # list (via ajv) before ever calling the API, and a short alias that
+          # isn't in that list crashes the whole job in ~150ms with a misleading
+          # "is_error:true / subtype:success / total_cost_usd:0" result instead of
+          # a clear "invalid model" message. The dated ID is confirmed active
+          # (Anthropic's deprecation table lists no retirement before 2026-09-29).
+          claude_args: "--model claude-sonnet-4-5-20250929 --allowedTools Edit,Write,Read,Glob,Grep,Bash"
 
       - name: Remove SARIF before committing
         run: rm -f snyk.sarif
