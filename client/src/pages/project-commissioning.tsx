@@ -566,7 +566,7 @@ function StationTable({
                 <th className="min-w-[150px] px-2 py-2">
                   <span className="flex items-center gap-1"><Camera className="h-3.5 w-3.5 text-emerald-500" /> Photos</span>
                 </th>
-                <th className="w-36 px-2 py-2">
+                <th className="w-20 px-2 py-2">
                   <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> Time to Trials*</span>
                 </th>
                 <th className="w-44 px-2 py-2">Status</th>
@@ -630,8 +630,8 @@ function StationTable({
                     <Input
                       value={row.trialTime}
                       onChange={e => onPatchRow(row.id, { trialTime: e.target.value })}
-                      placeholder="2 days / 1 week / date"
-                      className="h-8 text-sm"
+                      placeholder="1 or 1/2"
+                      className="h-8 w-16 text-sm text-center"
                     />
                   </td>
                   <td className="px-2 py-2">
