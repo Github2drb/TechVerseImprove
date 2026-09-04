@@ -563,9 +563,14 @@ function StationTable({
                 <th className="min-w-[200px] px-2 py-2">
                   <span className="flex items-center gap-1"><Wrench className="h-3.5 w-3.5 text-sky-500" /> Mechanical Constraint</span>
                 </th>
+                <th className="w-20 px-2 py-2">
+                  <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> Time to Trials*</span>
+                </th>
+                <th className="w-44 px-2 py-2">Status</th>
                 <th className="min-w-[150px] px-2 py-2">
                   <span className="flex items-center gap-1"><Camera className="h-3.5 w-3.5 text-emerald-500" /> Photos</span>
                 </th>
+                <th className="w-10 px-2 py-2"></th>
                 <th className="w-20 px-2 py-2">
                   <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> Time to Trials*</span>
                 </th>
@@ -617,16 +622,6 @@ function StationTable({
                     />
                   </td>
                   <td className="px-2 py-2">
-                    <ImageCell
-                      rowId={row.id}
-                      images={row.images ?? []}
-                      uploading={uploadingRowId === row.id}
-                      onUpload={onUploadImages}
-                      onDelete={onDeleteImage}
-                      onOpen={onOpenImage}
-                    />
-                  </td>
-                  <td className="px-2 py-2">
                     <Input
                       value={row.trialTime}
                       onChange={e => onPatchRow(row.id, { trialTime: e.target.value })}
@@ -647,6 +642,16 @@ function StationTable({
                     <Badge className={`${STATUS_META[row.status]?.cls ?? STATUS_META.not_started.cls} mt-1 text-[10px]`}>
                       {STATUS_META[row.status]?.label ?? row.status}
                     </Badge>
+                  </td>
+                  <td className="px-2 py-2">
+                    <ImageCell
+                      rowId={row.id}
+                      images={row.images ?? []}
+                      uploading={uploadingRowId === row.id}
+                      onUpload={onUploadImages}
+                      onDelete={onDeleteImage}
+                      onOpen={onOpenImage}
+                    />
                   </td>
                   <td className="px-2 py-2">
                     <Button
@@ -1015,7 +1020,7 @@ export default function ProjectCommissioning() {
   return (
     <div className="min-h-screen bg-background" data-testid="page-project-commissioning">
       <Header searchQuery={searchQuery} onSearchChange={setSearchQuery} />
-      <main className="mx-auto max-w-7xl space-y-6 px-4 py-6 md:px-6">
+      <main className="mx-auto max-w-[1600px] space-y-6 px-3 py-6 md:px-4">
 
         {/* Page title */}
         <div className="flex flex-wrap items-center justify-between gap-3">
