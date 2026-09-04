@@ -571,11 +571,7 @@ function StationTable({
                   <span className="flex items-center gap-1"><Camera className="h-3.5 w-3.5 text-emerald-500" /> Photos</span>
                 </th>
                 <th className="w-10 px-2 py-2"></th>
-                <th className="w-20 px-2 py-2">
-                  <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> Time to Trials*</span>
-                </th>
-                <th className="w-44 px-2 py-2">Status</th>
-                <th className="w-10 px-2 py-2"></th>
+                
               </tr>
             </thead>
             <tbody>
