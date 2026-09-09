@@ -195,6 +195,36 @@ export function computeForecast(
   };
 }
 
+/**
+ * True once every station/comm-interface row is marked completed — the page's
+ * own "X/Y items done" completion signal.
+ */
+export function isFullyCommissioned(forecast: ForecastResult): boolean {
+  return forecast.totalRows > 0 && forecast.pendingRows === 0;
+}
+
+/**
+ * computeForecast() always re-anchors forecastDate to `today` once
+ * totalPendingDays reaches 0 (0 pending days / N engineers = 0 effective days,
+ * so forecastDate === today). That's correct while work is still open, but once
+ * every row is completed it means the "forecast" — and the internal/customer
+ * variance measured against it — keeps drifting later every single day forever,
+ * making a fully finished project look more and more overdue with no work left
+ * to do. Freeze the forecast at the last time the project was actually updated
+ * once it is fully commissioned, so the variance becomes a fixed number instead
+ * of an ever-growing one, and date-based tracking effectively stops.
+ */
+export function freezeForecastIfComplete(
+  forecast: ForecastResult,
+  lastUpdated: string | null | undefined
+): ForecastResult {
+  if (!isFullyCommissioned(forecast)) return forecast;
+  if (!lastUpdated) return forecast;
+  const frozen = startOfDay(lastUpdated);
+  if (isNaN(frozen.getTime())) return forecast;
+  return { ...forecast, forecastDate: frozen };
+}
+
 // ── Rating ──────────────────────────────────────────────────────────────────
 export interface ScheduleComponent {
   target: string | null;
