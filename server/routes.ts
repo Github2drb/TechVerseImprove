@@ -9,6 +9,7 @@ import {
   readJsonFile, writeJsonFile,
 } from "./github";
 import webpush from "web-push";
+import nodemailer from "nodemailer";
 
 // ── VAPID config (module level) ───────────────────────────────────────────────
 if (process.env.VAPID_PUBLIC_KEY) {
@@ -17,6 +18,27 @@ if (process.env.VAPID_PUBLIC_KEY) {
     process.env.VAPID_PUBLIC_KEY || "",
     process.env.VAPID_PRIVATE_KEY || ""
   );
+}
+
+// ── SMTP mail config (module level) ───────────────────────────────────────────
+// Required Render env vars: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS.
+// Optional: SMTP_SECURE ("true" for port 465), MAIL_FROM (defaults to SMTP_USER).
+// Used to email the Site Incharge / Program Manager whenever an engineer saves
+// a daily commissioning log. See 09_DAILY_COMMISSIONING_LOG.md for setup steps.
+let mailTransporter: ReturnType<typeof nodemailer.createTransport> | null = null;
+function getMailTransporter(): ReturnType<typeof nodemailer.createTransport> | null {
+  if (mailTransporter) return mailTransporter;
+  const host = process.env.SMTP_HOST;
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  if (!host || !user || !pass) return null;
+  mailTransporter = nodemailer.createTransport({
+    host,
+    port: Number(process.env.SMTP_PORT) || 587,
+    secure: process.env.SMTP_SECURE === "true",
+    auth: { user, pass },
+  });
+  return mailTransporter;
 }
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
@@ -1397,6 +1419,8 @@ r.post("/equipment-docs/:project/image", async (req, res) => {
     stations: CommStationRow[];
     commInterface: CommStationRow[];
     phases: CommPhase[];
+    siteInchargeEmail?: string;
+    programManagerEmail?: string;
     lastUpdated?: string;
     updatedBy?: string;
   }
@@ -1435,6 +1459,8 @@ r.post("/equipment-docs/:project/image", async (req, res) => {
         stations: Array.isArray(req.body.stations) ? req.body.stations : [],
         commInterface: Array.isArray(req.body.commInterface) ? req.body.commInterface : [],
         phases: Array.isArray(req.body.phases) ? req.body.phases : [],
+        siteInchargeEmail: typeof req.body.siteInchargeEmail === "string" ? req.body.siteInchargeEmail.trim() : "",
+        programManagerEmail: typeof req.body.programManagerEmail === "string" ? req.body.programManagerEmail.trim() : "",
         lastUpdated: new Date().toISOString(),
         updatedBy: typeof req.body.updatedBy === "string" ? req.body.updatedBy : "",
       };
@@ -1480,6 +1506,69 @@ r.post("/equipment-docs/:project/image", async (req, res) => {
   interface DailyLogFile {
     projects: Record<string, DailyLogProjectData>; // key = projectName.toLowerCase().trim()
     lastUpdated: string;
+  }
+
+  // Email the Site Incharge / Program Manager a summary of one saved daily log.
+  // Never throws — a mail failure must not fail the (already-persisted) save.
+  async function sendDailyLogEmail(
+    projectName: string,
+    entry: DailyLogEntry,
+    contacts: { siteInchargeEmail?: string; programManagerEmail?: string },
+    targets: { internalTarget?: string | null; customerTarget?: string | null }
+  ): Promise<{ attempted: boolean; sent: boolean; recipients: string[]; error?: string }> {
+    const recipients = [contacts.siteInchargeEmail, contacts.programManagerEmail]
+      .map(e => (e ?? "").trim())
+      .filter(Boolean);
+    if (recipients.length === 0) return { attempted: false, sent: false, recipients: [] };
+
+    const transporter = getMailTransporter();
+    if (!transporter) {
+      return {
+        attempted: true, sent: false, recipients,
+        error: "SMTP not configured on the server (SMTP_HOST / SMTP_USER / SMTP_PASS missing)",
+      };
+    }
+
+    const today = cmStartOfDay(new Date());
+    const eff = entry.targetCount > 0 ? Math.round((entry.completedCount / entry.targetCount) * 100) : null;
+    const lines: string[] = [];
+    lines.push(`Date: ${entry.date}    Engineer: ${entry.engineer}    Station: ${entry.stationLabel}`);
+    lines.push("");
+    lines.push(`Target for today: ${entry.targetCount}${entry.targetDescription ? " — " + entry.targetDescription : ""}`);
+    lines.push(`Completed today: ${entry.completedCount}${entry.completedDescription ? " — " + entry.completedDescription : ""}`);
+    if (eff !== null) lines.push(`Efficiency: ${eff}%`);
+    if (entry.pendingDescription) lines.push(`Pending: ${entry.pendingDescription}`);
+    if (entry.constraints) lines.push(`Constraint faced: ${entry.constraints}`);
+    if (entry.postponedDescription) {
+      lines.push(`Postponed to next day: ${entry.postponedDescription}${entry.postponedReason ? ` (Reason: ${entry.postponedReason})` : ""}`);
+    }
+    if (typeof entry.daysNeeded === "number") lines.push(`Engineer's estimate: ${entry.daysNeeded} more working day(s) needed`);
+    lines.push("");
+    if (targets.internalTarget) {
+      const d = cmWorkingDaysBetween(today, cmStartOfDay(targets.internalTarget));
+      lines.push(`Internal Target: ${targets.internalTarget} — ${d >= 0 ? `${d} working day(s) left` : `${Math.abs(d)} day(s) OVERDUE`}`);
+    }
+    if (targets.customerTarget) {
+      const d = cmWorkingDaysBetween(today, cmStartOfDay(targets.customerTarget));
+      lines.push(`Customer Target: ${targets.customerTarget} — ${d >= 0 ? `${d} working day(s) left` : `${Math.abs(d)} day(s) OVERDUE`}`);
+    }
+    lines.push("");
+    lines.push("— Sent automatically from the DRB TechVerse Controls Dashboard (Project Commissioning Tracker).");
+    const text = lines.join("\n");
+    const html = `<pre style="font-family:inherit;white-space:pre-wrap">${text.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</pre>`;
+
+    try {
+      await transporter.sendMail({
+        from: process.env.MAIL_FROM || process.env.SMTP_USER,
+        to: recipients.join(", "),
+        subject: `Daily Controls Log — ${projectName} — ${entry.date}`,
+        text, html,
+      });
+      return { attempted: true, sent: true, recipients };
+    } catch (e: any) {
+      console.error("[commissioning-daily-log email]", e.message);
+      return { attempted: true, sent: false, recipients, error: e.message };
+    }
   }
 
   // List/recall all logs for one project (used to seed the form + history table)
@@ -1533,7 +1622,32 @@ r.post("/equipment-docs/:project/image", async (req, res) => {
       f.projects[key] = proj;
       f.lastUpdated = now;
       await writeJsonFile("commissioning-daily-logs.json", f, `Daily log: ${engineer} – ${req.params.project} (${date})`);
-      res.json({ success: true, entry });
+
+      // Log is already saved at this point — an email hiccup below must not fail the request.
+      let email: { attempted: boolean; sent: boolean; recipients: string[]; error?: string } = { attempted: false, sent: false, recipients: [] };
+      try {
+        const [cf, waFile] = await Promise.all([
+          readJsonFile<CommissioningFile>("commissioning-tracker.json"),
+          readJsonFile<{ assignments: any[] }>("weekly-assignments.json"),
+        ]);
+        const projMeta = cf?.projects?.[key];
+        const projAssignments = (waFile?.assignments ?? []).filter((a: any) => {
+          const an = (a.projectName ?? "").trim().toLowerCase();
+          return an === key || an.includes(key) || key.includes(an);
+        });
+        const internalTarget = projAssignments.map((a: any) => (a.internalTarget ?? "").trim()).filter(Boolean).sort().pop() ?? null;
+        const customerTarget = projAssignments.map((a: any) => (a.customerTarget ?? "").trim()).filter(Boolean).sort().pop() ?? null;
+        email = await sendDailyLogEmail(
+          proj.projectName,
+          entry,
+          { siteInchargeEmail: projMeta?.siteInchargeEmail, programManagerEmail: projMeta?.programManagerEmail },
+          { internalTarget, customerTarget }
+        );
+      } catch (e: any) {
+        console.error("[commissioning-daily-log email lookup]", e.message);
+      }
+
+      res.json({ success: true, entry, email });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
