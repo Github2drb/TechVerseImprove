@@ -30,6 +30,7 @@ import {
 import {
   computeForecast, computeRating, formatDate, splitEngineers,
   startOfDay, addWorkingDays, workingDaysBetween, namesMatch, toISODate,
+  isFullyCommissioned, freezeForecastIfComplete,
   type CalcRow, type CalcPhase,
 } from "@/lib/commissioning-calc";
 
@@ -753,8 +754,8 @@ function StationTable({
 // ─────────────────────────────────────────────────────────────────────────────
 // Variance pill (top-level component)
 // ─────────────────────────────────────────────────────────────────────────────
-function VariancePill({ label, target, varianceDays, score }: {
-  label: string; target: string | null; varianceDays: number | null; score: number | null;
+function VariancePill({ label, target, varianceDays, score, isComplete }: {
+  label: string; target: string | null; varianceDays: number | null; score: number | null; isComplete?: boolean;
 }) {
   if (!target || varianceDays === null) {
     return (
@@ -762,6 +763,20 @@ function VariancePill({ label, target, varianceDays, score }: {
         <p className="text-xs font-medium text-muted-foreground">{label}</p>
         <p className="mt-1 text-sm text-muted-foreground">Not set</p>
         <p className="text-[11px] text-muted-foreground">Enter it in Project Tracker → Edit Assignment</p>
+      </div>
+    );
+  }
+  // Fully commissioned — date tracking stops. Show a neutral "Completed" state
+  // instead of LATE/early wording so a finished project never reads as overdue.
+  if (isComplete) {
+    return (
+      <div className="rounded-lg border border-green-300 bg-green-500/5 p-3 dark:border-green-900/60">
+        <p className="text-xs font-medium text-muted-foreground">{label}</p>
+        <p className="mt-0.5 text-sm font-semibold">{formatDate(target)}</p>
+        <p className="flex items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400">
+          <CheckCircle2 className="h-3.5 w-3.5" /> Completed
+        </p>
+        <p className="text-[11px] text-muted-foreground">Score {score}/100</p>
       </div>
     );
   }
@@ -848,9 +863,10 @@ interface DaysLeftBannerProps {
   internalTarget: string | null;
   customerTarget: string | null;
   estimateEntry: DailyLogEntry | null;
+  isComplete?: boolean;
 }
 
-function DaysLeftBanner({ internalTarget, customerTarget, estimateEntry }: DaysLeftBannerProps) {
+function DaysLeftBanner({ internalTarget, customerTarget, estimateEntry, isComplete }: DaysLeftBannerProps) {
   const today = startOfDay(new Date());
   const targets = [
     { label: "Internal Target", value: internalTarget },
@@ -858,6 +874,23 @@ function DaysLeftBanner({ internalTarget, customerTarget, estimateEntry }: DaysL
   ].filter((t): t is { label: string; value: string } => !!t.value);
 
   if (targets.length === 0 && !estimateEntry) return null;
+
+  // Fully commissioned — no more days-left countdown or overdue reminder needed.
+  if (isComplete) {
+    return (
+      <Card className="border-l-4 border-l-green-500">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <CheckCircle2 className="h-5 w-5 text-green-600" />
+            Installation &amp; Commissioning Complete
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            All station and checklist items are done — date tracking and reminders have stopped for this project.
+          </p>
+        </CardHeader>
+      </Card>
+    );
+  }
 
   const estimateForecast = estimateEntry && typeof estimateEntry.daysNeeded === "number"
     ? addWorkingDays(today, estimateEntry.daysNeeded)
@@ -1560,9 +1593,16 @@ export default function ProjectCommissioning() {
     if (!draft) return null;
     const rows: CalcRow[] = [...draft.stations, ...draft.commInterface];
     const phases: CalcPhase[] = draft.phases;
-    const forecast = computeForecast(rows, phases, projectContext.engineers.length, new Date());
+    const rawForecast = computeForecast(rows, phases, projectContext.engineers.length, new Date());
+    // Once every row is completed, computeForecast() would otherwise keep
+    // re-anchoring forecastDate to "today" forever (0 pending days = 0 effective
+    // days = forecast is always today), which makes a finished project look more
+    // and more overdue with every passing day. Freeze it at the last real update
+    // instead, so date tracking stops once the project is actually done.
+    const isComplete = isFullyCommissioned(rawForecast);
+    const forecast = freezeForecastIfComplete(rawForecast, draft.lastUpdated);
     const rating = computeRating(forecast, projectContext.internalTarget, projectContext.customerTarget);
-    return { forecast, rating };
+    return { forecast, rating, isComplete };
   }, [draft, projectContext]);
 
   const totalPhotos = useMemo(() => {
@@ -1806,12 +1846,14 @@ export default function ProjectCommissioning() {
                     target={analysis.rating.internal.target}
                     varianceDays={analysis.rating.internal.varianceDays}
                     score={analysis.rating.internal.score}
+                    isComplete={analysis.isComplete}
                   />
                   <VariancePill
                     label="Customer Target Date"
                     target={analysis.rating.customer.target}
                     varianceDays={analysis.rating.customer.varianceDays}
                     score={analysis.rating.customer.score}
+                    isComplete={analysis.isComplete}
                   />
                 </div>
 
@@ -1840,6 +1882,7 @@ export default function ProjectCommissioning() {
               internalTarget={projectContext.internalTarget}
               customerTarget={projectContext.customerTarget}
               estimateEntry={estimateEntry}
+              isComplete={analysis?.isComplete}
             />
 
             {/* ── DAILY SITE ACTIVITY LOG ───────────────────────────── */}

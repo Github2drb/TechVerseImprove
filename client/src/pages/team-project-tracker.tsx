@@ -734,12 +734,14 @@ export default function TeamProjectTracker() {
                 {filtered.map(project=>{
                   const key=normProjectKey(project.projectName);
                   const isSelected=key===selectedKey;
-                  const statuses=[...new Set(project.engineers.map(e=>e.currentStatus))];
-                  const hasOverdue=project.engineers.some(e=>e.daysExceeded>0);
+                  const effStatuses=project.engineers.map(e=>effectiveStatusFor(e, project.projectName, engineerStatusMap));
+                  const statuses=[...new Set(effStatuses)];
+                  const allCompleted=effStatuses.length>0&&effStatuses.every(s=>s==="completed");
+                  const hasOverdue=!allCompleted&&project.engineers.some(e=>e.daysExceeded>0);
                   const custTarget=project.engineers[0]?.customerTarget;
                   const daysLeft=daysFromToday(custTarget);
-                  const isUrgent=custTarget&&daysLeft<=7&&daysLeft>=0;
-                  const isOverdue=custTarget&&daysLeft<0;
+                  const isUrgent=!allCompleted&&custTarget&&daysLeft<=7&&daysLeft>=0;
+                  const isOverdue=!allCompleted&&custTarget&&daysLeft<0;
                   return(
                     <button key={key} onClick={()=>{setSelectedKey(key);setSelectedEng(project.engineers[0]||null);}}
                       className={`w-full text-left px-4 py-3 border-b transition-colors hover:bg-muted/50
@@ -895,7 +897,7 @@ export default function TeamProjectTracker() {
                             icon={<Target className="h-4 w-4"/>}
                             label="Customer Target"
                             value={fmtDate(eff.customerTarget)}
-                            accent={eff.customerTarget?daysFromToday(eff.customerTarget)<0:false}
+                            accent={eff.currentStatus!=="completed"&&!!eff.customerTarget&&daysFromToday(eff.customerTarget)<0}
                           />
                         </div>
 
