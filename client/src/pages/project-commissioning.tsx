@@ -21,10 +21,15 @@ import {
   ClipboardCheck, Plus, Trash2, Save, Zap, Wrench, Clock,
   PlugZap, ListChecks, Hand, CheckCircle2, Cable, X,
   CalendarClock, Users, TrendingUp, AlertTriangle, Award, Star, Info,
-  ImagePlus, Loader2, Camera,
+  ImagePlus, Loader2, Camera, Target, CalendarDays, AlarmClock, ClipboardList,
 } from "lucide-react";
 import {
+  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  Tooltip as RechartsTooltip, Legend,
+} from "recharts";
+import {
   computeForecast, computeRating, formatDate, splitEngineers,
+  startOfDay, addWorkingDays, workingDaysBetween, namesMatch, toISODate,
   type CalcRow, type CalcPhase,
 } from "@/lib/commissioning-calc";
 
@@ -89,6 +94,70 @@ interface WeeklyAssignment {
   currentStatus?: string;
   internalTarget?: string;
   customerTarget?: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Daily Site Activity Log — one entry per engineer, per date, per station.
+// ─────────────────────────────────────────────────────────────────────────────
+interface DailyLogEntry {
+  id: string;
+  date: string;                 // YYYY-MM-DD
+  engineer: string;
+  stationId: string;            // "general" or a StationRow/commInterface row id
+  stationLabel: string;
+  targetCount: number;
+  targetDescription: string;
+  completedCount: number;
+  completedDescription: string;
+  pendingDescription: string;
+  constraints: string;
+  postponedDescription: string;
+  postponedReason: string;
+  daysNeeded: number | null;    // engineer's own estimate: additional working days to finish
+  createdAt: string;
+  updatedAt: string;
+}
+interface DailyLogsResponse {
+  projectName: string;
+  logs: DailyLogEntry[];
+}
+const GENERAL_STATION_ID = "general";
+
+function todayISO(): string {
+  return toISODate(new Date());
+}
+
+interface DailyEfficiencyRow { date: string; target: number; completed: number; efficiency: number | null; }
+
+/** Sums target/completed counts per calendar date across all engineers and stations. */
+function computeDailyEfficiency(logs: DailyLogEntry[]): { rows: DailyEfficiencyRow[]; avgEfficiency: number | null } {
+  const byDate = new Map<string, { target: number; completed: number }>();
+  for (const l of logs) {
+    const cur = byDate.get(l.date) ?? { target: 0, completed: 0 };
+    cur.target += Number(l.targetCount) || 0;
+    cur.completed += Number(l.completedCount) || 0;
+    byDate.set(l.date, cur);
+  }
+  const rows: DailyEfficiencyRow[] = Array.from(byDate.entries())
+    .map(([date, v]) => ({
+      date, target: v.target, completed: v.completed,
+      efficiency: v.target > 0 ? Math.round((v.completed / v.target) * 100) : null,
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const withEff = rows.filter((r): r is DailyEfficiencyRow & { efficiency: number } => r.efficiency !== null);
+  const avgEfficiency = withEff.length
+    ? Math.round(withEff.reduce((n, r) => n + r.efficiency, 0) / withEff.length)
+    : null;
+  return { rows, avgEfficiency };
+}
+
+/** Most recent log entry (any engineer/station) that carries a "days needed" estimate. */
+function latestDaysNeededEntry(logs: DailyLogEntry[]): DailyLogEntry | null {
+  const withEstimate = logs.filter(l => typeof l.daysNeeded === "number" && l.daysNeeded !== null);
+  if (withEstimate.length === 0) return null;
+  return [...withEstimate].sort((a, b) =>
+    (a.date + (a.updatedAt ?? "")).localeCompare(b.date + (b.updatedAt ?? ""))
+  ).pop() ?? null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -712,6 +781,466 @@ function VariancePill({ label, target, varianceDays, score }: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Days-left banner (top-level component)
+// ─────────────────────────────────────────────────────────────────────────────
+interface DaysLeftBannerProps {
+  internalTarget: string | null;
+  customerTarget: string | null;
+  estimateEntry: DailyLogEntry | null;
+}
+
+function DaysLeftBanner({ internalTarget, customerTarget, estimateEntry }: DaysLeftBannerProps) {
+  const today = startOfDay(new Date());
+  const targets = [
+    { label: "Internal Target", value: internalTarget },
+    { label: "Customer Target", value: customerTarget },
+  ].filter((t): t is { label: string; value: string } => !!t.value);
+
+  if (targets.length === 0 && !estimateEntry) return null;
+
+  const estimateForecast = estimateEntry && typeof estimateEntry.daysNeeded === "number"
+    ? addWorkingDays(today, estimateEntry.daysNeeded)
+    : null;
+
+  return (
+    <Card className="border-l-4 border-l-amber-500">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <AlarmClock className="h-5 w-5 text-amber-600" />
+          Days Left — Installation &amp; Commissioning
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">
+          Counted in working days (Mon–Sat) from today ({formatDate(new Date())}).
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {targets.length === 0 && (
+          <p className="text-xs text-muted-foreground">
+            No Internal/Customer target date set for this project yet — set it in Project Tracker → Edit Assignment.
+          </p>
+        )}
+        {targets.length > 0 && (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {targets.map(t => {
+              const daysLeft = workingDaysBetween(today, startOfDay(t.value));
+              const overdue = daysLeft < 0;
+              const soon = !overdue && daysLeft <= 3;
+              return (
+                <div key={t.label} className={`rounded-lg border p-3 ${
+                  overdue ? "border-red-300 bg-red-500/10 dark:border-red-900/60"
+                  : soon ? "border-amber-300 bg-amber-500/10 dark:border-amber-900/60"
+                  : "border-green-300 bg-green-500/5 dark:border-green-900/60"}`}>
+                  <p className="text-xs font-medium text-muted-foreground">{t.label} · {formatDate(t.value)}</p>
+                  <p className={`mt-0.5 text-xl font-bold ${
+                    overdue ? "text-red-600 dark:text-red-400"
+                    : soon ? "text-amber-600 dark:text-amber-400"
+                    : "text-green-600 dark:text-green-400"}`}>
+                    {overdue ? `${Math.abs(daysLeft)}d OVERDUE` : `${daysLeft}d left`}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {estimateEntry && estimateForecast && (
+          <div className="rounded-lg border border-dashed p-3 text-xs">
+            <p className="text-muted-foreground">
+              Latest engineer estimate ({estimateEntry.engineer}, {formatDate(estimateEntry.date)}):
+              <span className="font-semibold text-foreground"> {estimateEntry.daysNeeded} more working day{estimateEntry.daysNeeded === 1 ? "" : "s"}</span>
+              {" "}→ projected finish <span className="font-semibold text-foreground">{formatDate(estimateForecast)}</span>.
+            </p>
+            {targets.filter(t => workingDaysBetween(startOfDay(t.value), estimateForecast) > 0).map(t => {
+              const over = workingDaysBetween(startOfDay(t.value), estimateForecast);
+              return (
+                <p key={t.label} className="mt-1.5 flex items-start gap-1.5 font-medium text-red-600 dark:text-red-400">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                  Exceeds {t.label} ({formatDate(t.value)}) by {over} working day{over === 1 ? "" : "s"}. Please flag this to your supervisor.
+                </p>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Daily Site Activity Log — entry form (top-level component)
+// ─────────────────────────────────────────────────────────────────────────────
+interface DailyLogFormProps {
+  stations: StationRow[];
+  commInterface: StationRow[];
+  userName: string;
+  logs: DailyLogEntry[];
+  internalTarget: string | null;
+  customerTarget: string | null;
+  onSave: (entry: DailyLogEntry) => void;
+  saving: boolean;
+}
+
+function DailyLogForm({ stations, commInterface, userName, logs, internalTarget, customerTarget, onSave, saving }: DailyLogFormProps) {
+  const [date, setDate] = useState(todayISO());
+  const [stationId, setStationId] = useState(GENERAL_STATION_ID);
+  const [targetCount, setTargetCount] = useState("");
+  const [targetDescription, setTargetDescription] = useState("");
+  const [completedCount, setCompletedCount] = useState("");
+  const [completedDescription, setCompletedDescription] = useState("");
+  const [pendingDescription, setPendingDescription] = useState("");
+  const [constraints, setConstraints] = useState("");
+  const [postponedDescription, setPostponedDescription] = useState("");
+  const [postponedReason, setPostponedReason] = useState("");
+  const [daysNeeded, setDaysNeeded] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  const stationOptions = useMemo(() => [
+    { id: GENERAL_STATION_ID, label: "General / Whole Project" },
+    ...stations.map(s => ({ id: s.id, label: `Station ${s.label} — ${s.description || "Untitled"}` })),
+    ...commInterface.map(s => ({ id: s.id, label: `Comm Interface ${s.label} — ${s.description || "Untitled"}` })),
+  ], [stations, commInterface]);
+
+  // Recall: prefill this engineer's own entry for the chosen date + station, if one exists.
+  useEffect(() => {
+    const existing = logs.find(l => l.date === date && l.stationId === stationId && namesMatch(l.engineer, userName));
+    if (existing) {
+      setEditingId(existing.id);
+      setTargetCount(existing.targetCount ? String(existing.targetCount) : "");
+      setTargetDescription(existing.targetDescription ?? "");
+      setCompletedCount(existing.completedCount ? String(existing.completedCount) : "");
+      setCompletedDescription(existing.completedDescription ?? "");
+      setPendingDescription(existing.pendingDescription ?? "");
+      setConstraints(existing.constraints ?? "");
+      setPostponedDescription(existing.postponedDescription ?? "");
+      setPostponedReason(existing.postponedReason ?? "");
+      setDaysNeeded(existing.daysNeeded !== null && existing.daysNeeded !== undefined ? String(existing.daysNeeded) : "");
+    } else {
+      setEditingId(null);
+      setTargetCount(""); setTargetDescription("");
+      setCompletedCount(""); setCompletedDescription("");
+      setPendingDescription(""); setConstraints("");
+      setPostponedDescription(""); setPostponedReason("");
+      setDaysNeeded("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date, stationId, logs, userName]);
+
+  // Live check — does the value being typed right now overshoot either target date?
+  const liveWarning = useMemo(() => {
+    const n = Number(daysNeeded);
+    if (!daysNeeded.trim() || !isFinite(n) || n < 0) return null;
+    const forecast = addWorkingDays(startOfDay(new Date()), n);
+    const hits: string[] = [];
+    if (internalTarget) {
+      const v = workingDaysBetween(startOfDay(internalTarget), forecast);
+      if (v > 0) hits.push(`Internal Target by ${v} working day${v === 1 ? "" : "s"}`);
+    }
+    if (customerTarget) {
+      const v = workingDaysBetween(startOfDay(customerTarget), forecast);
+      if (v > 0) hits.push(`Customer Target by ${v} working day${v === 1 ? "" : "s"}`);
+    }
+    return hits.length > 0 ? `This would finish ${formatDate(forecast)} — past the ${hits.join(" and ")}.` : null;
+  }, [daysNeeded, internalTarget, customerTarget]);
+
+  const submit = () => {
+    const stationLabel = stationOptions.find(s => s.id === stationId)?.label ?? "General / Whole Project";
+    onSave({
+      id: editingId ?? uid(),
+      date, engineer: userName, stationId, stationLabel,
+      targetCount: Number(targetCount) || 0,
+      targetDescription: targetDescription.trim(),
+      completedCount: Number(completedCount) || 0,
+      completedDescription: completedDescription.trim(),
+      pendingDescription: pendingDescription.trim(),
+      constraints: constraints.trim(),
+      postponedDescription: postponedDescription.trim(),
+      postponedReason: postponedReason.trim(),
+      daysNeeded: daysNeeded.trim() ? Number(daysNeeded) : null,
+      createdAt: "", updatedAt: "",
+    });
+  };
+
+  return (
+    <Card className="border-l-4 border-l-emerald-500">
+      <CardHeader className="pb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <ClipboardList className="h-5 w-5 text-emerald-600" />
+            Daily Site Activity Log
+          </CardTitle>
+          {editingId && <Badge variant="outline" className="text-[11px]">Editing your existing entry for this date/station</Badge>}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Logged by <span className="font-medium text-foreground">{userName}</span>. One entry per engineer, per date, per station —
+          reopening the same date/station recalls and updates it instead of creating a duplicate.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Date</label>
+            <Input type="date" value={date} max={todayISO()} onChange={e => setDate(e.target.value)} className="h-9 text-sm" />
+          </div>
+          <div className="lg:col-span-2">
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Station</label>
+            <select
+              value={stationId}
+              onChange={e => setStationId(e.target.value)}
+              className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+            >
+              {stationOptions.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 flex items-center gap-1 text-xs font-medium text-muted-foreground">
+              <CalendarDays className="h-3.5 w-3.5" /> More Days Needed
+            </label>
+            <Input
+              type="number" min="0" step="1"
+              value={daysNeeded}
+              onChange={e => setDaysNeeded(e.target.value)}
+              placeholder="e.g. 3"
+              className="h-9 text-sm"
+            />
+          </div>
+        </div>
+
+        {liveWarning && (
+          <div className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-500/10 p-2.5 text-xs text-red-700 dark:border-red-900/60 dark:text-red-400">
+            <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+            <span>{liveWarning}</span>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="space-y-2 rounded-lg border p-3">
+            <p className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+              <Target className="h-3.5 w-3.5" /> TARGET FOR TODAY
+            </p>
+            <Input
+              type="number" min="0" step="1" value={targetCount}
+              onChange={e => setTargetCount(e.target.value)}
+              placeholder="No. of activities targeted"
+              className="h-8 text-sm"
+            />
+            <Textarea
+              value={targetDescription} onChange={e => setTargetDescription(e.target.value)}
+              placeholder="What was planned for today…" rows={2} className="min-h-[56px] resize-y text-xs"
+            />
+          </div>
+          <div className="space-y-2 rounded-lg border border-green-200 p-3 dark:border-green-900/60">
+            <p className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+              <CheckCircle2 className="h-3.5 w-3.5 text-green-600" /> COMPLETED TODAY
+            </p>
+            <Input
+              type="number" min="0" step="1" value={completedCount}
+              onChange={e => setCompletedCount(e.target.value)}
+              placeholder="No. of activities completed"
+              className="h-8 text-sm"
+            />
+            <Textarea
+              value={completedDescription} onChange={e => setCompletedDescription(e.target.value)}
+              placeholder="What actually got done…" rows={2} className="min-h-[56px] resize-y text-xs"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Pending Activities</label>
+            <Textarea
+              value={pendingDescription} onChange={e => setPendingDescription(e.target.value)}
+              placeholder="What's still pending at this station…" rows={2} className="min-h-[56px] resize-y text-xs"
+            />
+          </div>
+          <div>
+            <label className="mb-1 flex items-center gap-1 text-xs font-medium text-muted-foreground">
+              <AlertTriangle className="h-3.5 w-3.5 text-amber-500" /> Constraint Faced Today
+            </label>
+            <Textarea
+              value={constraints} onChange={e => setConstraints(e.target.value)}
+              placeholder="Material shortage, access issue, drawing pending, etc…" rows={2}
+              className="min-h-[56px] resize-y border-amber-200 text-xs dark:border-amber-900/60"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Postponed to Next Day</label>
+            <Textarea
+              value={postponedDescription} onChange={e => setPostponedDescription(e.target.value)}
+              placeholder="Activities pushed to tomorrow…" rows={2} className="min-h-[56px] resize-y text-xs"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Reason for Postponement</label>
+            <Textarea
+              value={postponedReason} onChange={e => setPostponedReason(e.target.value)}
+              placeholder="Why it got postponed…" rows={2} className="min-h-[56px] resize-y text-xs"
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end">
+          <Button onClick={submit} disabled={saving}>
+            <Save className="mr-2 h-4 w-4" />
+            {saving ? "Saving…" : editingId ? "Update Today's Log" : "Save Daily Log"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Daily Log history table (top-level component)
+// ─────────────────────────────────────────────────────────────────────────────
+interface DailyLogHistoryTableProps {
+  logs: DailyLogEntry[];
+  isAdmin: boolean;
+  onDelete: (id: string) => void;
+}
+
+function DailyLogHistoryTable({ logs, isAdmin, onDelete }: DailyLogHistoryTableProps) {
+  const sorted = [...logs].sort((a, b) => (b.date + (b.updatedAt ?? "")).localeCompare(a.date + (a.updatedAt ?? "")));
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <ListChecks className="h-5 w-5 text-primary" />
+          Daily Log History ({logs.length})
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">Most recent entries first — one row per engineer, date and station.</p>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <div className="overflow-x-auto rounded-lg border">
+          <table className="w-full min-w-[1100px] text-sm">
+            <thead>
+              <tr className="border-b bg-muted/50 text-left text-xs uppercase text-muted-foreground">
+                <th className="px-2 py-2">Date</th>
+                <th className="px-2 py-2">Engineer</th>
+                <th className="px-2 py-2">Station</th>
+                <th className="px-2 py-2">Target</th>
+                <th className="px-2 py-2">Completed</th>
+                <th className="px-2 py-2">Efficiency</th>
+                <th className="min-w-[160px] px-2 py-2">Constraint</th>
+                <th className="min-w-[160px] px-2 py-2">Postponed</th>
+                <th className="px-2 py-2">Days Needed</th>
+                {isAdmin && <th className="w-10 px-2 py-2"></th>}
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map(l => {
+                const eff = l.targetCount > 0 ? Math.round((l.completedCount / l.targetCount) * 100) : null;
+                return (
+                  <tr key={l.id} className="border-b align-top last:border-b-0 hover:bg-muted/30">
+                    <td className="whitespace-nowrap px-2 py-2 text-xs">{formatDate(l.date)}</td>
+                    <td className="px-2 py-2 text-xs font-medium">{l.engineer}</td>
+                    <td className="px-2 py-2 text-xs">{l.stationLabel}</td>
+                    <td className="px-2 py-2 text-xs">
+                      <p className="font-semibold">{l.targetCount}</p>
+                      {l.targetDescription && <p className="text-[11px] text-muted-foreground">{l.targetDescription}</p>}
+                    </td>
+                    <td className="px-2 py-2 text-xs">
+                      <p className="font-semibold">{l.completedCount}</p>
+                      {l.completedDescription && <p className="text-[11px] text-muted-foreground">{l.completedDescription}</p>}
+                    </td>
+                    <td className="px-2 py-2 text-xs">
+                      {eff === null ? "—" : (
+                        <Badge className={eff >= 100
+                          ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
+                          : eff >= 60 ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                          : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"}>
+                          {eff}%
+                        </Badge>
+                      )}
+                    </td>
+                    <td className="px-2 py-2 text-xs text-muted-foreground">{l.constraints || "—"}</td>
+                    <td className="px-2 py-2 text-xs text-muted-foreground">
+                      {l.postponedDescription || "—"}
+                      {l.postponedReason && <p className="text-[11px] italic">({l.postponedReason})</p>}
+                    </td>
+                    <td className="px-2 py-2 text-xs">{l.daysNeeded ?? "—"}</td>
+                    {isAdmin && (
+                      <td className="px-2 py-2">
+                        <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => onDelete(l.id)}>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
+              {sorted.length === 0 && (
+                <tr>
+                  <td colSpan={isAdmin ? 10 : 9} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                    No daily logs yet — use the form above to log today's activity.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Daily Target vs Completed chart (top-level component)
+// ─────────────────────────────────────────────────────────────────────────────
+function EfficiencyChart({ rows, avgEfficiency }: { rows: DailyEfficiencyRow[]; avgEfficiency: number | null }) {
+  const chartData = rows.slice(-21).map(r => ({
+    date: formatDate(r.date),
+    Target: r.target,
+    Completed: r.completed,
+  }));
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <TrendingUp className="h-5 w-5 text-primary" />
+            Daily Target vs Completed
+          </CardTitle>
+          {avgEfficiency !== null && (
+            <Badge className={avgEfficiency >= 100
+              ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
+              : avgEfficiency >= 60 ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+              : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"}>
+              Avg efficiency {avgEfficiency}%
+            </Badge>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Last {chartData.length} logged day{chartData.length === 1 ? "" : "s"} · sum across all engineers &amp; stations.
+        </p>
+      </CardHeader>
+      <CardContent>
+        {chartData.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">No target/completed counts logged yet.</p>
+        ) : (
+          <div style={{ width: "100%", height: 260 }}>
+            <ResponsiveContainer>
+              <BarChart data={chartData} margin={{ top: 4, right: 8, left: -16, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                <RechartsTooltip />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Bar dataKey="Target" fill="#94a3b8" radius={[3, 3, 0, 0]} />
+                <Bar dataKey="Completed" fill="#10b981" radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Main page
 // ─────────────────────────────────────────────────────────────────────────────
 export default function ProjectCommissioning() {
@@ -756,6 +1285,16 @@ export default function ProjectCommissioning() {
     queryKey: [projectUrl],
     enabled: !!selected,
   });
+
+  // Daily site activity logs — recalled whenever this project is selected
+  const dailyLogsUrl = selected ? `/api/commissioning-daily-logs/${encodeURIComponent(selected)}` : "";
+  const { data: dailyLogsData } = useQuery<DailyLogsResponse>({
+    queryKey: [dailyLogsUrl],
+    enabled: !!selected,
+  });
+  const dailyLogs = useMemo(() => dailyLogsData?.logs ?? [], [dailyLogsData]);
+  const dailyStats = useMemo(() => computeDailyEfficiency(dailyLogs), [dailyLogs]);
+  const estimateEntry = useMemo(() => latestDaysNeededEntry(dailyLogs), [dailyLogs]);
 
   // Seed draft when project data loads (empty project → default template)
   useEffect(() => {
@@ -994,6 +1533,29 @@ export default function ProjectCommissioning() {
       toast({ title: "Delete failed", description: e?.message ?? "Admin only", variant: "destructive" }),
   });
 
+  // ── Daily site log mutations ────────────────────────────────────────────
+  const saveLogMutation = useMutation({
+    mutationFn: async (entry: DailyLogEntry) =>
+      apiRequest("POST", `/api/commissioning-daily-logs/${encodeURIComponent(selected)}`, entry),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [dailyLogsUrl] });
+      toast({ title: "Daily log saved" });
+    },
+    onError: (e: any) =>
+      toast({ title: "Save failed", description: e?.message ?? "Unknown error", variant: "destructive" }),
+  });
+
+  const deleteLogMutation = useMutation({
+    mutationFn: async (logId: string) =>
+      apiRequest("DELETE", `/api/commissioning-daily-logs/${encodeURIComponent(selected)}/${encodeURIComponent(logId)}`, undefined, true),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [dailyLogsUrl] });
+      toast({ title: "Log entry removed" });
+    },
+    onError: (e: any) =>
+      toast({ title: "Delete failed", description: e?.message ?? "Admin only", variant: "destructive" }),
+  });
+
   // ── Project switching ──────────────────────────────────────────────────
   const selectProject = (name: string) => {
     if (!name || name === selected) return;
@@ -1182,6 +1744,25 @@ export default function ProjectCommissioning() {
               </CardContent>
             </Card>
 
+            {/* ── DAYS LEFT / REMINDER ──────────────────────────────── */}
+            <DaysLeftBanner
+              internalTarget={projectContext.internalTarget}
+              customerTarget={projectContext.customerTarget}
+              estimateEntry={estimateEntry}
+            />
+
+            {/* ── DAILY SITE ACTIVITY LOG ───────────────────────────── */}
+            <DailyLogForm
+              stations={draft.stations}
+              commInterface={draft.commInterface}
+              userName={userName}
+              logs={dailyLogs}
+              internalTarget={projectContext.internalTarget}
+              customerTarget={projectContext.customerTarget}
+              onSave={entry => saveLogMutation.mutate(entry)}
+              saving={saveLogMutation.isPending}
+            />
+
             {/* ── ENGINEER RATING ────────────────────────────────────── */}
             <Card>
               <CardHeader className="pb-3">
@@ -1272,6 +1853,16 @@ export default function ProjectCommissioning() {
                 <p className="text-xs text-muted-foreground">Photos Attached</p>
               </CardContent></Card>
             </div>
+
+            {/* ── EFFICIENCY TREND + LOG HISTORY ────────────────────── */}
+            <EfficiencyChart rows={dailyStats.rows} avgEfficiency={dailyStats.avgEfficiency} />
+            <DailyLogHistoryTable
+              logs={dailyLogs}
+              isAdmin={isAdmin}
+              onDelete={id => {
+                if (window.confirm("Delete this daily log entry permanently?")) deleteLogMutation.mutate(id);
+              }}
+            />
 
             {/* Commissioning phase checklists */}
             <div className="grid gap-4 md:grid-cols-3">
