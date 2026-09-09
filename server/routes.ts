@@ -306,9 +306,23 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
         company:req.body.company, isActive:req.body.isActive!==false, createdAt:new Date().toISOString() };
       f.engineers.push(eng); f.lastUpdated=new Date().toISOString();
       await writeJsonFile("engineers_auth.json",f,`Add engineer: ${eng.username}`);
+
+      // Keep engineers_master_list.json in sync — this is what the Project
+      // Tracker "Edit Assignment" engineer picker, Skill Matrix, and Daily
+      // Tasks actually read from. Without this, a new engineer only shows
+      // up in Engineer Management, not anywhere assignments get picked.
+      if (eng.role !== "admin") {
+        const ml = (await readJsonFile<EngConfigFile>("engineers_master_list.json")) ?? { engineers: [], lastUpdated: "" };
+        const already = ml.engineers.some(m => norm(m.name) === norm(eng.name));
+        if (!already) {
+          const initials = eng.name.trim().split(/\s+/).filter(Boolean).map(w => w[0].toUpperCase()).join("");
+          ml.engineers.push({ id: eng.id, name: eng.name, initials });
+          ml.lastUpdated = new Date().toISOString();
+          await writeJsonFile("engineers_master_list.json", ml, `Add to master list: ${eng.name}`);
+        }
+      }
+
       const {password:_p,...safe}=eng; res.json({success:true,engineer:safe});
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
   r.put("/engineer-credentials/:id", async (req, res) => {
     try {
       if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
