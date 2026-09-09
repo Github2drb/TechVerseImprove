@@ -323,6 +323,8 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
       }
 
       const {password:_p,...safe}=eng; res.json({success:true,engineer:safe});
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
   r.put("/engineer-credentials/:id", async (req, res) => {
     try {
       if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
