@@ -548,6 +548,7 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
   // ── WEEKLY ASSIGNMENTS ────────────────────────────────────────────────────
   r.get("/weekly-assignments", async (req, res) => {
     try {
+      maybeSendDailyReminders().catch(() => {});
       const f=await readJsonFile<WAFile>("weekly-assignments.json");
       const all=f?.assignments??[]; const ws=req.query.weekStart as string|undefined;
       res.json(ws?all.filter(a=>a.weekStart===ws):all);
@@ -1408,6 +1409,7 @@ r.post("/equipment-docs/:project/image", async (req, res) => {
   // List all tracked project names
   r.get("/commissioning-tracker", async (_q, res) => {
     try {
+      maybeSendDailyReminders().catch(() => {});
       const f = await readJsonFile<CommissioningFile>("commissioning-tracker.json");
       res.json(Object.values(f?.projects ?? {}).map(p => p.projectName));
     } catch (e: any) { res.status(500).json({ error: e.message }); }
@@ -1451,6 +1453,101 @@ r.post("/equipment-docs/:project/image", async (req, res) => {
       delete f.projects[commKey(req.params.project)];
       f.lastUpdated = new Date().toISOString();
       await writeJsonFile("commissioning-tracker.json", f, `Commissioning delete: ${req.params.project}`);
+      res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── DAILY SITE ACTIVITY LOG — station-wise, per engineer, per date ────────
+  interface DailyLogEntry {
+    id: string;
+    date: string;                 // YYYY-MM-DD
+    engineer: string;
+    stationId: string;
+    stationLabel: string;
+    targetCount: number;
+    targetDescription: string;
+    completedCount: number;
+    completedDescription: string;
+    pendingDescription: string;
+    constraints: string;
+    postponedDescription: string;
+    postponedReason: string;
+    daysNeeded: number | null;
+    createdAt: string;
+    updatedAt: string;
+  }
+  interface DailyLogProjectData { projectName: string; logs: DailyLogEntry[]; }
+  interface DailyLogFile {
+    projects: Record<string, DailyLogProjectData>; // key = projectName.toLowerCase().trim()
+    lastUpdated: string;
+  }
+
+  // List/recall all logs for one project (used to seed the form + history table)
+  r.get("/commissioning-daily-logs/:project", async (req, res) => {
+    try {
+      maybeSendDailyReminders().catch(() => {});
+      const f = await readJsonFile<DailyLogFile>("commissioning-daily-logs.json");
+      const data = f?.projects?.[commKey(req.params.project)];
+      res.json({ projectName: req.params.project, logs: data?.logs ?? [] });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Upsert one daily log entry (open to all logged-in engineers, like commissioning-tracker)
+  r.post("/commissioning-daily-logs/:project", async (req, res) => {
+    try {
+      const body = req.body ?? {};
+      const id = typeof body.id === "string" && body.id ? body.id : `log-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const date = typeof body.date === "string" && body.date ? body.date : cmISO(new Date());
+      const engineer = typeof body.engineer === "string" ? body.engineer.trim() : "";
+      if (!engineer) return res.status(400).json({ error: "engineer is required" });
+
+      const f = (await readJsonFile<DailyLogFile>("commissioning-daily-logs.json")) ?? { projects: {}, lastUpdated: "" };
+      const key = commKey(req.params.project);
+      const proj = f.projects[key] ?? { projectName: req.body.projectName || req.params.project, logs: [] };
+      const now = new Date().toISOString();
+
+      const entry: DailyLogEntry = {
+        id, date, engineer,
+        stationId: typeof body.stationId === "string" && body.stationId ? body.stationId : "general",
+        stationLabel: typeof body.stationLabel === "string" ? body.stationLabel : "General / Whole Project",
+        targetCount: Number(body.targetCount) || 0,
+        targetDescription: typeof body.targetDescription === "string" ? body.targetDescription : "",
+        completedCount: Number(body.completedCount) || 0,
+        completedDescription: typeof body.completedDescription === "string" ? body.completedDescription : "",
+        pendingDescription: typeof body.pendingDescription === "string" ? body.pendingDescription : "",
+        constraints: typeof body.constraints === "string" ? body.constraints : "",
+        postponedDescription: typeof body.postponedDescription === "string" ? body.postponedDescription : "",
+        postponedReason: typeof body.postponedReason === "string" ? body.postponedReason : "",
+        daysNeeded: typeof body.daysNeeded === "number" && isFinite(body.daysNeeded) ? body.daysNeeded : null,
+        createdAt: now, updatedAt: now,
+      };
+
+      const idx = proj.logs.findIndex(l => l.id === id);
+      if (idx > -1) {
+        entry.createdAt = proj.logs[idx].createdAt || now;
+        proj.logs[idx] = entry;
+      } else {
+        proj.logs.push(entry);
+      }
+      proj.projectName = req.body.projectName || proj.projectName || req.params.project;
+      f.projects[key] = proj;
+      f.lastUpdated = now;
+      await writeJsonFile("commissioning-daily-logs.json", f, `Daily log: ${engineer} – ${req.params.project} (${date})`);
+      res.json({ success: true, entry });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Remove one daily log entry (admin only — correcting mistakes)
+  r.delete("/commissioning-daily-logs/:project/:logId", async (req, res) => {
+    try {
+      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+      const f = await readJsonFile<DailyLogFile>("commissioning-daily-logs.json");
+      const key = commKey(req.params.project);
+      const proj = f?.projects?.[key];
+      if (!proj) return res.json({ success: true });
+      proj.logs = proj.logs.filter(l => l.id !== req.params.logId);
+      f!.lastUpdated = new Date().toISOString();
+      await writeJsonFile("commissioning-daily-logs.json", f, `Daily log delete: ${req.params.logId}`);
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
@@ -1648,6 +1745,111 @@ r.post("/equipment-docs/:project/image", async (req, res) => {
       }).sort((a, b) => b.overall - a.overall);
 
       res.json({ generatedAt: new Date().toISOString(), today: cmISO(today), projects: projectsOut, engineers: engineersOut });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── DAILY COMMISSIONING REMINDER ──────────────────────────────────────────
+  // Render's free web-service tier sleeps when idle, so a setInterval-based
+  // cron cannot be relied on to fire at a fixed clock time. Instead this runs
+  // opportunistically: the very first API request of the (IST) day from any
+  // logged-in user triggers it, at most once per calendar day, persisted in
+  // commissioning-reminders-meta.json so it survives restarts/redeploys.
+  interface ReminderMetaFile { lastSentDate: string; }
+  let reminderCheckInFlight = false;
+
+  async function runCommissioningReminders(): Promise<{ sent: number; projects: number }> {
+    let sent = 0, projectsNotified = 0;
+    try {
+      const [cf, waFile, logsFile] = await Promise.all([
+        readJsonFile<CommissioningFile>("commissioning-tracker.json"),
+        readJsonFile<{ assignments: any[] }>("weekly-assignments.json"),
+        readJsonFile<DailyLogFile>("commissioning-daily-logs.json"),
+      ]);
+      const today = cmStartOfDay(new Date());
+      const assignments = waFile?.assignments ?? [];
+
+      for (const proj of Object.values(cf?.projects ?? {})) {
+        const pKey = commKey(proj.projectName);
+        const projAssignments = assignments.filter((a: any) => {
+          const an = (a.projectName ?? "").trim().toLowerCase();
+          return an === pKey || an.includes(pKey) || pKey.includes(an);
+        });
+        const engineers = Array.from(new Set(projAssignments.flatMap((a: any) => cmSplitEngineers(a.engineerName))));
+        if (engineers.length === 0) continue;
+
+        const internalTarget = projAssignments.map((a: any) => (a.internalTarget ?? "").trim()).filter(Boolean).sort().pop() ?? null;
+        const customerTarget = projAssignments.map((a: any) => (a.customerTarget ?? "").trim()).filter(Boolean).sort().pop() ?? null;
+        if (!internalTarget && !customerTarget) continue;
+
+        const parts: string[] = [];
+        if (internalTarget) {
+          const d = cmWorkingDaysBetween(today, cmStartOfDay(internalTarget));
+          parts.push(d >= 0 ? `${d}d left to Internal Target` : `${Math.abs(d)}d OVERDUE (Internal)`);
+        }
+        if (customerTarget) {
+          const d = cmWorkingDaysBetween(today, cmStartOfDay(customerTarget));
+          parts.push(d >= 0 ? `${d}d left to Customer Target` : `${Math.abs(d)}d OVERDUE (Customer)`);
+        }
+
+        // Latest engineer "days needed" estimate logged for this project, if any
+        const projectLogs = logsFile?.projects?.[pKey]?.logs ?? [];
+        const withEstimate = projectLogs.filter(l => typeof l.daysNeeded === "number" && l.daysNeeded !== null);
+        const latest = withEstimate.length
+          ? [...withEstimate].sort((a, b) => (a.date + (a.updatedAt ?? "")).localeCompare(b.date + (b.updatedAt ?? ""))).pop()
+          : undefined;
+        let exceedNote = "";
+        if (latest && typeof latest.daysNeeded === "number") {
+          const engForecast = cmAddWorkingDays(today, latest.daysNeeded);
+          if (internalTarget && cmWorkingDaysBetween(cmStartOfDay(internalTarget), engForecast) > 0) {
+            exceedNote = ` ⚠ Engineer estimate (${latest.daysNeeded}d) exceeds Internal Target`;
+          } else if (customerTarget && cmWorkingDaysBetween(cmStartOfDay(customerTarget), engForecast) > 0) {
+            exceedNote = ` ⚠ Engineer estimate (${latest.daysNeeded}d) exceeds Customer Target`;
+          }
+        }
+
+        const body = `${parts.join(" · ")}${exceedNote}`;
+        projectsNotified++;
+        for (const eng of engineers) {
+          const ok = await sendPushToEngineer(eng, {
+            title: `Commissioning reminder — ${proj.projectName}`,
+            body,
+            url: "/project-commissioning",
+            tag: "commissioning-reminder",
+          });
+          if (ok) sent++;
+        }
+      }
+    } catch (e: any) {
+      console.error("[commissioning-reminders]", e.message);
+    }
+    return { sent, projects: projectsNotified };
+  }
+
+  async function maybeSendDailyReminders(): Promise<void> {
+    if (reminderCheckInFlight) return;
+    reminderCheckInFlight = true;
+    try {
+      const istNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+      if (istNow.getHours() < 8) return; // don't fire before 8AM IST
+      const istDateStr = cmISO(istNow);
+      const meta = (await readJsonFile<ReminderMetaFile>("commissioning-reminders-meta.json").catch(() => null)) ?? { lastSentDate: "" };
+      if (meta.lastSentDate === istDateStr) return; // already sent today
+      // Claim today's slot immediately so concurrent requests don't double-send
+      await writeJsonFile("commissioning-reminders-meta.json", { lastSentDate: istDateStr }, "Daily commissioning reminder sent");
+      await runCommissioningReminders();
+    } catch (e: any) {
+      console.error("[maybeSendDailyReminders]", e.message);
+    } finally {
+      reminderCheckInFlight = false;
+    }
+  }
+
+  // Admin: force-send today's reminder now (testing / manual nudge)
+  r.post("/commissioning-reminders/run", async (req, res) => {
+    try {
+      if (!isAdmin(req)) return res.status(403).json({ message: "Admin only" });
+      const result = await runCommissioningReminders();
+      res.json({ success: true, ...result });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
