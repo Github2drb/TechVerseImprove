@@ -1514,7 +1514,8 @@ r.post("/equipment-docs/:project/image", async (req, res) => {
     projectName: string,
     entry: DailyLogEntry,
     contacts: { siteInchargeEmail?: string; programManagerEmail?: string },
-    targets: { internalTarget?: string | null; customerTarget?: string | null }
+    targets: { internalTarget?: string | null; customerTarget?: string | null },
+    isComplete: boolean = false
   ): Promise<{ attempted: boolean; sent: boolean; recipients: string[]; error?: string }> {
     const recipients = [contacts.siteInchargeEmail, contacts.programManagerEmail]
       .map(e => (e ?? "").trim())
@@ -1544,13 +1545,21 @@ r.post("/equipment-docs/:project/image", async (req, res) => {
     }
     if (typeof entry.daysNeeded === "number") lines.push(`Engineer's estimate: ${entry.daysNeeded} more working day(s) needed`);
     lines.push("");
-    if (targets.internalTarget) {
-      const d = cmWorkingDaysBetween(today, cmStartOfDay(targets.internalTarget));
-      lines.push(`Internal Target: ${targets.internalTarget} — ${d >= 0 ? `${d} working day(s) left` : `${Math.abs(d)} day(s) OVERDUE`}`);
-    }
-    if (targets.customerTarget) {
-      const d = cmWorkingDaysBetween(today, cmStartOfDay(targets.customerTarget));
-      lines.push(`Customer Target: ${targets.customerTarget} — ${d >= 0 ? `${d} working day(s) left` : `${Math.abs(d)} day(s) OVERDUE`}`);
+    if (isComplete) {
+      // Fully commissioned — date tracking has stopped, so the email should not
+      // frame a finished project as overdue.
+      lines.push(`Status: Installation & Commissioning COMPLETE — date tracking stopped.`);
+      if (targets.internalTarget) lines.push(`Internal Target was: ${targets.internalTarget}`);
+      if (targets.customerTarget) lines.push(`Customer Target was: ${targets.customerTarget}`);
+    } else {
+      if (targets.internalTarget) {
+        const d = cmWorkingDaysBetween(today, cmStartOfDay(targets.internalTarget));
+        lines.push(`Internal Target: ${targets.internalTarget} — ${d >= 0 ? `${d} working day(s) left` : `${Math.abs(d)} day(s) OVERDUE`}`);
+      }
+      if (targets.customerTarget) {
+        const d = cmWorkingDaysBetween(today, cmStartOfDay(targets.customerTarget));
+        lines.push(`Customer Target: ${targets.customerTarget} — ${d >= 0 ? `${d} working day(s) left` : `${Math.abs(d)} day(s) OVERDUE`}`);
+      }
     }
     lines.push("");
     lines.push("— Sent automatically from the DRB TechVerse Controls Dashboard (Project Commissioning Tracker).");
@@ -1637,11 +1646,14 @@ r.post("/equipment-docs/:project/image", async (req, res) => {
         });
         const internalTarget = projAssignments.map((a: any) => (a.internalTarget ?? "").trim()).filter(Boolean).sort().pop() ?? null;
         const customerTarget = projAssignments.map((a: any) => (a.customerTarget ?? "").trim()).filter(Boolean).sort().pop() ?? null;
+        const emailRows = [...(projMeta?.stations ?? []), ...(projMeta?.commInterface ?? [])];
+        const emailIsComplete = cmIsFullyCommissioned(emailRows.length, emailRows.filter((x: any) => x.status !== "completed").length);
         email = await sendDailyLogEmail(
           proj.projectName,
           entry,
           { siteInchargeEmail: projMeta?.siteInchargeEmail, programManagerEmail: projMeta?.programManagerEmail },
-          { internalTarget, customerTarget }
+          { internalTarget, customerTarget },
+          emailIsComplete
         );
       } catch (e: any) {
         console.error("[commissioning-daily-log email lookup]", e.message);
@@ -1746,6 +1758,13 @@ r.post("/equipment-docs/:project/image", async (req, res) => {
   function cmLevel(score: number): string {
     return score >= 90 ? "Expert" : score >= 75 ? "Proficient" : score >= 50 ? "Developing" : "Learning";
   }
+  // True once every station/comm-interface row is marked completed. Mirrors
+  // client/src/lib/commissioning-calc.ts's isFullyCommissioned() so the page and
+  // this endpoint (which feeds the Skill Matrix) always agree on when to stop
+  // date-based tracking.
+  function cmIsFullyCommissioned(totalRows: number, pendingRows: number): boolean {
+    return totalRows > 0 && pendingRows === 0;
+  }
 
   r.get("/commissioning-performance", async (_q, res) => {
     try {
@@ -1783,7 +1802,14 @@ r.post("/equipment-docs/:project/image", async (req, res) => {
         }
         const engineerCount = Math.max(1, engineers.length);
         const effectiveDays = Math.ceil(totalPendingDays / engineerCount);
-        const forecastDate = cmAddWorkingDays(today, effectiveDays);
+        const isComplete = cmIsFullyCommissioned(rows.length, pending.length);
+        // Once every row is completed, effectiveDays is always 0, which would
+        // otherwise make forecastDate silently re-anchor to "today" forever —
+        // making a finished project look more and more overdue every single day.
+        // Freeze it at the project's last real update instead, so tracking stops.
+        const rawForecastDate = cmAddWorkingDays(today, effectiveDays);
+        const frozenBase = proj.lastUpdated ? cmStartOfDay(proj.lastUpdated) : null;
+        const forecastDate = (isComplete && frozenBase && !isNaN(frozenBase.getTime())) ? frozenBase : rawForecastDate;
 
         const phases = proj.phases ?? [];
         const checklistTotal = phases.reduce((n, p) => n + (p.items?.length ?? 0), 0);
@@ -1825,6 +1851,7 @@ r.post("/equipment-docs/:project/image", async (req, res) => {
           overall,
           level: cmLevel(overall),
           components: parts,
+          isComplete,
           lastUpdated: proj.lastUpdated ?? null,
           updatedBy: proj.updatedBy ?? null,
         });
@@ -1841,16 +1868,20 @@ r.post("/equipment-docs/:project/image", async (req, res) => {
             forecastDate: p.forecastDate, internalTarget: p.internalTarget, customerTarget: p.customerTarget,
             internalVarianceDays: p.internalVarianceDays, customerVarianceDays: p.customerVarianceDays,
             stationProgress: p.stationProgress, checklistProgress: p.checklistProgress,
-            effectiveDays: p.effectiveDays,
+            effectiveDays: p.effectiveDays, isComplete: p.isComplete,
           });
         }
       }
       const engineersOut = Array.from(engMap.values()).map(e => {
         const avg = e.projects.length > 0
           ? Math.round(e.projects.reduce((n, p) => n + p.overall, 0) / e.projects.length) : 0;
+        // Fully commissioned projects are done — they no longer count as "at risk"
+        // even if the frozen forecast shows they finished a bit late.
         const atRisk = e.projects.filter(p =>
-          (p.internalVarianceDays !== null && p.internalVarianceDays > 0) ||
-          (p.customerVarianceDays !== null && p.customerVarianceDays > 0)
+          !p.isComplete && (
+            (p.internalVarianceDays !== null && p.internalVarianceDays > 0) ||
+            (p.customerVarianceDays !== null && p.customerVarianceDays > 0)
+          )
         ).length;
         return {
           name: e.name, overall: avg, level: cmLevel(avg),
@@ -1883,6 +1914,10 @@ r.post("/equipment-docs/:project/image", async (req, res) => {
       const assignments = waFile?.assignments ?? [];
 
       for (const proj of Object.values(cf?.projects ?? {})) {
+        // Fully commissioned — no reminder needed, no date tracking to report on.
+        const rowsForReminder = [...(proj.stations ?? []), ...(proj.commInterface ?? [])];
+        if (cmIsFullyCommissioned(rowsForReminder.length, rowsForReminder.filter(x => x.status !== "completed").length)) continue;
+
         const pKey = commKey(proj.projectName);
         const projAssignments = assignments.filter((a: any) => {
           const an = (a.projectName ?? "").trim().toLowerCase();
