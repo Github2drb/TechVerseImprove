@@ -21,7 +21,7 @@ import {
   ClipboardCheck, Plus, Trash2, Save, Zap, Wrench, Clock,
   PlugZap, ListChecks, Hand, CheckCircle2, Cable, X,
   CalendarClock, Users, TrendingUp, AlertTriangle, Award, Star, Info,
-  ImagePlus, Loader2, Camera, Target, CalendarDays, AlarmClock, ClipboardList,
+  ImagePlus, Loader2, Camera, Target, CalendarDays, AlarmClock, ClipboardList, Send,
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -83,6 +83,8 @@ interface CommissioningProject {
   stations: StationRow[];
   commInterface: StationRow[];
   phases: Phase[];
+  siteInchargeEmail?: string;
+  programManagerEmail?: string;
   lastUpdated?: string;
   updatedBy?: string;
 }
@@ -781,6 +783,65 @@ function VariancePill({ label, target, varianceDays, score }: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Project contacts — who gets emailed when a daily log is saved (top-level)
+// ─────────────────────────────────────────────────────────────────────────────
+interface ProjectContactsCardProps {
+  siteInchargeEmail: string;
+  programManagerEmail: string;
+  onChange: (patch: Partial<Pick<CommissioningProject, "siteInchargeEmail" | "programManagerEmail">>) => void;
+}
+
+function ProjectContactsCard({ siteInchargeEmail, programManagerEmail, onChange }: ProjectContactsCardProps) {
+  const configured = !!siteInchargeEmail.trim() || !!programManagerEmail.trim();
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Send className="h-5 w-5 text-primary" />
+          Project Contacts — Notify on Daily Log Save
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">
+          Every time an engineer saves a daily site log for this project, a summary email is sent to
+          whichever of these addresses are filled in — so the Site Incharge and Program Manager always
+          know what happened, what's pending, and what's constrained, from a controls point of view.
+        </p>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Site Incharge Email</label>
+            <Input
+              type="email"
+              value={siteInchargeEmail}
+              onChange={e => onChange({ siteInchargeEmail: e.target.value })}
+              placeholder="site.incharge@company.com"
+              className="h-9 text-sm"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Program Manager Email</label>
+            <Input
+              type="email"
+              value={programManagerEmail}
+              onChange={e => onChange({ programManagerEmail: e.target.value })}
+              placeholder="program.manager@company.com"
+              className="h-9 text-sm"
+            />
+          </div>
+        </div>
+        {!configured && (
+          <p className="mt-2 flex items-start gap-1.5 text-[11px] text-muted-foreground">
+            <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+            No recipients set yet — daily logs will save normally but no email will go out. Fill in an
+            address above and click "Save Changes" below to turn notifications on.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Days-left banner (top-level component)
 // ─────────────────────────────────────────────────────────────────────────────
 interface DaysLeftBannerProps {
@@ -1312,6 +1373,8 @@ export default function ProjectCommissioning() {
         ? defaultCommInterface()
         : withImages(projectData.commInterface),
       phases: isNew ? defaultPhases() : projectData.phases ?? [],
+      siteInchargeEmail: projectData.siteInchargeEmail ?? "",
+      programManagerEmail: projectData.programManagerEmail ?? "",
       lastUpdated: projectData.lastUpdated,
       updatedBy: projectData.updatedBy,
     });
@@ -1534,12 +1597,33 @@ export default function ProjectCommissioning() {
   });
 
   // ── Daily site log mutations ────────────────────────────────────────────
+  interface SaveLogResponse {
+    success: boolean;
+    entry: DailyLogEntry;
+    email?: { attempted: boolean; sent: boolean; recipients: string[]; error?: string };
+  }
   const saveLogMutation = useMutation({
-    mutationFn: async (entry: DailyLogEntry) =>
-      apiRequest("POST", `/api/commissioning-daily-logs/${encodeURIComponent(selected)}`, entry),
-    onSuccess: () => {
+    mutationFn: async (entry: DailyLogEntry): Promise<SaveLogResponse> => {
+      const res = await apiRequest("POST", `/api/commissioning-daily-logs/${encodeURIComponent(selected)}`, entry);
+      return res.json();
+    },
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: [dailyLogsUrl] });
-      toast({ title: "Daily log saved" });
+      const email = data?.email;
+      if (!email || !email.attempted) {
+        toast({
+          title: "Daily log saved",
+          description: "Add a Site Incharge / Program Manager email above to notify them automatically.",
+        });
+      } else if (email.sent) {
+        toast({ title: "Daily log saved", description: `Emailed to ${email.recipients.join(", ")}.` });
+      } else {
+        toast({
+          title: "Daily log saved — email not sent",
+          description: email.error || "Check the server's SMTP configuration.",
+          variant: "destructive",
+        });
+      }
     },
     onError: (e: any) =>
       toast({ title: "Save failed", description: e?.message ?? "Unknown error", variant: "destructive" }),
@@ -1743,6 +1827,13 @@ export default function ProjectCommissioning() {
                 )}
               </CardContent>
             </Card>
+
+            {/* ── PROJECT CONTACTS (site incharge / program manager) ──── */}
+            <ProjectContactsCard
+              siteInchargeEmail={draft.siteInchargeEmail ?? ""}
+              programManagerEmail={draft.programManagerEmail ?? ""}
+              onChange={patch => patchDraft(d => ({ ...d, ...patch }))}
+            />
 
             {/* ── DAYS LEFT / REMINDER ──────────────────────────────── */}
             <DaysLeftBanner
