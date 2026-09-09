@@ -178,11 +178,49 @@ export function ProjectStatusDashboard() {
     } catch { return null; }
   };
 
+  // Pulls in every live project name (Project Tracker / weekly-assignments) so a
+  // newly created project shows up here immediately, instead of waiting for
+  // someone to manually add a row to Project Status_May_Sept_2026.xlsx.
+  const fetchLiveProjects = async (): Promise<{ name: string; engineer: string }[]> => {
+    try {
+      const [namesRes, waRes] = await Promise.all([
+        fetch("/api/project-names"),
+        fetch("/api/weekly-assignments"),
+      ]);
+      const names: string[] = namesRes.ok ? await namesRes.json() : [];
+      const assignments: any[] = waRes.ok ? await waRes.json() : [];
+      const engineerFor = (name: string) => {
+        const match = assignments.find(a => (a.projectName || "").trim().toLowerCase() === name.trim().toLowerCase());
+        return match?.engineerName?.trim() || "—";
+      };
+      return names.map(name => ({ name, engineer: engineerFor(name) }));
+    } catch {
+      return [];
+    }
+  };
+
   const loadData = async (forceExcel = false) => {
     setLoading(true); setError(null);
     try {
-      const [excelData, saved] = await Promise.all([fetchExcel(), fetchSaved()]);
+      const [excelData, saved, liveProjects] = await Promise.all([fetchExcel(), fetchSaved(), fetchLiveProjects()]);
       if (!excelData) throw new Error("Failed to parse Excel");
+
+      // Merge in any live project not already a row from the Excel sheet —
+      // shown as "Not Started" across every phase until someone updates it.
+      const seen = new Set(excelData.projects.map(p => p.name.trim().toLowerCase()));
+      const blankStatuses = excelData.phases.map(() => SYM_NOT_STARTED);
+      for (const lp of liveProjects) {
+        const key = lp.name.trim().toLowerCase();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        excelData.projects.push({
+          id: "live-" + key.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
+          name: lp.name,
+          engineer: lp.engineer,
+          statuses: [...blankStatuses],
+        });
+      }
+
       setData(excelData);
       if (saved?.overrides && !forceExcel) {
         setOverrides(saved.overrides);
