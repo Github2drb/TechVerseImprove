@@ -1664,10 +1664,20 @@ r.post("/equipment-docs/:project/image", async (req, res) => {
         const customerTarget = projAssignments.map((a: any) => (a.customerTarget ?? "").trim()).filter(Boolean).sort().pop() ?? null;
         const emailRows = [...(projMeta?.stations ?? []), ...(projMeta?.commInterface ?? [])];
         const emailIsComplete = cmIsFullyCommissioned(emailRows.length, emailRows.filter((x: any) => x.status !== "completed").length);
+        // Prefer the contact emails sent along with THIS daily-log save (whatever is
+        // currently typed in the Project Contacts card on the page) over whatever is
+        // already persisted in commissioning-tracker.json. This means a freshly-typed
+        // address still gets emailed even if the engineer hasn't clicked the separate
+        // "Save Changes" button yet. Falls back to the persisted value when the request
+        // doesn't include one (e.g. an older client). See BUG-14 in 04_BUG_PATTERNS.md.
+        const bodySiteInchargeEmail = typeof body.siteInchargeEmail === "string" ? body.siteInchargeEmail.trim() : "";
+        const bodyProgramManagerEmail = typeof body.programManagerEmail === "string" ? body.programManagerEmail.trim() : "";
+        const contactSiteInchargeEmail = bodySiteInchargeEmail || projMeta?.siteInchargeEmail;
+        const contactProgramManagerEmail = bodyProgramManagerEmail || projMeta?.programManagerEmail;
         email = await sendDailyLogEmail(
           proj.projectName,
           entry,
-          { siteInchargeEmail: projMeta?.siteInchargeEmail, programManagerEmail: projMeta?.programManagerEmail },
+          { siteInchargeEmail: contactSiteInchargeEmail, programManagerEmail: contactProgramManagerEmail },
           { internalTarget, customerTarget },
           emailIsComplete
         );
