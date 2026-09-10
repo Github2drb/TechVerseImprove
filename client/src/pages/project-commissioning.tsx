@@ -1644,7 +1644,15 @@ export default function ProjectCommissioning() {
   }
   const saveLogMutation = useMutation({
     mutationFn: async (entry: DailyLogEntry): Promise<SaveLogResponse> => {
-      const res = await apiRequest("POST", `/api/commissioning-daily-logs/${encodeURIComponent(selected)}`, entry);
+      // Include whatever is currently typed in the Project Contacts card, even if
+      // "Save Changes" hasn't been clicked yet — otherwise a freshly-entered Site
+      // Incharge/Program Manager address silently gets no email until the separate
+      // Save Changes button is pressed first. See BUG-14 in 04_BUG_PATTERNS.md.
+      const res = await apiRequest("POST", `/api/commissioning-daily-logs/${encodeURIComponent(selected)}`, {
+        ...entry,
+        siteInchargeEmail: draft?.siteInchargeEmail ?? "",
+        programManagerEmail: draft?.programManagerEmail ?? "",
+      });
       return res.json();
     },
     onSuccess: (data) => {
