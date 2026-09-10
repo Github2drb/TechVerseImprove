@@ -9,7 +9,6 @@ import {
   readJsonFile, writeJsonFile,
 } from "./github";
 import webpush from "web-push";
-import nodemailer from "nodemailer";
 
 // ── VAPID config (module level) ───────────────────────────────────────────────
 if (process.env.VAPID_PUBLIC_KEY) {
@@ -20,25 +19,53 @@ if (process.env.VAPID_PUBLIC_KEY) {
   );
 }
 
-// ── SMTP mail config (module level) ───────────────────────────────────────────
-// Required Render env vars: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS.
-// Optional: SMTP_SECURE ("true" for port 465), MAIL_FROM (defaults to SMTP_USER).
+// ── Email config — Resend HTTP API (module level) ─────────────────────────────
+// Required Render env vars: RESEND_API_KEY, MAIL_FROM (must be an address at a
+// domain you've verified in your Resend account, e.g. controls@drbtechverse.in).
 // Used to email the Site Incharge / Program Manager whenever an engineer saves
 // a daily commissioning log. See 09_DAILY_COMMISSIONING_LOG.md for setup steps.
-let mailTransporter: ReturnType<typeof nodemailer.createTransport> | null = null;
-function getMailTransporter(): ReturnType<typeof nodemailer.createTransport> | null {
-  if (mailTransporter) return mailTransporter;
-  const host = process.env.SMTP_HOST;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  if (!host || !user || !pass) return null;
-  mailTransporter = nodemailer.createTransport({
-    host,
-    port: Number(process.env.SMTP_PORT) || 587,
-    secure: process.env.SMTP_SECURE === "true",
-    auth: { user, pass },
-  });
-  return mailTransporter;
+//
+// IMPORTANT: this deliberately sends over Resend's HTTPS REST API rather than
+// raw SMTP sockets (nodemailer). Render's free web services block ALL outbound
+// SMTP ports (25/465/587) — see https://render.com/docs/free — so any
+// SMTP-based mailer times out ("Connection timeout") on the free plan no
+// matter how correctly it's configured. HTTPS (port 443) is not blocked, so
+// an HTTP email API works on Render's free tier. See BUG-14 in
+// 04_BUG_PATTERNS.md for the full story.
+async function sendViaResend(opts: {
+  to: string[];
+  subject: string;
+  text: string;
+  html: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.MAIL_FROM;
+  if (!apiKey || !from) {
+    return { ok: false, error: "Resend not configured on the server (RESEND_API_KEY / MAIL_FROM missing)" };
+  }
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ from, to: opts.to, subject: opts.subject, text: opts.text, html: opts.html }),
+    });
+    if (!res.ok) {
+      let detail = "";
+      try {
+        const j: any = await res.json();
+        detail = j?.message || JSON.stringify(j);
+      } catch {
+        detail = await res.text().catch(() => "");
+      }
+      return { ok: false, error: `Resend API error ${res.status}: ${detail || res.statusText}` };
+    }
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || "Network error contacting Resend" };
+  }
 }
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
@@ -1538,14 +1565,6 @@ r.post("/equipment-docs/:project/image", async (req, res) => {
       .filter(Boolean);
     if (recipients.length === 0) return { attempted: false, sent: false, recipients: [] };
 
-    const transporter = getMailTransporter();
-    if (!transporter) {
-      return {
-        attempted: true, sent: false, recipients,
-        error: "SMTP not configured on the server (SMTP_HOST / SMTP_USER / SMTP_PASS missing)",
-      };
-    }
-
     const today = cmStartOfDay(new Date());
     const eff = entry.targetCount > 0 ? Math.round((entry.completedCount / entry.targetCount) * 100) : null;
     const lines: string[] = [];
@@ -1582,18 +1601,16 @@ r.post("/equipment-docs/:project/image", async (req, res) => {
     const text = lines.join("\n");
     const html = `<pre style="font-family:inherit;white-space:pre-wrap">${text.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</pre>`;
 
-    try {
-      await transporter.sendMail({
-        from: process.env.MAIL_FROM || process.env.SMTP_USER,
-        to: recipients.join(", "),
-        subject: `Daily Controls Log — ${projectName} — ${entry.date}`,
-        text, html,
-      });
-      return { attempted: true, sent: true, recipients };
-    } catch (e: any) {
-      console.error("[commissioning-daily-log email]", e.message);
-      return { attempted: true, sent: false, recipients, error: e.message };
+    const result = await sendViaResend({
+      to: recipients,
+      subject: `Daily Controls Log — ${projectName} — ${entry.date}`,
+      text, html,
+    });
+    if (!result.ok) {
+      console.error("[commissioning-daily-log email]", result.error);
+      return { attempted: true, sent: false, recipients, error: result.error };
     }
+    return { attempted: true, sent: true, recipients };
   }
 
   // List/recall all logs for one project (used to seed the form + history table)
