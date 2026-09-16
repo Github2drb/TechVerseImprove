@@ -60,6 +60,24 @@ function monthLabel(ym: string): string {
   return new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
 }
 
+// apiRequest() throws Error(`${status}: ${bodyText}`) on a non-OK response.
+// bodyText is usually `{"message":"..."}` or `{"error":"..."}` JSON — pull
+// the real server-reported reason out instead of showing a canned string,
+// so a genuine backend problem (GitHub write conflict, invalid token, etc.)
+// is visible instead of hidden behind "please try again".
+function extractErrorMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err ?? "");
+  const body = raw.replace(/^\d+:\s*/, "");
+  try {
+    const parsed = JSON.parse(body);
+    if (parsed?.message) return String(parsed.message);
+    if (parsed?.error) return String(parsed.error);
+  } catch {
+    // body wasn't JSON — fall through to raw text below
+  }
+  return body || "Something went wrong. Please try again.";
+}
+
 export function UserMenu() {
   const { user, login, logout } = useAuth();
   const { toast } = useToast();
@@ -146,24 +164,23 @@ export function UserMenu() {
     }
     setPwdSaving(true);
     try {
-      // Verify the current password is actually correct before changing it —
-      // reuses the existing login endpoint rather than trusting the client.
-      await apiRequest("POST", "/api/auth/login", { username: user.username, password: currentPwd });
-    } catch {
-      setPwdError("Current password is incorrect.");
-      setPwdSaving(false);
-      return;
-    }
-    try {
-      await apiRequest("POST", "/api/engineer-credentials/reset-password", {
+      // Single request: server verifies currentPassword and writes the new
+      // one in one read-modify-write. (Previously this verified via
+      // /api/auth/login first, then called reset-password separately — but
+      // /auth/login has its own fire-and-forget write to the same
+      // engineers_auth.json file, which could race with the very next write
+      // and fail with a GitHub SHA-conflict error. One combined call avoids
+      // that entirely.)
+      await apiRequest("POST", "/api/auth/change-password", {
         username: user.username,
+        currentPassword: currentPwd,
         newPassword: newPwd,
       });
       toast({ title: "Password updated", description: "Your password has been changed successfully." });
       setPwdOpen(false);
       resetPwdForm();
-    } catch {
-      setPwdError("Could not update password. Please try again.");
+    } catch (err: any) {
+      setPwdError(extractErrorMessage(err));
     } finally {
       setPwdSaving(false);
     }
