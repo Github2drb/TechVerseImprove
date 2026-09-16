@@ -1086,6 +1086,82 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
+  // ── PROFILE SUMMARY (Profile dropdown panel) ──────────────────────────────
+  // Attendance %, assigned projects, and task/project completion % for one
+  // engineer — used by the "Profile" item in the header user menu. Read-only,
+  // public (anyone logged in can look up their own profile by name).
+  r.get("/profile-summary/:name", async (req, res) => {
+    try {
+      const rawName = req.params.name;
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = now.getMonth(); // 0-indexed — matches daily-report-data.json's month key
+      const isCurrentMonth = true; // this route only ever reports the current month
+
+      const [engMasterFile, dailyReportFile, waFile, peStatusFile] = await Promise.all([
+        readJsonFile<EngConfigFile>("engineers_master_list.json"),
+        readJsonFile<DailyReportFile>("daily-report-data.json"),
+        readJsonFile<WAFile>("weekly-assignments.json"),
+        readJsonFile<{ projects: Record<string, { projectName: string; engineers: Record<string, any> }> }>("project-engineer-status.json"),
+      ]);
+
+      const masterList = engMasterFile?.engineers ?? [];
+      const matchedEng = masterList.find(e => fuzzyMatchEngineer(e.name, rawName)) ?? masterList.find(e => norm(e.name) === norm(rawName));
+
+      // ── Attendance for this month ──────────────────────────────────────
+      const FULL_LEAVE = new Set(["Leave", "RH", "CL", "EL", "COff"]);
+      const HALF_LEAVE = new Set(["FH", "P/L", "L/P"]);
+      let attendancePercent = 0, daysPresent = 0, workdaysCounted = 0;
+      if (matchedEng) {
+        const monthAttendance = ((dailyReportFile?.attendance as any)?.[String(year)]?.[String(month)]) ?? {};
+        const engAttendance: Record<string, string> = monthAttendance[matchedEng.id] ?? {};
+        const lastDay = isCurrentMonth ? now.getDate() : new Date(year, month + 1, 0).getDate();
+        for (let d = 1; d <= lastDay; d++) {
+          const dow = new Date(year, month, d).getDay();
+          if (dow === 0 || dow === 6) continue; // weekend — never counted
+          workdaysCounted++;
+          const val = engAttendance[String(d)];
+          if (val && FULL_LEAVE.has(val)) { /* absent — 0 */ }
+          else if (val && HALF_LEAVE.has(val)) { daysPresent += 0.5; }
+          else { daysPresent += 1; } // site name, WFH, WP+, or unset (defaults present, matching the Daily Report page)
+        }
+        attendancePercent = workdaysCounted > 0 ? Math.round((daysPresent / workdaysCounted) * 100) : 0;
+      }
+
+      // ── Projects assigned + completion (respects per-engineer status overrides) ──
+      const myAssignments = (waFile?.assignments ?? []).filter(a => a.engineerName && matchEngineer(a.engineerName, rawName));
+      const peProjects = peStatusFile?.projects ?? {};
+      const effectiveStatus = (a: WeeklyAssignment): string => {
+        if (a.currentStatus === "completed") return "completed";
+        const proj = peProjects[a.projectName.trim().toLowerCase()];
+        const override = proj?.engineers?.[norm(rawName)];
+        return override?.currentStatus || a.currentStatus;
+      };
+      const seenProj = new Set<string>();
+      const projects: Array<{ projectName: string; status: string }> = [];
+      for (const a of myAssignments) {
+        const key = a.projectName.trim().toLowerCase();
+        if (seenProj.has(key)) continue;
+        seenProj.add(key);
+        projects.push({ projectName: a.projectName, status: effectiveStatus(a) });
+      }
+      const completedProjects = projects.filter(p => p.status === "completed").length;
+
+      const allTasks = myAssignments.flatMap(a => a.tasks ?? []);
+      const completedTasks = allTasks.filter(t => t.status === "completed").length;
+      const taskCompletionPercent = allTasks.length > 0 ? Math.round((completedTasks / allTasks.length) * 100) : 0;
+
+      res.json({
+        name: rawName,
+        trackedAsEngineer: !!matchedEng,
+        month: `${year}-${String(month + 1).padStart(2, "0")}`,
+        attendancePercent, daysPresent, workdaysCounted,
+        projects, totalProjects: projects.length, completedProjects,
+        totalTasks: allTasks.length, completedTasks, taskCompletionPercent,
+      });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
   // ── NOTICE BOARD ──────────────────────────────────────────────────────────
   r.get("/notice-board/:engineer", async (req, res) => {
     try { const f=await readJsonFile<NBFile>("notice-board.json"); res.json(f?.data?.[nbKey(req.params.engineer)]??{comments:[],dismissedMissed:[]}); }
