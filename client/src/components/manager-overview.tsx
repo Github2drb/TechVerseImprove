@@ -38,6 +38,41 @@ interface WeeklyAssignment {
   resourceLockedTill?: string;
 }
 
+// ── Per-engineer status/timeline overlay ────────────────────────────────────
+// Mirrors the same override map used on the Team Project Tracker page. A
+// shared weekly-assignment record can list several comma-separated
+// engineers, but each one can independently mark THEIR OWN status (e.g.
+// "Completed") without changing what the rest of the team sees. Once an
+// individual's effective status is "completed", they must never show up in
+// the Overdue / Wrapping Up lists again, even if the shared record other
+// engineers are on is still open. Fetched read-only here (no writes).
+interface EngineerStatusEntry {
+  displayName: string; currentStatus: string;
+  resourceLockedFrom?: string; resourceLockedTill?: string;
+  internalTarget?: string; customerTarget?: string; constraint?: string;
+  updatedAt?: string; updatedBy?: string;
+}
+interface EngineerStatusProject { projectName: string; engineers: Record<string, EngineerStatusEntry>; }
+type EngineerStatusMap = Record<string, EngineerStatusProject>; // key = projectName.trim().toLowerCase()
+
+function normName(s: string): string {
+  return s.trim().replace(/\s*\([^)]*\)\s*/g, "").trim().toLowerCase();
+}
+function normProjectKey(s: string): string {
+  return s.trim().toLowerCase().replace(/[.\s]+$/, "").replace(/\s+/g, " ");
+}
+// Look up an engineer's individual override for a given project, if one exists.
+function getEngineerOverride(map: EngineerStatusMap, projectName: string, engineerName: string): EngineerStatusEntry | undefined {
+  const proj = map[projectName.trim().toLowerCase()];
+  if (!proj) return undefined;
+  return proj.engineers[normName(engineerName)];
+}
+
+// A single engineer's row within an overdue/winding-down list — one per
+// (assignment, engineer) pair rather than one per shared assignment record,
+// so an individual "Completed" status can silence just that person.
+interface EngineerAlertEntry { id: string; engineerName: string; projectName: string; }
+
 // ─── Wind-down phases ───────────────────────────────────────────────────────
 // Mirrors the same set used on the Skill Matrix page. A project sitting in
 // S.A.T, Dispatch, Documentation or Equipment Handover past its old lock
@@ -81,7 +116,20 @@ export function ManagerOverview() {
     queryKey: ["/api/weekly-assignments"],
   });
 
-  const isLoading = configLoading || tasksLoading || assignmentsLoading;
+  // Per-engineer status overrides — same source Team Project Tracker uses to
+  // let one engineer's status (e.g. "Completed") differ from the shared
+  // assignment record. Needed here so a completed engineer is excluded from
+  // the Overdue / Wrapping Up lists below.
+  const { data: engineerStatusMap = {}, isLoading: statusLoading } = useQuery<EngineerStatusMap>({
+    queryKey: ["/api/project-engineer-status"],
+    queryFn: async () => {
+      const res = await fetch("/api/project-engineer-status");
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+  });
+
+  const isLoading = configLoading || tasksLoading || assignmentsLoading || statusLoading;
 
   if (isLoading) {
     return (
@@ -114,16 +162,44 @@ export function ManagerOverview() {
 
   const todayDate = new Date();
   todayDate.setHours(0, 0, 0, 0);
-  const pastLockDate = assignments.filter(a => {
-    if (!a.resourceLockedTill || a.currentStatus === 'completed') return false;
-    const tillDate = new Date(a.resourceLockedTill);
-    tillDate.setHours(0, 0, 0, 0);
-    return tillDate < todayDate;
+
+  // Build one entry per (assignment, engineer) pair — a shared assignment
+  // record can list several comma-separated engineers, and each one can have
+  // their own status override. Resolve EACH person's own effective status
+  // before deciding whether they're overdue: once an individual's status is
+  // "completed" (their own override, or the whole assignment being marked
+  // completed), they are dropped from both lists entirely, even while a
+  // shared record other engineers are still on is on an earlier status.
+  const overdueAssignments: EngineerAlertEntry[] = [];
+  const windingDownAssignments: EngineerAlertEntry[] = [];
+  const seenPerProject: Record<string, Set<string>> = {};
+
+  assignments.forEach(a => {
+    if (!a.engineerName || !a.engineerName.trim()) return;
+    const pk = normProjectKey(a.projectName);
+    if (!seenPerProject[pk]) seenPerProject[pk] = new Set();
+
+    const rawNames = a.engineerName.split(",").map(n => n.trim()).filter(Boolean);
+    rawNames.forEach(rawName => {
+      const nk = normName(rawName);
+      if (!nk || seenPerProject[pk].has(nk)) return;
+      seenPerProject[pk].add(nk);
+
+      const override = getEngineerOverride(engineerStatusMap, a.projectName, rawName);
+      const effectiveStatus = a.currentStatus === "completed" ? "completed" : (override?.currentStatus || a.currentStatus);
+      if (effectiveStatus === "completed") return; // this engineer's own status is done — never overdue
+
+      const effectiveTill = override?.resourceLockedTill || a.resourceLockedTill;
+      if (!effectiveTill) return;
+      const tillDate = new Date(effectiveTill);
+      tillDate.setHours(0, 0, 0, 0);
+      if (tillDate >= todayDate) return; // not past lock date for this engineer
+
+      const entry: EngineerAlertEntry = { id: `${a.id}::${nk}`, engineerName: rawName, projectName: a.projectName };
+      if (WIND_DOWN_STATUSES.has(effectiveStatus)) windingDownAssignments.push(entry);
+      else overdueAssignments.push(entry);
+    });
   });
-  // Split by phase: genuinely overdue (still early/mid-stage) vs wrapping up
-  // (S.A.T/Dispatch/Documentation/Handover — past lock date but nearly done)
-  const overdueAssignments = pastLockDate.filter(a => !WIND_DOWN_STATUSES.has(a.currentStatus));
-  const windingDownAssignments = pastLockDate.filter(a => WIND_DOWN_STATUSES.has(a.currentStatus));
 
   const utilizationRate = totalEngineers > 0
     ? Math.round((engineersWithTasks / totalEngineers) * 100)
