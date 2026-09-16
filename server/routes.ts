@@ -316,6 +316,32 @@ export function registerRoutes(httpServer: Server, app: ReturnType<typeof import
   r.post("/auth/logout", (_q, res) => res.json({ success: true }));
   r.get("/auth/me", (_q, res) => res.status(401).json({ message: "Not authenticated" }));
 
+  // Self-service password change — verifies currentPassword and writes the
+  // new one in a single read-modify-write. Deliberately NOT implemented as
+  // "call /auth/login to verify, then call reset-password" — /auth/login has
+  // a fire-and-forget lastLogin write to this same file, and firing that
+  // immediately before a second write to engineers_auth.json races on the
+  // in-memory cached SHA in writeJsonFile(), which GitHub then rejects with
+  // 422 "SHA mismatch" (surfaced as "GitHub write conflict ... please
+  // retry"). One request, one write, no race.
+  r.post("/auth/change-password", async (req, res) => {
+    try {
+      const { username, currentPassword, newPassword } = req.body as { username?: string; currentPassword?: string; newPassword?: string };
+      if (!username || !currentPassword || !newPassword) return res.status(400).json({ message: "username, currentPassword and newPassword are required" });
+      const f = await readJsonFile<CredFile>("engineers_auth.json");
+      const list: EngineerCredential[] = f?.engineers ?? [];
+      if (!list.find(e => e.username === "admin"))
+        list.push({ id:"admin-1", username:"admin", name:"Admin", password:"admin@drb", role:"admin", isActive:true, createdAt:new Date().toISOString() });
+      const eng = list.find(e => e.username.toLowerCase()===username.toLowerCase() && e.isActive!==false);
+      if (!eng) return res.status(404).json({ message: "Account not found" });
+      if (eng.password !== currentPassword) return res.status(401).json({ message: "Current password is incorrect" });
+      eng.password = newPassword;
+      const out: CredFile = { engineers: list, lastUpdated: new Date().toISOString() };
+      await writeJsonFile("engineers_auth.json", out, `Password changed: ${username}`);
+      res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
   // ── ENGINEER CREDENTIALS ──────────────────────────────────────────────────
   r.get("/engineer-credentials", async (req, res) => {
     try {
