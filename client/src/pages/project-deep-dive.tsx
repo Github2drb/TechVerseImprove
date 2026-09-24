@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -25,10 +25,13 @@ import {
   ShieldCheck,
   FileText,
   Factory,
+  BellRing,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Types (mirrors server/routes.ts EquipmentDoc / StationDoc)
+// The server merges the whole request body on save, so the extra `alarms`
+// array is persisted to equipment-docs.json without any backend change.
 // ---------------------------------------------------------------------------
 
 interface StationImage {
@@ -48,6 +51,73 @@ interface StationDoc {
   images: StationImage[];
 }
 
+// ---- Alarm checklist enums ------------------------------------------------
+
+const ALARM_STATUS_VALUES = [
+  "not_created",
+  "created_not_tested",
+  "testing_in_progress",
+  "verified",
+] as const;
+type AlarmStatus = (typeof ALARM_STATUS_VALUES)[number];
+
+const ALARM_CATEGORY_VALUES = ["low", "mid", "critical"] as const;
+type AlarmCategory = (typeof ALARM_CATEGORY_VALUES)[number];
+
+const ALARM_GROUP_VALUES = [
+  "pneumatic",
+  "servo",
+  "stepper",
+  "electropneumatic",
+  "generic",
+] as const;
+type AlarmGroup = (typeof ALARM_GROUP_VALUES)[number];
+
+const ALARM_STATUS_LABEL: Record<AlarmStatus, string> = {
+  not_created: "Not Created",
+  created_not_tested: "Created, Not Tested",
+  testing_in_progress: "Testing in Progress",
+  verified: "Alarm Verified",
+};
+
+const ALARM_STATUS_COLOR: Record<AlarmStatus, string> = {
+  not_created: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+  created_not_tested: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
+  testing_in_progress: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+  verified: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+};
+
+const ALARM_CATEGORY_LABEL: Record<AlarmCategory, string> = {
+  low: "Low",
+  mid: "Mid",
+  critical: "Critical",
+};
+
+const ALARM_CATEGORY_COLOR: Record<AlarmCategory, string> = {
+  low: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+  mid: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
+  critical: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
+};
+
+const ALARM_GROUP_LABEL: Record<AlarmGroup, string> = {
+  pneumatic: "Pneumatic",
+  servo: "Servo",
+  stepper: "Stepper",
+  electropneumatic: "Electropneumatic",
+  generic: "Generic",
+};
+
+interface AlarmItem {
+  id: string;
+  name: string;
+  description: string;
+  category: AlarmCategory;
+  group: AlarmGroup;
+  status: AlarmStatus;
+  verifiedBy: string;
+  verifiedAt?: string;
+}
+
 interface EquipmentDoc {
   projectName: string;
   synopsis: string;
@@ -55,6 +125,7 @@ interface EquipmentDoc {
   safetyLayout: string;
   hasMultipleStations: boolean;
   stations: StationDoc[];
+  alarms: AlarmItem[];
   updatedAt: string;
   updatedBy?: string;
 }
@@ -101,7 +172,21 @@ function blankDoc(projectName: string): EquipmentDoc {
     safetyLayout: "",
     hasMultipleStations: false,
     stations: [],
+    alarms: [],
     updatedAt: new Date().toISOString(),
+  };
+}
+
+// Older saved docs (and the server's blank doc) have no `alarms` field —
+// normalise so the UI can always rely on arrays being present.
+function normalizeDoc(raw: any, projectName: string): EquipmentDoc {
+  const base = blankDoc(projectName);
+  if (!raw || typeof raw !== "object") return base;
+  return {
+    ...base,
+    ...raw,
+    stations: Array.isArray(raw.stations) ? raw.stations : [],
+    alarms: Array.isArray(raw.alarms) ? raw.alarms : [],
   };
 }
 
@@ -115,6 +200,18 @@ function newStation(index: number): StationDoc {
     inputs: "",
     outputs: "",
     images: [],
+  };
+}
+
+function newAlarm(): AlarmItem {
+  return {
+    id: `alarm-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    name: "",
+    description: "",
+    category: "mid",
+    group: "generic",
+    status: "not_created",
+    verifiedBy: "",
   };
 }
 
@@ -285,6 +382,290 @@ function StationCard({
 }
 
 // ---------------------------------------------------------------------------
+// Alarm checklist — top-level components (see BUG-02)
+// ---------------------------------------------------------------------------
+
+function AlarmRow({
+  alarm,
+  index,
+  onChange,
+  onDelete,
+}: {
+  alarm: AlarmItem;
+  index: number;
+  onChange: (id: string, patch: Partial<AlarmItem>) => void;
+  onDelete: (id: string) => void;
+}) {
+  const band = index % 2 === 0 ? "bg-[#CFD5EA] dark:bg-slate-800" : "bg-[#E9EBF5] dark:bg-slate-900";
+  return (
+    <tr className={band} data-testid={`row-alarm-${index}`}>
+      <td className="border border-white dark:border-slate-700 p-1.5 align-top">
+        <Input
+          value={alarm.name}
+          placeholder="e.g. AL_101"
+          onChange={(e) => onChange(alarm.id, { name: e.target.value })}
+          className="h-9 bg-background"
+          data-testid={`input-alarm-name-${index}`}
+        />
+      </td>
+      <td className="border border-white dark:border-slate-700 p-1.5 align-top">
+        <Textarea
+          rows={1}
+          value={alarm.description}
+          placeholder="What triggers this alarm / operator action"
+          onChange={(e) => onChange(alarm.id, { description: e.target.value })}
+          className="min-h-9 py-2 bg-background resize-y"
+          data-testid={`textarea-alarm-description-${index}`}
+        />
+      </td>
+      <td className="border border-white dark:border-slate-700 p-1.5 align-top">
+        <Select
+          value={alarm.category}
+          onValueChange={(v) => onChange(alarm.id, { category: v as AlarmCategory })}
+        >
+          <SelectTrigger className="h-9 bg-background" data-testid={`select-alarm-category-${index}`}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {ALARM_CATEGORY_VALUES.map((c) => (
+              <SelectItem key={c} value={c}>
+                <span className={`inline-block rounded px-2 py-0.5 text-xs font-medium ${ALARM_CATEGORY_COLOR[c]}`}>
+                  {ALARM_CATEGORY_LABEL[c]}
+                </span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </td>
+      <td className="border border-white dark:border-slate-700 p-1.5 align-top">
+        <Select
+          value={alarm.group}
+          onValueChange={(v) => onChange(alarm.id, { group: v as AlarmGroup })}
+        >
+          <SelectTrigger className="h-9 bg-background" data-testid={`select-alarm-group-${index}`}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {ALARM_GROUP_VALUES.map((g) => (
+              <SelectItem key={g} value={g}>
+                {ALARM_GROUP_LABEL[g]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </td>
+      <td className="border border-white dark:border-slate-700 p-1.5 align-top">
+        <Select
+          value={alarm.status}
+          onValueChange={(v) => {
+            const status = v as AlarmStatus;
+            onChange(alarm.id, {
+              status,
+              verifiedAt: status === "verified" ? new Date().toISOString() : undefined,
+            });
+          }}
+        >
+          <SelectTrigger className="h-9 bg-background" data-testid={`select-alarm-status-${index}`}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {ALARM_STATUS_VALUES.map((s) => (
+              <SelectItem key={s} value={s}>
+                <span className={`inline-block rounded px-2 py-0.5 text-xs font-medium ${ALARM_STATUS_COLOR[s]}`}>
+                  {ALARM_STATUS_LABEL[s]}
+                </span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </td>
+      <td className="border border-white dark:border-slate-700 p-1.5 align-top">
+        <Input
+          value={alarm.verifiedBy}
+          placeholder="Engineer name"
+          onChange={(e) => onChange(alarm.id, { verifiedBy: e.target.value })}
+          className="h-9 bg-background"
+          data-testid={`input-alarm-verified-by-${index}`}
+        />
+        {alarm.status === "verified" && alarm.verifiedAt && (
+          <p className="mt-1 px-1 text-[10px] text-muted-foreground">
+            ✓ {new Date(alarm.verifiedAt).toLocaleDateString()}
+          </p>
+        )}
+      </td>
+      <td className="border border-white dark:border-slate-700 p-1.5 align-top text-center">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-9 w-9"
+          onClick={() => onDelete(alarm.id)}
+          data-testid={`button-delete-alarm-${index}`}
+        >
+          <Trash2 className="h-4 w-4 text-destructive" />
+        </Button>
+      </td>
+    </tr>
+  );
+}
+
+function AlarmChecklist({
+  alarms,
+  onChange,
+  onAdd,
+  onDelete,
+}: {
+  alarms: AlarmItem[];
+  onChange: (id: string, patch: Partial<AlarmItem>) => void;
+  onAdd: () => void;
+  onDelete: (id: string) => void;
+}) {
+  const [groupFilter, setGroupFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+
+  const counts = useMemo(() => {
+    const c: Record<AlarmStatus, number> = {
+      not_created: 0,
+      created_not_tested: 0,
+      testing_in_progress: 0,
+      verified: 0,
+    };
+    for (const a of alarms) {
+      if (c[a.status] !== undefined) c[a.status] += 1;
+    }
+    return c;
+  }, [alarms]);
+
+  const criticalOpen = alarms.filter((a) => a.category === "critical" && a.status !== "verified").length;
+  const pct = alarms.length ? Math.round((counts.verified / alarms.length) * 100) : 0;
+
+  const visible = alarms.filter(
+    (a) =>
+      (groupFilter === "all" || a.group === groupFilter) &&
+      (statusFilter === "all" || a.status === statusFilter)
+  );
+
+  return (
+    <Card data-testid="card-alarm-checklist">
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <BellRing className="h-4 w-4" /> Alarm Checklist
+          {alarms.length > 0 && (
+            <span className="text-sm font-normal text-muted-foreground">({alarms.length})</span>
+          )}
+        </CardTitle>
+        <Button variant="outline" size="sm" onClick={onAdd} data-testid="button-add-alarm">
+          <Plus className="h-4 w-4 mr-1" /> Add Alarm
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {alarms.length > 0 && (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+              {ALARM_STATUS_VALUES.map((s) => (
+                <div key={s} className={`rounded-md px-3 py-2 ${ALARM_STATUS_COLOR[s]}`}>
+                  <p className="text-xl font-bold leading-tight">{counts[s]}</p>
+                  <p className="text-[11px] leading-tight">{ALARM_STATUS_LABEL[s]}</p>
+                </div>
+              ))}
+              <div
+                className={`rounded-md px-3 py-2 col-span-2 sm:col-span-1 ${
+                  criticalOpen > 0 ? ALARM_CATEGORY_COLOR.critical : "bg-muted"
+                }`}
+              >
+                <p className="text-xl font-bold leading-tight">{criticalOpen}</p>
+                <p className="text-[11px] leading-tight">Critical not verified</p>
+              </div>
+            </div>
+
+            <div>
+              <div className="flex justify-between text-xs text-muted-foreground mb-1">
+                <span>Verification progress</span>
+                <span>
+                  {counts.verified}/{alarms.length} · {pct}%
+                </span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                <div className="h-full bg-green-500 transition-all" style={{ width: `${pct}%` }} />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Select value={groupFilter} onValueChange={setGroupFilter}>
+                <SelectTrigger className="w-44 h-9" data-testid="select-alarm-group-filter">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All groups</SelectItem>
+                  {ALARM_GROUP_VALUES.map((g) => (
+                    <SelectItem key={g} value={g}>
+                      {ALARM_GROUP_LABEL[g]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-52 h-9" data-testid="select-alarm-status-filter">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All statuses</SelectItem>
+                  {ALARM_STATUS_VALUES.map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {ALARM_STATUS_LABEL[s]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </>
+        )}
+
+        {alarms.length === 0 ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            No alarms yet. Click "Add Alarm" to start the checklist.
+          </p>
+        ) : (
+          <div className="overflow-x-auto rounded-md">
+            <table className="w-full min-w-[900px] border-collapse text-sm">
+              <thead>
+                <tr className="bg-[#4472C4] text-white">
+                  <th className="border border-white px-2 py-2 text-left font-semibold w-[15%]">Alarm Name</th>
+                  <th className="border border-white px-2 py-2 text-left font-semibold w-[27%]">Description</th>
+                  <th className="border border-white px-2 py-2 text-left font-semibold w-[11%]">Category</th>
+                  <th className="border border-white px-2 py-2 text-left font-semibold w-[14%]">Group</th>
+                  <th className="border border-white px-2 py-2 text-left font-semibold w-[17%]">Current Status</th>
+                  <th className="border border-white px-2 py-2 text-left font-semibold w-[13%]">Verified By</th>
+                  <th className="border border-white px-2 py-2 w-[3%]" />
+                </tr>
+              </thead>
+              <tbody>
+                {visible.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="py-6 text-center text-muted-foreground">
+                      No alarms match the current filters.
+                    </td>
+                  </tr>
+                ) : (
+                  visible.map((alarm, i) => (
+                    <AlarmRow
+                      key={alarm.id}
+                      alarm={alarm}
+                      index={i}
+                      onChange={onChange}
+                      onDelete={onDelete}
+                    />
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -318,7 +699,7 @@ export default function ProjectDeepDive() {
 
   useEffect(() => {
     if (fetchedDoc) {
-      setDoc(fetchedDoc);
+      setDoc(normalizeDoc(fetchedDoc, selectedProject));
       setDirty(false);
     } else if (!selectedProject) {
       setDoc(null);
@@ -326,12 +707,20 @@ export default function ProjectDeepDive() {
   }, [fetchedDoc, selectedProject]);
 
   const saveMutation = useMutation({
-    mutationFn: async (payload: EquipmentDoc) =>
-      apiRequest("POST", `/api/equipment-docs/${encodeURIComponent(payload.projectName)}`, payload, true),
-    onSuccess: (saved: any) => {
-      setDoc(saved);
+    mutationFn: async (payload: EquipmentDoc) => {
+      // apiRequest returns a raw Response — parse it so state gets the saved doc
+      const res = await apiRequest(
+        "POST",
+        `/api/equipment-docs/${encodeURIComponent(payload.projectName)}`,
+        payload,
+        true
+      );
+      return res.json();
+    },
+    onSuccess: (saved: any, payload) => {
+      setDoc(normalizeDoc(saved, payload.projectName));
       setDirty(false);
-      queryClient.invalidateQueries({ queryKey: ["/api/equipment-docs", selectedProject] });
+      queryClient.invalidateQueries({ queryKey: ["/api/equipment-docs", payload.projectName] });
       toast({ title: "Saved" });
     },
     onError: (e: any) => toast({ title: e?.message || "Save failed", variant: "destructive" }),
@@ -340,12 +729,13 @@ export default function ProjectDeepDive() {
   const uploadImageMutation = useMutation({
     mutationFn: async (vars: { stationId: string; file: File }) => {
       const base64 = await fileToBase64(vars.file);
-      return apiRequest(
+      const res = await apiRequest(
         "POST",
         `/api/equipment-docs/${encodeURIComponent(selectedProject)}/image`,
         { stationId: vars.stationId, filename: vars.file.name, base64 },
         true
       );
+      return res.json();
     },
     onSuccess: (result: any, vars) => {
       setDoc((prev) => {
@@ -411,6 +801,25 @@ export default function ProjectDeepDive() {
     uploadImageMutation.mutate({ stationId, file });
   }
 
+  function updateAlarm(id: string, patch: Partial<AlarmItem>) {
+    setDoc((prev) =>
+      prev
+        ? { ...prev, alarms: prev.alarms.map((a) => (a.id === id ? { ...a, ...patch } : a)) }
+        : prev
+    );
+    setDirty(true);
+  }
+
+  function addAlarm() {
+    setDoc((prev) => (prev ? { ...prev, alarms: [...prev.alarms, newAlarm()] } : prev));
+    setDirty(true);
+  }
+
+  function deleteAlarm(id: string) {
+    setDoc((prev) => (prev ? { ...prev, alarms: prev.alarms.filter((a) => a.id !== id) } : prev));
+    setDirty(true);
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <Header searchQuery={searchQuery} onSearchChange={setSearchQuery} />
@@ -418,8 +827,8 @@ export default function ProjectDeepDive() {
         <div>
           <h1 className="text-2xl font-bold">Project Deep Dive</h1>
           <p className="text-sm text-muted-foreground">
-            Macro-level equipment documentation — synopsis, PLC architecture, safety layout and
-            per-station breakdown for each project.
+            Macro-level equipment documentation — synopsis, PLC architecture, safety layout, alarm
+            checklist and per-station breakdown for each project.
           </p>
         </div>
 
@@ -521,6 +930,13 @@ export default function ProjectDeepDive() {
                 />
               </CardContent>
             </Card>
+
+            <AlarmChecklist
+              alarms={doc.alarms}
+              onChange={updateAlarm}
+              onAdd={addAlarm}
+              onDelete={deleteAlarm}
+            />
 
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">
