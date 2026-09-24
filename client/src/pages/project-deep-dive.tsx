@@ -26,6 +26,9 @@ import {
   FileText,
   Factory,
   BellRing,
+  Download,
+  AlertTriangle,
+  CheckCircle2,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -80,11 +83,28 @@ const ALARM_STATUS_LABEL: Record<AlarmStatus, string> = {
   verified: "Alarm Verified",
 };
 
-const ALARM_STATUS_COLOR: Record<AlarmStatus, string> = {
-  not_created: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
-  created_not_tested: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
-  testing_in_progress: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
-  verified: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+// Two SEPARATE palettes so a glance at a row tells you both severity and progress:
+//   Category → sky blue / orange / red
+//   Status   → grey / yellow / violet / green
+// No hue is shared between the two sets.
+// `ui` = Tailwind classes for the on-screen cell, `fill`/`font` = ARGB for Excel.
+interface ColorSpec {
+  ui: string;
+  fill: string;
+  font: string;
+}
+
+const ALARM_CATEGORY_STYLE: Record<AlarmCategory, ColorSpec> = {
+  low: { ui: "bg-sky-500 text-white", fill: "FF0EA5E9", font: "FFFFFFFF" },
+  mid: { ui: "bg-orange-500 text-white", fill: "FFF97316", font: "FFFFFFFF" },
+  critical: { ui: "bg-red-600 text-white", fill: "FFDC2626", font: "FFFFFFFF" },
+};
+
+const ALARM_STATUS_STYLE: Record<AlarmStatus, ColorSpec> = {
+  not_created: { ui: "bg-gray-500 text-white", fill: "FF6B7280", font: "FFFFFFFF" },
+  created_not_tested: { ui: "bg-yellow-400 text-gray-900", fill: "FFFACC15", font: "FF111827" },
+  testing_in_progress: { ui: "bg-violet-600 text-white", fill: "FF7C3AED", font: "FFFFFFFF" },
+  verified: { ui: "bg-green-600 text-white", fill: "FF16A34A", font: "FFFFFFFF" },
 };
 
 const ALARM_CATEGORY_LABEL: Record<AlarmCategory, string> = {
@@ -93,11 +113,11 @@ const ALARM_CATEGORY_LABEL: Record<AlarmCategory, string> = {
   critical: "Critical",
 };
 
-const ALARM_CATEGORY_COLOR: Record<AlarmCategory, string> = {
-  low: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
-  mid: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
-  critical: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
-};
+// Row-level highlight for critical alarms (on screen + Excel)
+const CRITICAL_OPEN_ROW = "bg-red-50 dark:bg-red-950/40";
+const CRITICAL_DONE_ROW = "bg-green-50 dark:bg-green-950/40";
+const XL_CRITICAL_OPEN_ROW = "FFFEE2E2";
+const XL_CRITICAL_DONE_ROW = "FFDCFCE7";
 
 const ALARM_GROUP_LABEL: Record<AlarmGroup, string> = {
   pneumatic: "Pneumatic",
@@ -226,6 +246,232 @@ function fileToBase64(file: File): Promise<string> {
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Alarm checklist → Excel (ExcelJS — already in package.json, used by blog.tsx).
+// Plain SheetJS (`xlsx`) cannot write cell colours, so ExcelJS is used here.
+// Loaded on demand so it doesn't bloat the page bundle.
+// ---------------------------------------------------------------------------
+
+function alarmCounts(alarms: AlarmItem[]) {
+  const byStatus: Record<AlarmStatus, number> = {
+    not_created: 0,
+    created_not_tested: 0,
+    testing_in_progress: 0,
+    verified: 0,
+  };
+  for (const a of alarms) if (byStatus[a.status] !== undefined) byStatus[a.status] += 1;
+  const critical = alarms.filter((a) => a.category === "critical");
+  const criticalVerified = critical.filter((a) => a.status === "verified").length;
+  return {
+    byStatus,
+    total: alarms.length,
+    criticalTotal: critical.length,
+    criticalVerified,
+    criticalOpen: critical.length - criticalVerified,
+  };
+}
+
+async function exportAlarmsToExcel(projectName: string, alarms: AlarmItem[]): Promise<void> {
+  const mod: any = await import("exceljs");
+  const ExcelJS = mod.default ?? mod;
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "DRB TechVerse";
+  wb.created = new Date();
+
+  const ws = wb.addWorksheet("Alarm Checklist", {
+    pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+
+  const HEADERS = [
+    "Sr No",
+    "Alarm Name",
+    "Description",
+    "Category",
+    "Group",
+    "Current Status",
+    "Verified By",
+    "Verified On",
+  ];
+  const WIDTHS = [7, 22, 48, 12, 18, 22, 20, 14];
+  WIDTHS.forEach((w, i) => (ws.getColumn(i + 1).width = w));
+  const lastCol = HEADERS.length;
+
+  const solid = (argb: string) => ({ type: "pattern", pattern: "solid", fgColor: { argb } });
+  const thin = { style: "thin", color: { argb: "FFBFBFBF" } };
+  const border = { top: thin, left: thin, bottom: thin, right: thin };
+
+  // ── Title block ──
+  ws.mergeCells(1, 1, 1, lastCol);
+  const title = ws.getCell(1, 1);
+  title.value = `Alarm Checklist — ${projectName}`;
+  title.font = { bold: true, size: 14, color: { argb: "FFFFFFFF" } };
+  title.fill = solid("FF1F3864");
+  title.alignment = { vertical: "middle", horizontal: "left", indent: 1 };
+  ws.getRow(1).height = 24;
+
+  ws.mergeCells(2, 1, 2, lastCol);
+  ws.getCell(2, 1).value = `Exported ${new Date().toLocaleString()}`;
+  ws.getCell(2, 1).font = { italic: true, size: 9, color: { argb: "FF6B7280" } };
+
+  // ── Summary block ──
+  const c = alarmCounts(alarms);
+  const summary: [string, string | number, string | null, string | null][] = [
+    ["Total alarms", c.total, null, null],
+    [ALARM_STATUS_LABEL.not_created, c.byStatus.not_created, ALARM_STATUS_STYLE.not_created.fill, ALARM_STATUS_STYLE.not_created.font],
+    [ALARM_STATUS_LABEL.created_not_tested, c.byStatus.created_not_tested, ALARM_STATUS_STYLE.created_not_tested.fill, ALARM_STATUS_STYLE.created_not_tested.font],
+    [ALARM_STATUS_LABEL.testing_in_progress, c.byStatus.testing_in_progress, ALARM_STATUS_STYLE.testing_in_progress.fill, ALARM_STATUS_STYLE.testing_in_progress.font],
+    [ALARM_STATUS_LABEL.verified, c.byStatus.verified, ALARM_STATUS_STYLE.verified.fill, ALARM_STATUS_STYLE.verified.font],
+    [
+      "Critical verified",
+      `${c.criticalVerified} / ${c.criticalTotal}`,
+      c.criticalOpen > 0 ? ALARM_CATEGORY_STYLE.critical.fill : ALARM_STATUS_STYLE.verified.fill,
+      "FFFFFFFF",
+    ],
+  ];
+  let r = 4;
+  ws.getCell(r, 2).value = "Summary";
+  ws.getCell(r, 2).font = { bold: true, size: 11 };
+  r += 1;
+  for (const [label, value, fill, font] of summary) {
+    const lc = ws.getCell(r, 2);
+    const vc = ws.getCell(r, 3);
+    lc.value = label;
+    vc.value = value;
+    lc.border = border;
+    vc.border = border;
+    vc.alignment = { horizontal: "left" };
+    vc.font = { bold: true };
+    if (fill) {
+      lc.fill = solid(fill);
+      lc.font = { bold: true, color: { argb: font ?? "FF000000" } };
+    }
+    r += 1;
+  }
+  if (c.criticalOpen > 0) {
+    ws.getCell(r, 2).value = `⚠ ${c.criticalOpen} critical alarm(s) NOT verified — highlighted in red below`;
+    ws.getCell(r, 2).font = { bold: true, color: { argb: "FFDC2626" } };
+    r += 1;
+  }
+  r += 1;
+
+  // ── Table header (matches the blue header of the on-screen table) ──
+  const headerRowNo = r;
+  const hr = ws.getRow(headerRowNo);
+  HEADERS.forEach((h, i) => {
+    const cell = hr.getCell(i + 1);
+    cell.value = h;
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = solid("FF4472C4");
+    cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+    cell.border = border;
+  });
+  hr.height = 22;
+
+  // ── Rows ──
+  alarms.forEach((a, i) => {
+    const row = ws.getRow(headerRowNo + 1 + i);
+    const isCritical = a.category === "critical";
+    const verified = a.status === "verified";
+    const band = isCritical
+      ? verified
+        ? XL_CRITICAL_DONE_ROW
+        : XL_CRITICAL_OPEN_ROW
+      : i % 2 === 0
+      ? "FFCFD5EA"
+      : "FFE9EBF5";
+
+    const values = [
+      i + 1,
+      a.name || "",
+      a.description || "",
+      ALARM_CATEGORY_LABEL[a.category] ?? a.category,
+      ALARM_GROUP_LABEL[a.group] ?? a.group,
+      ALARM_STATUS_LABEL[a.status] ?? a.status,
+      a.verifiedBy || "",
+      a.status === "verified" && a.verifiedAt ? new Date(a.verifiedAt).toLocaleDateString() : "",
+    ];
+    values.forEach((v, ci) => {
+      const cell = row.getCell(ci + 1);
+      cell.value = v;
+      cell.border = border;
+      cell.fill = solid(band);
+      cell.alignment = {
+        vertical: "top",
+        wrapText: true,
+        horizontal: ci === 0 ? "center" : "left",
+      };
+    });
+
+    const cat = ALARM_CATEGORY_STYLE[a.category];
+    if (cat) {
+      const cc = row.getCell(4);
+      cc.fill = solid(cat.fill);
+      cc.font = { bold: true, color: { argb: cat.font } };
+      cc.alignment = { vertical: "top", horizontal: "center" };
+    }
+    const st = ALARM_STATUS_STYLE[a.status];
+    if (st) {
+      const sc = row.getCell(6);
+      sc.fill = solid(st.fill);
+      sc.font = { bold: true, color: { argb: st.font } };
+      sc.alignment = { vertical: "top", horizontal: "center", wrapText: true };
+    }
+    if (isCritical && !verified) {
+      row.getCell(2).font = { bold: true, color: { argb: "FFB91C1C" } };
+    }
+  });
+
+  ws.views = [{ state: "frozen", xSplit: 0, ySplit: headerRowNo }];
+  if (alarms.length > 0) {
+    ws.autoFilter = {
+      from: { row: headerRowNo, column: 1 },
+      to: { row: headerRowNo + alarms.length, column: lastCol },
+    };
+  }
+
+  // ── Legend sheet ──
+  const lg = wb.addWorksheet("Legend");
+  lg.getColumn(1).width = 26;
+  lg.getColumn(2).width = 60;
+  lg.addRow(["Colour legend"]).font = { bold: true, size: 12 };
+  lg.addRow([]);
+  lg.addRow(["Alarm Category", ""]).font = { bold: true };
+  (Object.keys(ALARM_CATEGORY_STYLE) as AlarmCategory[]).forEach((k) => {
+    const row = lg.addRow([ALARM_CATEGORY_LABEL[k], ""]);
+    row.getCell(1).fill = solid(ALARM_CATEGORY_STYLE[k].fill);
+    row.getCell(1).font = { bold: true, color: { argb: ALARM_CATEGORY_STYLE[k].font } };
+  });
+  lg.addRow([]);
+  lg.addRow(["Current Status", ""]).font = { bold: true };
+  (Object.keys(ALARM_STATUS_STYLE) as AlarmStatus[]).forEach((k) => {
+    const row = lg.addRow([ALARM_STATUS_LABEL[k], ""]);
+    row.getCell(1).fill = solid(ALARM_STATUS_STYLE[k].fill);
+    row.getCell(1).font = { bold: true, color: { argb: ALARM_STATUS_STYLE[k].font } };
+  });
+  lg.addRow([]);
+  lg.addRow(["Row highlight", ""]).font = { bold: true };
+  const open = lg.addRow(["Critical — not verified", "Whole row light red: needs attention"]);
+  open.getCell(1).fill = solid(XL_CRITICAL_OPEN_ROW);
+  const done = lg.addRow(["Critical — verified", "Whole row light green: closed"]);
+  done.getCell(1).fill = solid(XL_CRITICAL_DONE_ROW);
+
+  // ── Download ──
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const safeProject = projectName.replace(/[^a-zA-Z0-9\-_]+/g, "_").slice(0, 60);
+  const date = new Date().toISOString().slice(0, 10);
+  link.href = url;
+  link.download = `Alarm_Checklist_${safeProject}_${date}.xlsx`;
+  document.body.appendChild(link); // needed for Firefox / Android Chrome
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // ---------------------------------------------------------------------------
@@ -396,19 +642,42 @@ function AlarmRow({
   onChange: (id: string, patch: Partial<AlarmItem>) => void;
   onDelete: (id: string) => void;
 }) {
-  const band = index % 2 === 0 ? "bg-[#CFD5EA] dark:bg-slate-800" : "bg-[#E9EBF5] dark:bg-slate-900";
+  const isCritical = alarm.category === "critical";
+  const verified = alarm.status === "verified";
+  const band = isCritical
+    ? verified
+      ? CRITICAL_DONE_ROW
+      : CRITICAL_OPEN_ROW
+    : index % 2 === 0
+    ? "bg-[#CFD5EA] dark:bg-slate-800"
+    : "bg-[#E9EBF5] dark:bg-slate-900";
+  const cat = ALARM_CATEGORY_STYLE[alarm.category] ?? ALARM_CATEGORY_STYLE.mid;
+  const st = ALARM_STATUS_STYLE[alarm.status] ?? ALARM_STATUS_STYLE.not_created;
+  const cellBase = "border border-white dark:border-slate-700 p-1.5 align-top";
+
   return (
-    <tr className={band} data-testid={`row-alarm-${index}`}>
-      <td className="border border-white dark:border-slate-700 p-1.5 align-top">
-        <Input
-          value={alarm.name}
-          placeholder="e.g. AL_101"
-          onChange={(e) => onChange(alarm.id, { name: e.target.value })}
-          className="h-9 bg-background"
-          data-testid={`input-alarm-name-${index}`}
-        />
+    <tr
+      className={`${band} ${isCritical && !verified ? "shadow-[inset_4px_0_0_0_#dc2626]" : ""}`}
+      data-testid={`row-alarm-${index}`}
+    >
+      <td className={cellBase}>
+        <div className="flex items-center gap-1">
+          {isCritical &&
+            (verified ? (
+              <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600" aria-label="Critical, verified" />
+            ) : (
+              <AlertTriangle className="h-4 w-4 shrink-0 text-red-600" aria-label="Critical, not verified" />
+            ))}
+          <Input
+            value={alarm.name}
+            placeholder="e.g. AL_101"
+            onChange={(e) => onChange(alarm.id, { name: e.target.value })}
+            className="h-9 bg-background"
+            data-testid={`input-alarm-name-${index}`}
+          />
+        </div>
       </td>
-      <td className="border border-white dark:border-slate-700 p-1.5 align-top">
+      <td className={cellBase}>
         <Textarea
           rows={1}
           value={alarm.description}
@@ -418,18 +687,21 @@ function AlarmRow({
           data-testid={`textarea-alarm-description-${index}`}
         />
       </td>
-      <td className="border border-white dark:border-slate-700 p-1.5 align-top">
+      <td className={`${cellBase} ${cat.ui}`}>
         <Select
           value={alarm.category}
           onValueChange={(v) => onChange(alarm.id, { category: v as AlarmCategory })}
         >
-          <SelectTrigger className="h-9 bg-background" data-testid={`select-alarm-category-${index}`}>
+          <SelectTrigger
+            className={`h-9 border-white/40 bg-transparent font-semibold ${cat.ui}`}
+            data-testid={`select-alarm-category-${index}`}
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             {ALARM_CATEGORY_VALUES.map((c) => (
               <SelectItem key={c} value={c}>
-                <span className={`inline-block rounded px-2 py-0.5 text-xs font-medium ${ALARM_CATEGORY_COLOR[c]}`}>
+                <span className={`inline-block rounded px-2 py-0.5 text-xs font-semibold ${ALARM_CATEGORY_STYLE[c].ui}`}>
                   {ALARM_CATEGORY_LABEL[c]}
                 </span>
               </SelectItem>
@@ -437,7 +709,7 @@ function AlarmRow({
           </SelectContent>
         </Select>
       </td>
-      <td className="border border-white dark:border-slate-700 p-1.5 align-top">
+      <td className={cellBase}>
         <Select
           value={alarm.group}
           onValueChange={(v) => onChange(alarm.id, { group: v as AlarmGroup })}
@@ -454,7 +726,7 @@ function AlarmRow({
           </SelectContent>
         </Select>
       </td>
-      <td className="border border-white dark:border-slate-700 p-1.5 align-top">
+      <td className={`${cellBase} ${st.ui}`}>
         <Select
           value={alarm.status}
           onValueChange={(v) => {
@@ -465,13 +737,16 @@ function AlarmRow({
             });
           }}
         >
-          <SelectTrigger className="h-9 bg-background" data-testid={`select-alarm-status-${index}`}>
+          <SelectTrigger
+            className={`h-9 border-white/40 bg-transparent font-semibold ${st.ui}`}
+            data-testid={`select-alarm-status-${index}`}
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             {ALARM_STATUS_VALUES.map((s) => (
               <SelectItem key={s} value={s}>
-                <span className={`inline-block rounded px-2 py-0.5 text-xs font-medium ${ALARM_STATUS_COLOR[s]}`}>
+                <span className={`inline-block rounded px-2 py-0.5 text-xs font-semibold ${ALARM_STATUS_STYLE[s].ui}`}>
                   {ALARM_STATUS_LABEL[s]}
                 </span>
               </SelectItem>
@@ -479,7 +754,7 @@ function AlarmRow({
           </SelectContent>
         </Select>
       </td>
-      <td className="border border-white dark:border-slate-700 p-1.5 align-top">
+      <td className={cellBase}>
         <Input
           value={alarm.verifiedBy}
           placeholder="Engineer name"
@@ -487,13 +762,13 @@ function AlarmRow({
           className="h-9 bg-background"
           data-testid={`input-alarm-verified-by-${index}`}
         />
-        {alarm.status === "verified" && alarm.verifiedAt && (
+        {verified && alarm.verifiedAt && (
           <p className="mt-1 px-1 text-[10px] text-muted-foreground">
             ✓ {new Date(alarm.verifiedAt).toLocaleDateString()}
           </p>
         )}
       </td>
-      <td className="border border-white dark:border-slate-700 p-1.5 align-top text-center">
+      <td className={`${cellBase} text-center`}>
         <Button
           variant="ghost"
           size="icon"
@@ -508,41 +783,77 @@ function AlarmRow({
   );
 }
 
+function AlarmLegend() {
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="font-medium text-muted-foreground">Category:</span>
+        {ALARM_CATEGORY_VALUES.map((c) => (
+          <span key={c} className={`rounded px-2 py-0.5 font-semibold ${ALARM_CATEGORY_STYLE[c].ui}`}>
+            {ALARM_CATEGORY_LABEL[c]}
+          </span>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="font-medium text-muted-foreground">Status:</span>
+        {ALARM_STATUS_VALUES.map((s) => (
+          <span key={s} className={`rounded px-2 py-0.5 font-semibold ${ALARM_STATUS_STYLE[s].ui}`}>
+            {ALARM_STATUS_LABEL[s]}
+          </span>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="font-medium text-muted-foreground">Critical rows:</span>
+        <span className={`rounded border border-red-300 px-2 py-0.5 ${CRITICAL_OPEN_ROW}`}>Not verified</span>
+        <span className={`rounded border border-green-300 px-2 py-0.5 ${CRITICAL_DONE_ROW}`}>Verified</span>
+      </div>
+    </div>
+  );
+}
+
 function AlarmChecklist({
+  projectName,
   alarms,
   onChange,
   onAdd,
   onDelete,
 }: {
+  projectName: string;
   alarms: AlarmItem[];
   onChange: (id: string, patch: Partial<AlarmItem>) => void;
   onAdd: () => void;
   onDelete: (id: string) => void;
 }) {
+  const { toast } = useToast();
   const [groupFilter, setGroupFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [categoryFilter, setCategoryFilter] = useState<string>("all");
+  const [exporting, setExporting] = useState(false);
 
-  const counts = useMemo(() => {
-    const c: Record<AlarmStatus, number> = {
-      not_created: 0,
-      created_not_tested: 0,
-      testing_in_progress: 0,
-      verified: 0,
-    };
-    for (const a of alarms) {
-      if (c[a.status] !== undefined) c[a.status] += 1;
-    }
-    return c;
-  }, [alarms]);
-
-  const criticalOpen = alarms.filter((a) => a.category === "critical" && a.status !== "verified").length;
-  const pct = alarms.length ? Math.round((counts.verified / alarms.length) * 100) : 0;
+  const counts = useMemo(() => alarmCounts(alarms), [alarms]);
+  const pct = counts.total ? Math.round((counts.byStatus.verified / counts.total) * 100) : 0;
+  const critPct = counts.criticalTotal
+    ? Math.round((counts.criticalVerified / counts.criticalTotal) * 100)
+    : 0;
 
   const visible = alarms.filter(
     (a) =>
       (groupFilter === "all" || a.group === groupFilter) &&
-      (statusFilter === "all" || a.status === statusFilter)
+      (statusFilter === "all" || a.status === statusFilter) &&
+      (categoryFilter === "all" || a.category === categoryFilter)
   );
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      await exportAlarmsToExcel(projectName, alarms);
+      toast({ title: "Alarm checklist exported" });
+    } catch (e: any) {
+      toast({ title: e?.message || "Excel export failed", variant: "destructive" });
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <Card data-testid="card-alarm-checklist">
@@ -553,43 +864,114 @@ function AlarmChecklist({
             <span className="text-sm font-normal text-muted-foreground">({alarms.length})</span>
           )}
         </CardTitle>
-        <Button variant="outline" size="sm" onClick={onAdd} data-testid="button-add-alarm">
-          <Plus className="h-4 w-4 mr-1" /> Add Alarm
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExport}
+            disabled={alarms.length === 0 || exporting}
+            data-testid="button-export-alarms"
+          >
+            <Download className="h-4 w-4 mr-1" />
+            {exporting ? "Exporting..." : "Export to Excel"}
+          </Button>
+          <Button variant="outline" size="sm" onClick={onAdd} data-testid="button-add-alarm">
+            <Plus className="h-4 w-4 mr-1" /> Add Alarm
+          </Button>
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
         {alarms.length > 0 && (
           <>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-              {ALARM_STATUS_VALUES.map((s) => (
-                <div key={s} className={`rounded-md px-3 py-2 ${ALARM_STATUS_COLOR[s]}`}>
-                  <p className="text-xl font-bold leading-tight">{counts[s]}</p>
-                  <p className="text-[11px] leading-tight">{ALARM_STATUS_LABEL[s]}</p>
-                </div>
-              ))}
+            {counts.criticalTotal > 0 && (
               <div
-                className={`rounded-md px-3 py-2 col-span-2 sm:col-span-1 ${
-                  criticalOpen > 0 ? ALARM_CATEGORY_COLOR.critical : "bg-muted"
+                className={`flex flex-wrap items-center justify-between gap-3 rounded-md border px-4 py-3 ${
+                  counts.criticalOpen > 0
+                    ? "border-red-300 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300"
+                    : "border-green-300 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-950/40 dark:text-green-300"
                 }`}
+                data-testid="banner-critical-alarms"
               >
-                <p className="text-xl font-bold leading-tight">{criticalOpen}</p>
-                <p className="text-[11px] leading-tight">Critical not verified</p>
+                <div className="flex items-center gap-2 font-semibold">
+                  {counts.criticalOpen > 0 ? (
+                    <AlertTriangle className="h-5 w-5" />
+                  ) : (
+                    <CheckCircle2 className="h-5 w-5" />
+                  )}
+                  {counts.criticalOpen > 0
+                    ? `${counts.criticalOpen} of ${counts.criticalTotal} critical alarm${counts.criticalTotal !== 1 ? "s" : ""} not yet verified`
+                    : `All ${counts.criticalTotal} critical alarm${counts.criticalTotal !== 1 ? "s" : ""} verified`}
+                </div>
+                <div className="flex min-w-[180px] flex-1 items-center gap-2 sm:max-w-xs">
+                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-white/70 dark:bg-black/30">
+                    <div
+                      className={`h-full transition-all ${counts.criticalOpen > 0 ? "bg-red-600" : "bg-green-600"}`}
+                      style={{ width: `${critPct}%` }}
+                    />
+                  </div>
+                  <span className="text-xs font-semibold">{critPct}%</span>
+                </div>
+                {counts.criticalOpen > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 bg-white dark:bg-transparent"
+                    onClick={() => {
+                      setCategoryFilter("critical");
+                      setStatusFilter("all");
+                      setGroupFilter("all");
+                    }}
+                    data-testid="button-show-critical"
+                  >
+                    Show critical only
+                  </Button>
+                )}
               </div>
+            )}
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {ALARM_STATUS_VALUES.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setStatusFilter(statusFilter === s ? "all" : s)}
+                  className={`rounded-md px-3 py-2 text-left transition ${ALARM_STATUS_STYLE[s].ui} ${
+                    statusFilter === s ? "ring-2 ring-offset-2 ring-primary" : "opacity-95 hover:opacity-100"
+                  }`}
+                  data-testid={`tile-alarm-status-${s}`}
+                >
+                  <p className="text-xl font-bold leading-tight">{counts.byStatus[s]}</p>
+                  <p className="text-[11px] leading-tight">{ALARM_STATUS_LABEL[s]}</p>
+                </button>
+              ))}
             </div>
 
             <div>
               <div className="flex justify-between text-xs text-muted-foreground mb-1">
-                <span>Verification progress</span>
+                <span>Overall verification progress</span>
                 <span>
-                  {counts.verified}/{alarms.length} · {pct}%
+                  {counts.byStatus.verified}/{counts.total} · {pct}%
                 </span>
               </div>
               <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
-                <div className="h-full bg-green-500 transition-all" style={{ width: `${pct}%` }} />
+                <div className="h-full bg-green-600 transition-all" style={{ width: `${pct}%` }} />
               </div>
             </div>
 
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                <SelectTrigger className="w-40 h-9" data-testid="select-alarm-category-filter">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All categories</SelectItem>
+                  {ALARM_CATEGORY_VALUES.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {ALARM_CATEGORY_LABEL[c]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Select value={groupFilter} onValueChange={setGroupFilter}>
                 <SelectTrigger className="w-44 h-9" data-testid="select-alarm-group-filter">
                   <SelectValue />
@@ -616,7 +998,23 @@ function AlarmChecklist({
                   ))}
                 </SelectContent>
               </Select>
+              {(categoryFilter !== "all" || groupFilter !== "all" || statusFilter !== "all") && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setCategoryFilter("all");
+                    setGroupFilter("all");
+                    setStatusFilter("all");
+                  }}
+                  data-testid="button-clear-alarm-filters"
+                >
+                  Clear filters
+                </Button>
+              )}
             </div>
+
+            <AlarmLegend />
           </>
         )}
 
@@ -629,8 +1027,8 @@ function AlarmChecklist({
             <table className="w-full min-w-[900px] border-collapse text-sm">
               <thead>
                 <tr className="bg-[#4472C4] text-white">
-                  <th className="border border-white px-2 py-2 text-left font-semibold w-[15%]">Alarm Name</th>
-                  <th className="border border-white px-2 py-2 text-left font-semibold w-[27%]">Description</th>
+                  <th className="border border-white px-2 py-2 text-left font-semibold w-[16%]">Alarm Name</th>
+                  <th className="border border-white px-2 py-2 text-left font-semibold w-[26%]">Description</th>
                   <th className="border border-white px-2 py-2 text-left font-semibold w-[11%]">Category</th>
                   <th className="border border-white px-2 py-2 text-left font-semibold w-[14%]">Group</th>
                   <th className="border border-white px-2 py-2 text-left font-semibold w-[17%]">Current Status</th>
@@ -932,6 +1330,7 @@ export default function ProjectDeepDive() {
             </Card>
 
             <AlarmChecklist
+              projectName={doc.projectName || selectedProject}
               alarms={doc.alarms}
               onChange={updateAlarm}
               onAdd={addAlarm}
