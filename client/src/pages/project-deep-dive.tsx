@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { ComponentProps } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -628,6 +629,65 @@ function StationCard({
 }
 
 // ---------------------------------------------------------------------------
+// Auto-growing textarea — height always fits the full text:
+//   • on first render (e.g. when a saved project is reopened)
+//   • on every keystroke
+//   • when the column width changes (window resize, phone rotate) and the
+//     text re-wraps onto more/fewer lines
+//   • after web fonts finish loading (font swap changes line wrapping)
+// Top-level component (see BUG-02) so typing never loses focus.
+// ---------------------------------------------------------------------------
+
+function AutoGrowTextarea({ className, style, ...props }: ComponentProps<"textarea">) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  const fit = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const borders = el.offsetHeight - el.clientHeight; // scrollHeight excludes borders
+    el.style.height = `${el.scrollHeight + borders}px`;
+  }, []);
+
+  // Re-fit whenever the text changes (including the initial load of saved data)
+  useLayoutEffect(() => {
+    fit();
+  }, [props.value, fit]);
+
+  // Re-fit when the textarea's WIDTH changes (height changes are ignored to
+  // avoid a resize loop) and once fonts are ready.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let lastWidth = el.offsetWidth;
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(() => {
+        const w = el.offsetWidth;
+        if (w !== lastWidth) {
+          lastWidth = w;
+          fit();
+        }
+      });
+      ro.observe(el);
+    }
+    const fonts = (document as any).fonts;
+    if (fonts?.ready) fonts.ready.then(fit).catch(() => {});
+    return () => ro?.disconnect();
+  }, [fit]);
+
+  return (
+    <Textarea
+      ref={ref}
+      rows={1}
+      {...props}
+      className={`min-h-9 resize-none overflow-hidden ${className ?? ""}`}
+      style={{ ...style, overflowY: "hidden" }}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Alarm checklist — top-level components (see BUG-02)
 // ---------------------------------------------------------------------------
 
@@ -678,12 +738,11 @@ function AlarmRow({
         </div>
       </td>
       <td className={cellBase}>
-        <Textarea
-          rows={1}
+        <AutoGrowTextarea
           value={alarm.description}
           placeholder="What triggers this alarm / operator action"
           onChange={(e) => onChange(alarm.id, { description: e.target.value })}
-          className="min-h-9 py-2 bg-background resize-y"
+          className="py-2 bg-background leading-snug"
           data-testid={`textarea-alarm-description-${index}`}
         />
       </td>
