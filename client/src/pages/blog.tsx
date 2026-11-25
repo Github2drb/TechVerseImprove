@@ -1,4 +1,5 @@
 // client/src/pages/blog.tsx
+import { SelectField } from "@/components/ui/select-field";
 import DOMPurify from "dompurify";
 import { useState, useEffect, useRef } from "react";
 import { Link } from "wouter";
@@ -1005,10 +1006,9 @@ export default function BlogPage() {
           </div>
           <div className="space-y-1">
             <label className="text-xs font-medium text-muted-foreground">Category</label>
-            <select value={draft.category} onChange={e => setDraft(d => ({ ...d, category: e.target.value }))}
-              className="w-full border rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-primary border-input">
-              {CATEGORIES.filter(c => c !== "All").map(c => <option key={c}>{c}</option>)}
-            </select>
+            <SelectField value={draft.category} onValueChange={v => setDraft(d => ({ ...d, category: v }))}
+              className="h-auto py-2"
+              options={CATEGORIES.filter(c => c !== "All").map(c => ({ value: c, label: c }))} />
           </div>
           <div className="space-y-1">
             <label className="text-xs font-medium text-muted-foreground">Date</label>

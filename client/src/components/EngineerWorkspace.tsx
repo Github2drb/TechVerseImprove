@@ -1,6 +1,7 @@
 // client/src/components/EngineerWorkspace.tsx
 // Replaces WeeklyScheduleOverview + WeeklyAssignmentsTable in dashboard.tsx
 
+import { SelectField } from "@/components/ui/select-field";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/components/auth-provider";
@@ -448,10 +449,8 @@ function QuickAssignModal({onClose, onSaved}:{onClose:()=>void;onSaved:()=>void}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground">Engineer *</label>
-              <select value={form.engineerName} onChange={e=>setForm(f=>({...f,engineerName:e.target.value}))} className={f}>
-                <option value="">Select engineer…</option>
-                {masterEngineers.map(e=><option key={e.id} value={e.name}>{e.name}</option>)}
-              </select>
+              <SelectField value={form.engineerName} onValueChange={v=>setForm(f=>({...f,engineerName:v}))} className="h-auto py-2"
+                options={[{value:"",label:"Select engineer…"},...masterEngineers.map(e=>({value:e.name,label:e.name}))]}/>
             </div>
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground">Project *</label>
@@ -465,13 +464,8 @@ function QuickAssignModal({onClose, onSaved}:{onClose:()=>void;onSaved:()=>void}
           {/* Status */}
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-muted-foreground">Project Phase / Status</label>
-            <select value={form.currentStatus} onChange={e=>setForm(f=>({...f,currentStatus:e.target.value}))} className={f}>
-              {PHASE_GROUPS.map(g=>(
-                <optgroup key={g.group} label={g.group}>
-                  {g.items.map(s=><option key={s.v} value={s.v}>{s.l}</option>)}
-                </optgroup>
-              ))}
-            </select>
+            <SelectField value={form.currentStatus} onValueChange={v=>setForm(f=>({...f,currentStatus:v}))} className="h-auto py-2"
+              options={PHASE_GROUPS.map(g=>({group:g.group,items:g.items.map(s=>({value:s.v,label:s.l}))}))}/>
           </div>
 
           {/* Dates (optional) */}
@@ -530,11 +524,9 @@ function QuickAssignModal({onClose, onSaved}:{onClose:()=>void;onSaved:()=>void}
                 placeholder="e.g. Complete IO check on panel A…"
                 className={f+" text-xs py-2"}/>
               <div className="flex gap-2 items-center">
-                <select value={newTask.type} onChange={e=>setNewTask(p=>({...p,type:e.target.value as any}))}
-                  className={f+" flex-1 text-xs py-2"}>
-                  <option value="weekly">Weekly task</option>
-                  <option value="daily">Daily task</option>
-                </select>
+                <SelectField value={newTask.type} onValueChange={v=>setNewTask(p=>({...p,type:v as any}))}
+                  className="h-auto flex-1 py-2 text-xs"
+                  options={[{value:"weekly",label:"Weekly task"},{value:"daily",label:"Daily task"}]}/>
                 {newTask.type==="daily" && (
                   <input type="date" value={newTask.assignedDate}
                     onChange={e=>setNewTask(p=>({...p,assignedDate:e.target.value}))}
@@ -838,14 +830,11 @@ export function EngineerWorkspace() {
             {/* Week selector */}
             <div className="flex items-center gap-2 flex-1 min-w-[200px]">
               <Calendar className="h-4 w-4 text-muted-foreground flex-shrink-0"/>
-              <select
+              <SelectField
                 value={adminWeekFilter}
-                onChange={e=>setAdminWeekFilter(e.target.value)}
-                className="flex-1 border rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-primary border-input">
-                {WEEK_OPTIONS.map(w=>(
-                  <option key={w.value} value={w.value}>{w.label}</option>
-                ))}
-              </select>
+                onValueChange={setAdminWeekFilter}
+                className="h-auto flex-1 py-2"
+                options={WEEK_OPTIONS}/>
             </div>
             {/* Status filter pills */}
             <div className="flex gap-1.5 flex-wrap">

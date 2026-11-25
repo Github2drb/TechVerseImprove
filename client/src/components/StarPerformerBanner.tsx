@@ -3,6 +3,7 @@
 //   import { StarPerformerBanner } from "@/components/StarPerformerBanner";
 //   <StarPerformerBanner />
 
+import { SelectField } from "@/components/ui/select-field";
 import { useState, useEffect } from "react";
 import { Star, Trophy, TrendingUp, Users, Target, RefreshCw, Calendar } from "lucide-react";
 
@@ -61,10 +62,7 @@ function WeekSelector({ value, onChange }: { value:string; onChange:(v:string)=>
   return (
     <div className="flex items-center gap-2">
       <Calendar className="h-4 w-4 text-muted-foreground flex-shrink-0"/>
-      <select value={value} onChange={e=>onChange(e.target.value)}
-        className="border rounded-lg px-3 py-1.5 text-sm bg-background outline-none focus:ring-2 focus:ring-primary border-input">
-        {options.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
+      <SelectField value={value} onValueChange={onChange} options={options} className="h-9 w-auto min-w-[9rem]"/>
     </div>
   );
 }

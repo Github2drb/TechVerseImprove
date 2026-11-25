@@ -1,4 +1,5 @@
 // client/src/pages/notifications.tsx
+import { SelectField } from "@/components/ui/select-field";
 import { useState, useEffect } from "react";
 import { Link } from "wouter";
 import { Header } from "@/components/header";
@@ -307,13 +308,9 @@ export default function NotificationsPage() {
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-muted-foreground">Type</label>
-                  <select value={draft.type} onChange={e=>setDraft(d=>({...d,type:e.target.value as any}))}
-                    className="w-full border rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-primary border-input">
-                    <option value="info">Info</option>
-                    <option value="success">Success</option>
-                    <option value="warning">Warning</option>
-                    <option value="alert">Alert</option>
-                  </select>
+                  <SelectField value={draft.type} onValueChange={v=>setDraft(d=>({...d,type:v as any}))}
+                    className="h-auto py-2"
+                    options={[{value:"info",label:"Info"},{value:"success",label:"Success"},{value:"warning",label:"Warning"},{value:"alert",label:"Alert"}]}/>
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-muted-foreground">Link (optional)</label>

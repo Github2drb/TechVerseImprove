@@ -5,6 +5,7 @@
 // forecast and engineer rating that recalculates on every edit against the
 // Internal / Customer target dates from the Project Tracker.
 
+import { SelectField } from "@/components/ui/select-field";
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -698,15 +699,12 @@ function StationTable({
                     />
                   </td>
                   <td className="px-2 py-2">
-                    <select
+                    <SelectField
                       value={row.status}
-                      onChange={e => onPatchRow(row.id, { status: e.target.value as StationStatus })}
-                      className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
-                    >
-                      {STATUS_ORDER.map(s => (
-                        <option key={s} value={s}>{STATUS_META[s].label}</option>
-                      ))}
-                    </select>
+                      onValueChange={v => onPatchRow(row.id, { status: v as StationStatus })}
+                      className="h-8 px-2 text-xs"
+                      options={STATUS_ORDER.map(s => ({ value: s, label: STATUS_META[s].label }))}
+                    />
                     <Badge className={`${STATUS_META[row.status]?.cls ?? STATUS_META.not_started.cls} mt-1 text-[10px]`}>
                       {STATUS_META[row.status]?.label ?? row.status}
                     </Badge>
@@ -1077,13 +1075,11 @@ function DailyLogForm({ stations, commInterface, userName, logs, internalTarget,
           </div>
           <div className="lg:col-span-2">
             <label className="mb-1 block text-xs font-medium text-muted-foreground">Station</label>
-            <select
+            <SelectField
               value={stationId}
-              onChange={e => setStationId(e.target.value)}
-              className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-            >
-              {stationOptions.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
-            </select>
+              onValueChange={setStationId}
+              options={stationOptions.map(s => ({ value: s.id, label: s.label }))}
+            />
           </div>
           <div>
             <label className="mb-1 flex items-center gap-1 text-xs font-medium text-muted-foreground">
@@ -1736,14 +1732,11 @@ export default function ProjectCommissioning() {
           <CardContent className="flex flex-wrap items-end gap-4 pt-6">
             <div className="min-w-[220px] flex-1">
               <label className="mb-1 block text-xs font-medium text-muted-foreground">Tracked Projects</label>
-              <select
+              <SelectField
                 value={tracked.includes(selected) ? selected : ""}
-                onChange={e => selectProject(e.target.value)}
-                className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-              >
-                <option value="">— Select a project —</option>
-                {tracked.map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
+                onValueChange={selectProject}
+                options={[{ value: "", label: "— Select a project —" }, ...tracked.map(p => ({ value: p, label: p }))]}
+              />
             </div>
             <div className="min-w-[220px] flex-1">
               <label className="mb-1 block text-xs font-medium text-muted-foreground">Track New Project</label>
