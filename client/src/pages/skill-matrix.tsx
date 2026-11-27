@@ -441,7 +441,10 @@ export default function SkillMatrix() {
     engineerAssignments.forEach(a => {
       const key = a.projectName.trim();
       if (!statusesByProject.has(key)) statusesByProject.set(key, []);
-      statusesByProject.get(key)!.push(a.currentStatus);
+      // Use this engineer's own override before selecting the furthest phase
+      // across weekly snapshots, preventing a stale shared phase from inflating load.
+      const effectiveStatus = findEngineerOverride(engineerStatusMap, key, engineer.name)?.currentStatus || a.currentStatus;
+      statusesByProject.get(key)!.push(effectiveStatus);
     });
     const heavyLoadProjectNames = activeProjectNames.filter(name =>
       !WIND_DOWN_STATUSES.has(mostAdvancedStatus(statusesByProject.get(name) ?? []))

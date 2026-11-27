@@ -81,6 +81,18 @@ interface EngineerAlertEntry { id: string; engineerName: string; projectName: st
 // Procurement or Assembly past deadline creates false urgency. These are
 // shown separately, in a muted "wrapping up" section, instead of being
 // counted in the red Alerts number.
+const STATUS_ORDER = [
+  "not_started", "on_hold", "blocked", "in_progress",
+  "design_stage", "electrical_design", "procurement_stage", "waiting_for_materials",
+  "mechanical_assembly", "electrical_assembly",
+  "plc_power_up", "io_check", "trials_stage", "fat",
+  "installation_pending", "installation_in_progress", "installation_completed", "sat",
+  "dispatch_stage", "documentation", "equipment_handover", "completed",
+];
+function statusRank(status: string): number {
+  const rank = STATUS_ORDER.indexOf(status);
+  return rank < 0 ? 0 : rank;
+}
 const WIND_DOWN_STATUSES = new Set(["sat", "dispatch_stage", "documentation", "equipment_handover"]);
 
 export function ManagerOverview() {
@@ -174,7 +186,12 @@ export function ManagerOverview() {
   const windingDownAssignments: EngineerAlertEntry[] = [];
   const seenPerProject: Record<string, Set<string>> = {};
 
-  assignments.forEach(a => {
+  // Weekly snapshots can leave old records at Assembly after work has reached SAT.
+  // Process the furthest phase first so stale rows cannot classify the engineer as overdue.
+  const phaseOrderedAssignments = [...assignments].sort(
+    (a, b) => statusRank(b.currentStatus) - statusRank(a.currentStatus)
+  );
+  phaseOrderedAssignments.forEach(a => {
     if (!a.engineerName || !a.engineerName.trim()) return;
     const pk = normProjectKey(a.projectName);
     if (!seenPerProject[pk]) seenPerProject[pk] = new Set();
